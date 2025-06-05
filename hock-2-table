@@ -1,40 +1,38 @@
 (async () => {
-  // Utility to inject jsPDF
-  const injectJsPDF = async () => { 
-    if (window.jspdf) {
-      console.log("jsPDF already loaded.");
-      return;
+  const injectDependencies = async () => {
+    if (!window.jspdf || !window.jspdf.jsPDF) {
+      const scriptPDF = document.createElement("script");
+      scriptPDF.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+      scriptPDF.onload = () => console.log("jsPDF loaded.");
+      scriptPDF.onerror = () => console.error("Failed to load jsPDF.");
+      document.head.appendChild(scriptPDF);
     }
-    const script = document.createElement("script");
-    script.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
-    script.onload = () => console.log("jsPDF loaded.");
-    script.onerror = () => console.error("Failed to load jsPDF.");
-    document.head.appendChild(script);
-    console.log("injectJsPDF called and jsPDF script injection attempted.");
-  };
-
-  // Helper function to remove ZeroWidthSpace characters
-  const cleanZeroWidthSpaces = (text) => {
-    if (typeof text === 'string') {
-      return text.replace(/\u200B/g, ''); 
+    if (!window.html2canvas) {
+      const scriptCanvas = document.createElement("script");
+      scriptCanvas.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+      scriptCanvas.onload = () => console.log("html2canvas loaded.");
+      scriptCanvas.onerror = () => console.error("Failed to load html2canvas.");
+      document.head.appendChild(scriptCanvas);
     }
-    return text;
+    console.log("Dependencies injection attempted.");
+    await new Promise(resolve => {
+      const checkLoaded = () => {
+        if (window.jspdf && window.jspdf.jsPDF && window.html2canvas) {
+          resolve();
+        } else {
+          setTimeout(checkLoaded, 100);
+        }
+      };
+      checkLoaded();
+    });
   };
 
-  // Helper function to clean repeated non-breaking spaces ( )
-  const cleanRepeatedNBSP = (text) => {
-    if (typeof text !== 'string') return text;
-    return text.replace(/( ){2,}/g, ' ').replace(/ /g, ' ').trim();
-  };
+  const cleanZeroWidthSpaces = text => typeof text === "string" ? text.replace(/\u200B/g, "") : text;
+  const cleanNonBreakingSpaces = text => typeof text === "string" ? text.replace(/\u00A0/g, " ").trim() : text;
+  const preserveSpecialCharacters = text => typeof text === "string" ? text.replace(/\u2212/g, "-") : text;
 
-  // Helper function to preserve special characters
-  const preserveSpecialCharacters = (text) => {
-    if (typeof text !== 'string') return text;
-    return text.replace(/\u2212/g, '-');
-  };
-
-  const autoSave = () => { 
-    const questionContainers = document.querySelectorAll('.watupro-choices-columns.show-question');
+  const autoSave = () => {
+    const questionContainers = document.querySelectorAll(".watupro-choices-columns.show-question");
     if (!questionContainers.length) {
       console.log("No questions found on the page.");
       return;
@@ -48,840 +46,561 @@
       const currentBlock = elementsToIterate[i];
       let questionContentEl, choicesContainerEl;
 
-      questionContentEl = currentBlock.querySelector('.show-question-content');
-      choicesContainerEl = currentBlock.querySelector('.show-question-choices');
+      questionContentEl = currentBlock.querySelector(".show-question-content");
+      choicesContainerEl = currentBlock.querySelector(".show-question-choices");
 
-      if (!questionContentEl) {
-        console.warn(`Could not find .show-question-content for block ${i + 1}. Skipping.`);
-        continue;
-      }
-      if (!choicesContainerEl) {
-        console.warn(`Could not find .show-question-choices for block ${i + 1}. Skipping.`);
+      if (!questionContentEl || !choicesContainerEl) {
+        console.warn(`Could not find content or choices for block ${i + 1}. Skipping.`);
         continue;
       }
 
-      const tempDivQ = document.createElement('div');
-      tempDivQ.innerHTML = questionContentEl.innerHTML; 
-      
-      const imgTags = Array.from(tempDivQ.querySelectorAll('img')); 
+      const tempDivQ = document.createElement("div");
+      tempDivQ.innerHTML = questionContentEl.innerHTML;
+
+      const imgTags = Array.from(tempDivQ.querySelectorAll("img"));
       imgTags.forEach(imgNode => {
-        const currentSrc = imgNode.getAttribute('src');
+        const currentSrc = imgNode.getAttribute("src");
         let newSrc = currentSrc;
         if (currentSrc) {
-          if (currentSrc.startsWith('/admin/')) { 
-            newSrc = `https://www.hockinternational.com${currentSrc.startsWith('//') ? currentSrc.substring(1) : currentSrc}`;
-          } else if (currentSrc.startsWith('//')) { 
-            newSrc = `https:${currentSrc}`;
-          } else if (currentSrc.startsWith('/') && !currentSrc.startsWith('//')) { 
-            newSrc = `${document.location.origin}${currentSrc}`;
-          } else if (!currentSrc.startsWith('http://') && !currentSrc.startsWith('https://') && !currentSrc.startsWith('data:')) {
-            try {
-              newSrc = new URL(currentSrc, document.location.href).href;
-            } catch (e) {
-              console.warn(`[autoSave] Could not resolve relative image URL: ${currentSrc}`, e);
-              newSrc = currentSrc; 
-            }
+          if (currentSrc.startsWith("/admin/")) newSrc = `https://www.hockinternational.com${currentSrc.startsWith("//") ? currentSrc.substring(1) : currentSrc}`;
+          else if (currentSrc.startsWith("//")) newSrc = `https:${currentSrc}`;
+          else if (currentSrc.startsWith("/") && !currentSrc.startsWith("//")) newSrc = `${document.location.origin}${currentSrc}`;
+          else if (!currentSrc.startsWith("http://") && !currentSrc.startsWith("https://") && !currentSrc.startsWith("data:")) {
+            try { newSrc = new URL(currentSrc, document.location.href).href; } catch (e) { console.warn(`Could not resolve relative image URL: ${currentSrc}`, e); newSrc = currentSrc; }
           }
         }
-
-        const altText = imgNode.getAttribute('alt') || '';
-        const htmlWidth = imgNode.getAttribute('width') || '';
-        const htmlHeight = imgNode.getAttribute('height') || '';
-
-        const placeholderDiv = document.createElement('div');
-        placeholderDiv.setAttribute('data-is-image-placeholder', 'true');
-        placeholderDiv.setAttribute('data-img-src', newSrc || 'No source');
-        placeholderDiv.setAttribute('data-img-alt', altText);
-        placeholderDiv.setAttribute('data-img-html-width', htmlWidth);
-        placeholderDiv.setAttribute('data-img-html-height', htmlHeight);
-        placeholderDiv.innerHTML = ``; 
-        
-        if (imgNode.parentNode) {
-          imgNode.parentNode.replaceChild(placeholderDiv, imgNode);
-        } else {
-          console.warn("[autoSave] Image tag did not have a parent node for replacement.");
-        }
+        const altText = imgNode.getAttribute("alt") || "";
+        const htmlWidth = imgNode.getAttribute("width") || "";
+        const htmlHeight = imgNode.getAttribute("height") || "";
+        const placeholderDiv = document.createElement("div");
+        placeholderDiv.setAttribute("data-is-image-placeholder", "true");
+        placeholderDiv.setAttribute("data-img-src", newSrc || "No source");
+        placeholderDiv.setAttribute("data-img-alt", altText);
+        placeholderDiv.setAttribute("data-img-html-width", htmlWidth);
+        placeholderDiv.setAttribute("data-img-html-height", htmlHeight);
+        placeholderDiv.innerHTML = "";
+        imgNode.parentNode.replaceChild(placeholderDiv, imgNode);
       });
-      
-      const spanNum = tempDivQ.querySelector('span.watupro_num');
-      if (spanNum) { spanNum.remove(); }
+
+      const spanNum = tempDivQ.querySelector("span.watupro_num");
+      if (spanNum) spanNum.remove();
       let firstChildNode = tempDivQ.firstChild;
-      while(firstChildNode && ( (firstChildNode.nodeType === Node.ELEMENT_NODE && firstChildNode.tagName === 'P' && firstChildNode.innerHTML.trim() === ' ') || (firstChildNode.nodeType === Node.TEXT_NODE && !firstChildNode.textContent.trim()) || (firstChildNode.nodeType === Node.ELEMENT_NODE && firstChildNode.tagName === 'P' && !firstChildNode.textContent.trim() && !firstChildNode.children.length) )) {
+      while (firstChildNode && ((firstChildNode.nodeType === Node.ELEMENT_NODE && firstChildNode.tagName === "P" && firstChildNode.innerHTML.trim() === " ") || (firstChildNode.nodeType === Node.TEXT_NODE && !firstChildNode.textContent.trim()) || (firstChildNode.nodeType === Node.ELEMENT_NODE && firstChildNode.tagName === "P" && !firstChildNode.textContent.trim() && !firstChildNode.children.length))) {
         firstChildNode.remove();
         firstChildNode = tempDivQ.firstChild;
       }
       let questionHtml = tempDivQ.innerHTML.trim();
       console.log(`[autoSave] Question ${i + 1} HTML: ${questionHtml}`);
-      questionHtml = cleanZeroWidthSpaces(questionHtml); 
+      questionHtml = cleanZeroWidthSpaces(questionHtml);
       questionHtml = preserveSpecialCharacters(questionHtml);
 
-      const choiceLiElements = Array.from(choicesContainerEl.querySelectorAll('ul > li.answer'));
+      const choiceLiElements = Array.from(choicesContainerEl.querySelectorAll("ul > li.answer"));
       const choices = [];
-      const validChoiceLetters = ['A', 'B', 'C', 'D'];
+      const validChoiceLetters = ["A", "B", "C", "D"];
       for (const li of choiceLiElements) {
-        const answerSpan = li.querySelector('span.answer');
+        const answerSpan = li.querySelector("span.answer");
         if (!answerSpan) continue;
         let choiceFullText = answerSpan.textContent.trim();
-
-        let letter = '', text = '';
+        let letter = "", text = "";
         const match = choiceFullText.match(/^([A-Z])\.\s*(.*)/s);
-        if (match) { [ ,letter, text] = match; }
-        else { text = choiceFullText; if (choices.length < validChoiceLetters.length) letter = validChoiceLetters[choices.length];}
-        
-        if (choices.length < 4 || validChoiceLetters.includes(letter.toUpperCase())) {
-          choices.push({ letter, text: cleanZeroWidthSpaces(text), isCorrect: li.classList.contains('correct-answer') });
-        }
+        if (match) [, letter, text] = match;
+        else { text = choiceFullText; if (choices.length < validChoiceLetters.length) letter = validChoiceLetters[choices.length]; }
+        if (choices.length < 4 || validChoiceLetters.includes(letter.toUpperCase())) choices.push({ letter, text: cleanZeroWidthSpaces(text), isCorrect: li.classList.contains("correct-answer") });
         if (choices.length >= 4) break;
       }
 
       let allExplanations = [];
       const extractExplanationData = (el, isTheDesignatedCorrectEl = false) => {
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = el.innerHTML; 
-        const bTag = tempDiv.querySelector('b');
-        let letter = '';
-        let type = 'incorrect'; 
+        const tempDiv = document.createElement("div");
+        tempDiv.innerHTML = el.innerHTML;
+        const bTag = tempDiv.querySelector("b");
+        let letter = "", type = "incorrect";
         if (bTag) {
           let originalBText = bTag.textContent.trim();
-          originalBText = cleanZeroWidthSpaces(originalBText); 
+          originalBText = cleanZeroWidthSpaces(originalBText);
           const matchLetter = originalBText.match(/(?:Correct Answer Explanation for|Incorrect Answer Explanation for|Explanation for) ([A-D]):/i);
           if (matchLetter) letter = matchLetter[1].toUpperCase();
-          if (isTheDesignatedCorrectEl) { 
-            bTag.textContent = `Correct Answer Explanation for ${letter || 'N/A'}:`; type = 'correct';
-          } else { 
-            bTag.textContent = `Explanation for ${letter || 'N/A'}:`;
-          }
-        } else { if (isTheDesignatedCorrectEl) type = 'correct'; }
+          if (isTheDesignatedCorrectEl) { bTag.textContent = `Correct Answer Explanation for ${letter || "N/A"}:`; type = "correct"; }
+          else bTag.textContent = `Explanation for ${letter || "N/A"}:`;
+        } else if (isTheDesignatedCorrectEl) type = "correct";
         let explanationHtmlContent = tempDiv.innerHTML.trim();
-        explanationHtmlContent = cleanZeroWidthSpaces(explanationHtmlContent); 
+        explanationHtmlContent = cleanZeroWidthSpaces(explanationHtmlContent);
         explanationHtmlContent = preserveSpecialCharacters(explanationHtmlContent);
         return { letter, type, html: explanationHtmlContent };
       };
-      const correctExplanationEl = currentBlock.querySelector('.watupro-choice-feedback.feedback-correct');
+      const correctExplanationEl = currentBlock.querySelector(".watupro-choice-feedback.feedback-correct");
       if (correctExplanationEl) allExplanations.push(extractExplanationData(correctExplanationEl, true));
-      currentBlock.querySelectorAll(':scope > .watupro-choice-feedback:not(.feedback-correct)').forEach(el => {
-        if (!el.closest('.su-spoiler-content')) allExplanations.push(extractExplanationData(el, false));
-      });
-      const spoilerContent = currentBlock.querySelector('.su-spoiler-content');
-      if (spoilerContent) {
-        spoilerContent.querySelectorAll('.watupro-choice-feedback').forEach(el => {
-          if (!(el.classList.contains('feedback-correct') && correctExplanationEl && el === correctExplanationEl)) {
-            allExplanations.push(extractExplanationData(el, false));
-          }
-        });
-      }
+      currentBlock.querySelectorAll(":scope > .watupro-choice-feedback:not(.feedback-correct)").forEach(el => allExplanations.push(extractExplanationData(el, false)));
+      const spoilerContent = currentBlock.querySelector(".su-spoiler-content");
+      if (spoilerContent) spoilerContent.querySelectorAll(".watupro-choice-feedback").forEach(el => allExplanations.push(extractExplanationData(el, false)));
       const uniqueExplanations = [];
-      const seenContentForDedupe = new Set(); 
-      allExplanations.sort((a, b) => {
-        if (a.type === 'correct' && b.type !== 'correct') return -1;
-        if (a.type !== 'correct' && b.type === 'correct') return 1;
-        if (a.letter && b.letter) return a.letter.localeCompare(b.letter);
-        if (a.letter) return -1; if (b.letter) return 1; return 0; 
-      });
-      allExplanations.forEach(expl => {
-        if (!seenContentForDedupe.has(expl.html)) {
-          uniqueExplanations.push(expl);
-          seenContentForDedupe.add(expl.html);
-        }
-      });
-      const feedbacksHtml = uniqueExplanations.map(e => e.html); 
-      
-      let postChoiceHtmlAccumulator = '';
-      const choiceUl = choicesContainerEl.querySelector('ul');
+      const seenContentForDedupe = new Set();
+      allExplanations.sort((a, b) => (a.type === "correct" && b.type !== "correct" ? -1 : a.type !== "correct" && b.type === "correct" ? 1 : a.letter && b.letter ? a.letter.localeCompare(b.letter) : a.letter ? -1 : b.letter ? 1 : 0));
+      allExplanations.forEach(expl => !seenContentForDedupe.has(expl.html) && (uniqueExplanations.push(expl), seenContentForDedupe.add(expl.html)));
+      const feedbacksHtml = uniqueExplanations.map(e => e.html);
+
+      let postChoiceHtmlAccumulator = "";
+      const choiceUl = choicesContainerEl.querySelector("ul");
       if (choiceUl) {
         let nextSibling = choiceUl.nextElementSibling;
-        while (nextSibling) {
-          if (nextSibling.tagName === 'P') postChoiceHtmlAccumulator += nextSibling.outerHTML;
-          nextSibling = nextSibling.nextElementSibling;
-        }
+        while (nextSibling) { if (nextSibling.tagName === "P") postChoiceHtmlAccumulator += nextSibling.outerHTML; nextSibling = nextSibling.nextElementSibling; }
       }
-      const postChoiceHtml = cleanZeroWidthSpaces(postChoiceHtmlAccumulator); 
+      const postChoiceHtml = cleanZeroWidthSpaces(postChoiceHtmlAccumulator);
 
       saved.push({ questionHtml, choices, feedbacks: feedbacksHtml, postChoiceHtml });
     }
-    localStorage.setItem('savedQuestions', JSON.stringify(saved));
+    localStorage.setItem("savedQuestions", JSON.stringify(saved));
     console.log(`Saved ${saved.length} questions to localStorage.`);
   };
 
-  const renderPDFs = () => { 
-    if (!window.jspdf || !window.jspdf.jsPDF) {
-      console.error("jsPDF is not loaded. Please inject jsPDF first.");
+  const pageWidth = 210;
+  const margin = 15;
+  const usableWidth = pageWidth - 2 * margin;
+  const lineHeight = 5.5;
+  const pageHeight = 297;
+  const maxY = pageHeight - margin;
+  const PX_TO_MM_SCALE = 25.4 / 96;
+
+  const toRoman = n => ({ 1: "I", 2: "II", 3: "III", 4: "IV", 5: "V" }[n] || n.toString());
+
+  const estimateTableHeight = (doc, html, fontSize, usableWidth) => {
+    const tempDiv = document.createElement("div");
+    tempDiv.innerHTML = cleanZeroWidthSpaces(html);
+    const tables = tempDiv.querySelectorAll("table");
+    let totalHeight = 0;
+
+    for (const table of tables) {
+      totalHeight += lineHeight * 5; // Semua tabel diasumsikan dirender sebagai gambar
+    }
+    return totalHeight;
+  };
+
+  const estimateHtmlHeight = (doc, html, fs = 12, currentUsableWidth = usableWidth, currentFontStyle = "normal") => {
+    if (!html || !html.trim()) return 0;
+    const tempDiv = document.createElement("div");
+    tempDiv.innerHTML = cleanZeroWidthSpaces(html);
+    let textHeight = 0;
+
+    const textOnlyDiv = tempDiv.cloneNode(true);
+    textOnlyDiv.querySelectorAll('div[data-is-image-placeholder="true"], table').forEach(el => el.remove());
+
+    const textContent = textOnlyDiv.innerText || textOnlyDiv.textContent || "";
+    if (textContent.trim()) {
+      doc.setFontSize(fs).setFont(undefined, currentFontStyle);
+      const lines = doc.splitTextToSize(textContent, currentUsableWidth);
+      textHeight = lines.length * lineHeight;
+      doc.setFont(undefined, "normal");
+    }
+
+    const brCount = (tempDiv.innerHTML.match(/<br\s*\/?>/gi) || []).length;
+    textHeight += brCount * lineHeight * 1.2;
+
+    let imageReservedHeight = 0;
+    tempDiv.querySelectorAll('div[data-is-image-placeholder="true"]').forEach(phNode => {
+      textHeight += lineHeight;
+      const htmlHeightStr = phNode.getAttribute("data-img-html-height");
+      if (htmlHeightStr && !isNaN(parseFloat(htmlHeightStr))) {
+        imageReservedHeight += parseFloat(htmlHeightStr) * PX_TO_MM_SCALE;
+      } else {
+        imageReservedHeight += lineHeight * 5;
+      }
+    });
+
+    const tableHeight = estimateTableHeight(doc, html, fs, currentUsableWidth);
+    return textHeight + imageReservedHeight + tableHeight;
+  };
+
+  const estimateBlockHeight = (doc, questionData, showAnswer, fontSize = 12) => {
+    let height = 10;
+    height += estimateHtmlHeight(doc, questionData.questionHtml, fontSize, usableWidth);
+    height += lineHeight;
+    questionData.choices.forEach(c => {
+      const isCorrect = showAnswer && questionData.choices.find(ch => ch.letter === c.letter)?.isCorrect;
+      height += estimateHtmlHeight(doc, `${c.letter}. ${c.text}`, fontSize, usableWidth, isCorrect ? "bold" : "normal");
+      height += lineHeight * 0.25;
+    });
+    height += lineHeight;
+    if (showAnswer && questionData.feedbacks) {
+      questionData.feedbacks.forEach(fbHtml => {
+        height += estimateHtmlHeight(doc, fbHtml, fontSize, usableWidth);
+        height += lineHeight * 0.5;
+      });
+    }
+    if (showAnswer && questionData.postChoiceHtml) {
+      height += estimateHtmlHeight(doc, questionData.postChoiceHtml, fontSize - 2, usableWidth, "italic");
+    }
+    return height + 20;
+  };
+
+  const processInlineText = (parentNode, initialStyle = "normal", isTableCell = false) => {
+    let segments = [];
+    const processChildren = (node, currentStyle, isUnderlined = false) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        let text = node.textContent;
+        text = cleanZeroWidthSpaces(text);
+        text = cleanNonBreakingSpaces(text);
+        text = preserveSpecialCharacters(text);
+        if (isTableCell) text = text.trim();
+        if (text.length > 0) {
+          const inlineUnderlined = isUnderlined || node.parentNode?.getAttribute("style")?.includes("text-decoration: underline");
+          segments.push({ text, style: currentStyle, type: "TEXT", isUnderlined: inlineUnderlined });
+        }
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        let newStyle = currentStyle;
+        let newUnderlined = isUnderlined;
+        const tagName = node.tagName.toUpperCase();
+        if (tagName === "STRONG" || tagName === "B") newStyle = "bold";
+        else if (tagName === "EM" || tagName === "I") newStyle = "italic";
+        else if (tagName === "U") newUnderlined = true;
+
+        if (tagName === "BR") segments.push({ type: "BR_TAG" });
+        else if (!node.hasAttribute("data-is-image-placeholder")) {
+          for (const child of Array.from(node.childNodes)) processChildren(child, newStyle, newUnderlined);
+        }
+      }
+    };
+    for (const child of Array.from(parentNode.childNodes)) processChildren(child, initialStyle);
+    return segments;
+  };
+
+  const renderInlineText = (doc, textSegments, x, y, maxWidth, currentFontSize, align = "left") => {
+    let currentX = x;
+    let currentY = y;
+
+    const ensureSpaceForOneLine = () => {
+      if (currentY >= maxY - lineHeight) {
+        doc.addPage();
+        currentY = margin;
+        currentX = x;
+        return true;
+      }
+      return false;
+    };
+
+    for (let i = 0; i < textSegments.length; i++) {
+      const segment = textSegments[i];
+      if (segment.type === "BR_TAG") {
+        currentY += lineHeight;
+        currentX = x;
+        ensureSpaceForOneLine();
+        continue;
+      }
+
+      let segmentText = segment.text;
+      if (!segmentText) continue;
+
+      doc.setFontSize(currentFontSize).setFont(undefined, segment.style);
+      const words = segmentText.split(/(\s+)/);
+
+      for (let j = 0; j < words.length; j++) {
+        let word = words[j];
+        if (!word) continue;
+
+        const isSpace = word.match(/^\s+$/);
+        const wordWidth = doc.getStringUnitWidth(word) * currentFontSize / doc.internal.scaleFactor;
+
+        if (currentX + wordWidth > x + maxWidth && currentX > x && !isSpace) {
+          currentY += lineHeight;
+          currentX = x;
+        }
+
+        if (ensureSpaceForOneLine() && currentX === x) {}
+
+        if (!isSpace || (isSpace && currentX > x)) {
+          const textWidth = doc.getStringUnitWidth(word) * currentFontSize / doc.internal.scaleFactor;
+          let xPos;
+          if (align === "right") xPos = x + maxWidth - textWidth;
+          else if (align === "center") xPos = x + (maxWidth - textWidth) / 2;
+          else xPos = currentX;
+          doc.text(word, xPos, currentY);
+
+          if (segment.isUnderlined) {
+            const lineY = currentY + 0.5;
+            doc.setLineWidth(0.2);
+            doc.line(xPos, lineY, xPos + textWidth, lineY);
+          }
+        }
+        currentX += wordWidth;
+      }
+
+      if (i < textSegments.length - 1 && textSegments[i + 1].text?.trim()) {
+        const spaceWidth = doc.getStringUnitWidth(" ") * currentFontSize / doc.internal.scaleFactor;
+        if (currentX + spaceWidth <= x + maxWidth) currentX += spaceWidth;
+        else {
+          currentY += lineHeight;
+          currentX = x;
+          ensureSpaceForOneLine();
+        }
+      }
+    }
+    return currentY;
+  };
+
+  const calculateColumnWidths = (doc, rows, usableWidth, currentFontSize, hasDiv) => {
+    console.log("[calculateColumnWidths] Skipped column width calculation as all tables are rendered as images.");
+    return [{ width: usableWidth, colspanSum: 1 }];
+  };
+
+  const renderTableAsImage = async (doc, tableElement, startY, xIndent) => {
+    const clonedTable = tableElement.cloneNode(true);
+    clonedTable.style.borderCollapse = "collapse";
+    clonedTable.style.fontSize = "8px"; // Mengatur semua tabel ke font size 8px
+    clonedTable.style.width = `${usableWidth * 2}px`;
+    clonedTable.style.backgroundColor = "white";
+
+    Array.from(clonedTable.querySelectorAll("td, th")).forEach(cell => {
+      cell.style.border = "none";
+      cell.style.padding = "2px";
+      cell.style.textAlign = cell.getAttribute("align") || "left";
+      if (cell.tagName === "TH") cell.style.fontWeight = "bold";
+    });
+
+    const tempContainer = document.createElement("div");
+    tempContainer.style.position = "absolute";
+    tempContainer.style.left = "-9999px";
+    tempContainer.appendChild(clonedTable);
+    document.body.appendChild(tempContainer);
+
+    try {
+      const canvas = await html2canvas(clonedTable, { scale: 2 });
+      const imgData = canvas.toDataURL("image/png");
+      const imgWidth = usableWidth;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      let y = startY;
+
+      if (y + imgHeight > maxY) {
+        doc.addPage();
+        y = margin;
+      }
+
+      doc.addImage(imgData, "PNG", xIndent, y, imgWidth, imgHeight);
+      y += imgHeight + lineHeight;
+      return y;
+    } catch (e) {
+      console.error("Failed to render table as image:", e);
+      return startY + lineHeight * 5;
+    } finally {
+      document.body.removeChild(tempContainer);
+    }
+  };
+
+  const renderHTML = async (doc, html, startY, initialStyle = "normal", currentFontSize = 12, currentXIndent = margin) => {
+    const tempDiv = document.createElement("div");
+    tempDiv.innerHTML = cleanZeroWidthSpaces(html);
+    tempDiv.innerHTML = preserveSpecialCharacters(tempDiv.innerHTML);
+
+    tempDiv.querySelectorAll("table td, table th").forEach(cell => {
+      cell.innerHTML = cell.innerHTML.replace(/<div>/g, "<br>").replace(/<\/div>/g, "");
+    });
+
+    let currentY = startY;
+
+    const processBlockNode = async (node, yPos, style, listLevel = 0, listCounter = 1, listType = null, xIndent = currentXIndent) => {
+      let newY = yPos;
+      let nodeStyle = style;
+      let childNodesStyle = style;
+      const effectiveXIndent = xIndent + (listLevel * 6);
+
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const tagName = node.tagName.toUpperCase();
+
+        if (node.hasAttribute("data-is-image-placeholder")) {
+          if (newY !== startY && newY > margin && newY < maxY - lineHeight) newY += lineHeight * 0.5;
+          const imgSrc = cleanZeroWidthSpaces(node.getAttribute("data-img-src"));
+          const altText = cleanZeroWidthSpaces(node.getAttribute("data-img-alt") || "Image");
+          const htmlWidthStr = node.getAttribute("data-img-html-width");
+          const htmlHeightStr = node.getAttribute("data-img-html-height");
+          let placeholderText = `[Gambar: ${altText} | URL: ${imgSrc}`;
+          if (htmlWidthStr || htmlHeightStr) placeholderText += ` | Dimensi HTML: ${htmlWidthStr || "auto"}x${htmlHeightStr || "auto"}`;
+          placeholderText += "]";
+          placeholderText = preserveSpecialCharacters(placeholderText);
+          doc.setFontSize(currentFontSize - 2).setFont(undefined, "italic");
+          const lines = doc.splitTextToSize(placeholderText, usableWidth - (effectiveXIndent - margin));
+          for (const line of lines) {
+            if (newY + lineHeight > maxY && newY > margin + lineHeight / 2) { doc.addPage(); newY = margin; }
+            doc.text(line, effectiveXIndent, newY);
+            newY += lineHeight;
+          }
+          doc.setFontSize(currentFontSize).setFont(undefined, style);
+          if (htmlHeightStr && !isNaN(parseFloat(htmlHeightStr))) newY += parseFloat(htmlHeightStr) * PX_TO_MM_SCALE;
+          else newY += lineHeight * 5;
+          if (newY > yPos && newY < maxY - lineHeight * 0.5) newY += lineHeight * 0.25;
+          return newY;
+
+        } else if (tagName === "P" || tagName.match(/^H[1-6]$/)) {
+          if (newY !== startY && newY > margin && newY < maxY - lineHeight) newY += lineHeight * 0.5;
+          if (tagName.match(/^H[1-6]$/)) doc.setFont(undefined, "bold");
+
+          const segments = processInlineText(node, style);
+          newY = renderInlineText(doc, segments, effectiveXIndent, newY, usableWidth - (effectiveXIndent - margin), currentFontSize);
+
+          if (segments.some(s => (s.text && s.text.trim() !== "") || s.type === "BR_TAG")) {
+            if (!(newY > maxY - lineHeight && newY <= maxY) && newY <= maxY - lineHeight) newY += lineHeight;
+          }
+
+          if (tagName.match(/^H[1-6]$/)) doc.setFont(undefined, style);
+          if (newY > yPos && newY < maxY - lineHeight * 0.5) newY += lineHeight * 0.25;
+          return newY;
+
+        } else if (tagName === "STRONG" || tagName === "B" || tagName.match(/^H[1-4]$/)) {
+          childNodesStyle = "bold";
+        } else if (tagName === "EM" || tagName === "I") {
+          childNodesStyle = "italic";
+        } else if (node.classList.contains("watupro_num")) {
+          return newY;
+        } else if (tagName === "BR") {
+          newY += lineHeight;
+          if (newY + lineHeight > maxY && newY > margin + lineHeight / 2) { doc.addPage(); newY = margin; }
+        } else if (tagName === "OL" || tagName === "UL") {
+          if (newY !== startY && newY > margin && newY < maxY - lineHeight) newY += lineHeight * 0.5;
+          let itemCounter = 1;
+          const currentListType = tagName === "OL" ? (node.getAttribute("type") || "1") : "disc";
+          for (const li of Array.from(node.children).filter(c => c.tagName === "LI")) {
+            newY = await processBlockNode(li, newY, childNodesStyle, listLevel + 1, itemCounter, currentListType, xIndent);
+            itemCounter++;
+          }
+          if (newY > startY && newY < maxY - lineHeight) newY += lineHeight * 0.5;
+        } else if (tagName === "LI") {
+          if (newY !== startY && newY > margin && newY < maxY - lineHeight) newY += lineHeight * 0.25;
+          let marker;
+          if (listType === "disc") marker = "•";
+          else if (listType === "1") marker = `${listCounter}.`;
+          else if (listType === "I") marker = `${toRoman(listCounter)}.`;
+          else marker = `${listCounter}.`;
+          if (newY + lineHeight > maxY && newY > margin + lineHeight / 2) { doc.addPage(); newY = margin; }
+          doc.setFontSize(currentFontSize).setFont(undefined, style);
+          doc.text(marker, effectiveXIndent - 4, newY);
+          const segments = processInlineText(node, childNodesStyle);
+          newY = renderInlineText(doc, segments, effectiveXIndent + 2, newY, usableWidth - (effectiveXIndent + 2 - margin), currentFontSize);
+          newY += lineHeight;
+
+        } else if (tagName === "TABLE") {
+          if (newY !== startY && newY > margin && newY < maxY - lineHeight) newY += lineHeight * 0.5;
+          console.log("[renderHTML] Rendering table as image.");
+          newY = await renderTableAsImage(doc, node, newY, effectiveXIndent);
+        } else {
+          for (let child of Array.from(node.childNodes)) {
+            newY = await processBlockNode(child, newY, childNodesStyle, listLevel, listCounter, listType, xIndent);
+          }
+        }
+      } else if (node.nodeType === Node.TEXT_NODE) {
+        let textContent = node.textContent;
+        if (textContent && typeof textContent.trim === "function") {
+          textContent = cleanZeroWidthSpaces(textContent.trim());
+          textContent = cleanNonBreakingSpaces(textContent);
+          textContent = preserveSpecialCharacters(textContent);
+          if (textContent) {
+            doc.setFontSize(currentFontSize).setFont(undefined, style);
+            const lines = doc.splitTextToSize(textContent.replace(/\s+/g, " ").trim(), usableWidth - (xIndent - margin));
+            for (const line of lines) {
+              if (newY >= maxY && newY > margin + lineHeight / 2) { doc.addPage(); newY = margin; }
+              doc.text(line.trim(), xIndent, newY);
+              if (node.parentNode?.getAttribute("style")?.includes("text-decoration: underline")) {
+                const textWidth = doc.getStringUnitWidth(line) * currentFontSize / doc.internal.scaleFactor;
+                const lineY = newY + 0.5;
+                doc.setLineWidth(0.2);
+                doc.line(xIndent, lineY, xIndent + textWidth, lineY);
+              }
+              newY += lineHeight;
+            }
+          }
+        }
+      }
+      return newY;
+    };
+
+    for (const child of Array.from(tempDiv.childNodes)) {
+      currentY = await processBlockNode(child, currentY, initialStyle, 0, 1, null, currentXIndent);
+    }
+    return currentY;
+  };
+
+  const renderQuestionBlock = async (doc, q, qIndex, totalQuestions, showAnswer, startY, fontSize = 12) => {
+    let y = startY;
+    doc.setFontSize(14).setFont(undefined, "bold");
+    doc.text(`Question ${qIndex + 1} of ${totalQuestions}`, margin, y);
+    y += 5;
+    doc.setDrawColor(0);
+    doc.setLineWidth(0.2);
+    doc.line(margin, y, pageWidth - margin, y);
+    y += 6;
+    doc.setFontSize(fontSize).setFont(undefined, "normal");
+    y = await renderHTML(doc, q.questionHtml, y, "normal", fontSize, margin);
+    if (y < maxY - lineHeight) y += lineHeight * 0.5;
+    const choicesToRender = Array.from(q.choices.filter(c => ["A", "B", "C", "D"].includes(c.letter?.toUpperCase())));
+    for (const choice of choicesToRender) {
+      const choiceText = `<p>${choice.letter}. ${cleanZeroWidthSpaces(choice.text)}</p>`;
+      const isCorrectChoice = showAnswer && choice.isCorrect;
+      y = await renderHTML(doc, choiceText, y, isCorrectChoice ? "bold" : "normal", fontSize, margin);
+      if (y < maxY - lineHeight * 0.25) y += lineHeight * 0.25;
+    }
+    if (showAnswer && q.feedbacks?.length) {
+      if (y < maxY - lineHeight * 0.5) y += lineHeight * 0.5;
+      for (const fb of q.feedbacks) {
+        const fbHeight = estimateHtmlHeight(doc, fb, fontSize, usableWidth);
+        if (y + fbHeight > maxY && y > margin + lineHeight + fbHeight) { doc.addPage(); y = margin; }
+        y = await renderHTML(doc, fb, y, "normal", fontSize, margin);
+        if (y < maxY - lineHeight * 0.5) y += lineHeight * 0.5;
+      }
+    }
+    if (showAnswer && q.postChoiceHtml && q.postChoiceHtml.trim() !== "") {
+      if (y < maxY - lineHeight * 0.5) y += lineHeight * 0.5;
+      y = await renderHTML(doc, q.postChoiceHtml, y, "italic", fontSize - 2, margin);
+    }
+    return y;
+  };
+
+  const renderPDFs = async () => {
+    if (!window.jspdf || !window.jspdf.jsPDF || !window.html2canvas) {
+      console.error("Dependencies not loaded. Please ensure jsPDF and html2canvas are injected.");
       return;
     }
     const { jsPDF } = window.jspdf;
-    const data = JSON.parse(localStorage.getItem('savedQuestions') || '[]');
+    const data = JSON.parse(localStorage.getItem("savedQuestions") || "[]");
     if (!data.length) {
       console.log("No saved data to print.");
       return;
     }
 
-    let topic = 'Topic'; 
-    const highchartsLabel = document.querySelector('.highcharts-axis-labels.highcharts-xaxis-labels text');
-    if (highchartsLabel && highchartsLabel.textContent.trim()) {
-      topic = highchartsLabel.textContent.trim(); topic = topic.replace(/_/g, ' '); 
-    } else if (document.title && document.title.trim() !== "") {
-      topic = document.title.trim();
-    } else {
-      const h1 = document.querySelector('h1');
+    let topic = "Topic";
+    const highchartsLabel = document.querySelector(".highcharts-axis-labels.highcharts-xaxis-labels text");
+    if (highchartsLabel && highchartsLabel.textContent.trim()) topic = highchartsLabel.textContent.trim().replace(/_/g, " ");
+    else if (document.title && document.title.trim() !== "") topic = document.title.trim();
+    else {
+      const h1 = document.querySelector("h1");
       if (h1 && h1.innerText.trim() !== "") topic = h1.innerText.trim();
       else {
-        const h2 = document.querySelector('h2');
+        const h2 = document.querySelector("h2");
         if (h2 && h2.innerText.trim() !== "") topic = h2.innerText.trim();
       }
     }
-    topic = topic.replace(/[^a-z0-9\s,-]/gi, '').replace(/\s+/g, ' ').trim(); 
-    if (!topic || topic === '-' || topic === ',') topic = 'Quiz Export'; 
+    topic = topic.replace(/[^a-z0-9\s,-]/gi, "").replace(/\s+/g, " ").trim() || "Quiz Export";
 
-    const pageWidth = 210, margin = 15;
-    const usableWidth = pageWidth - 2 * margin;
-    const lineHeight = 5.5; 
-    const pageHeight = 297;
-    const maxY = pageHeight - margin;
-    const PX_TO_MM_SCALE = 25.4 / 96; 
-
-    const toRoman = n => ({ 1: 'I', 2: 'II', 3: 'III', 4: 'IV', 5: 'V' }[n] || n.toString());
-
-    const estimateTableHeight = (doc, html, fontSize, usableWidth) => {
-      const tempDiv = document.createElement('div');
-      tempDiv.innerHTML = cleanZeroWidthSpaces(html);
-      const tables = tempDiv.querySelectorAll('table');
-      let totalHeight = 0;
-
-      for (const table of tables) {
-        const rows = Array.from(table.querySelectorAll('tbody > tr, tr'));
-        for (const row of rows) {
-          let maxCellHeight = lineHeight;
-          const cells = Array.from(row.cells);
-          for (const cell of cells) {
-            const cellHtml = cleanZeroWidthSpaces(cell.innerHTML);
-            const segments = processInlineText(cell, 'normal', true);
-            let currentLine = '';
-            let lineCount = 0;
-            for (const segment of segments) {
-              if (segment.type === 'BR_TAG') {
-                if (currentLine) {
-                  const cellWidth = usableWidth / cells.length; // Approximate
-                  const lines = doc.splitTextToSize(currentLine, cellWidth - 1);
-                  lineCount += lines.length;
-                  currentLine = '';
-                }
-                lineCount += 0.25;
-              } else if (segment.text) {
-                currentLine += segment.text;
-              }
-            }
-            if (currentLine) {
-              const cellWidth = usableWidth / cells.length;
-              const lines = doc.splitTextToSize(currentLine, cellWidth - 1);
-              lineCount += lines.length;
-            }
-            maxCellHeight = Math.max(maxCellHeight, lineCount * lineHeight);
-          }
-          totalHeight += maxCellHeight + lineHeight * 0.1; // Row spacing
-        }
-        totalHeight += lineHeight; // Table spacing
-      }
-      return totalHeight;
-    };
-
-    const estimateHtmlHeight = (doc, html, fs = 12, currentUsableWidth = usableWidth, currentFontStyle = 'normal') => {
-      if (!html || !html.trim()) return 0;
-      const tempDiv = document.createElement('div');
-      tempDiv.innerHTML = cleanZeroWidthSpaces(html); 
-      let textHeight = 0;
-      
-      const textOnlyDiv = tempDiv.cloneNode(true);
-      textOnlyDiv.querySelectorAll('div[data-is-image-placeholder="true"], table').forEach(el => el.remove());
-      
-      const textContent = textOnlyDiv.innerText || textOnlyDiv.textContent || "";
-      if (textContent.trim()) {
-        doc.setFontSize(fs).setFont(undefined, currentFontStyle); 
-        const lines = doc.splitTextToSize(textContent, currentUsableWidth);
-        textHeight = lines.length * lineHeight;
-        doc.setFont(undefined, 'normal'); 
-      }
-
-      const brCount = (tempDiv.innerHTML.match(/<br\s*\/?>/gi) || []).length;
-      textHeight += brCount * lineHeight * 1.2;
-
-      let imageReservedHeight = 0;
-      tempDiv.querySelectorAll('div[data-is-image-placeholder="true"]').forEach(phNode => {
-        textHeight += lineHeight; 
-        const htmlHeightStr = phNode.getAttribute('data-img-html-height');
-        if (htmlHeightStr && !isNaN(parseFloat(htmlHeightStr))) {
-          imageReservedHeight += parseFloat(htmlHeightStr) * PX_TO_MM_SCALE;
-        } else {
-          imageReservedHeight += lineHeight * 5; 
-        }
-      });
-
-      const tableHeight = estimateTableHeight(doc, html, fs, currentUsableWidth);
-      return textHeight + imageReservedHeight + tableHeight;
-    };
-    
-    const estimateBlockHeight = (doc, questionData, showAnswer, fontSize = 12) => {
-      let height = 10; 
-      height += estimateHtmlHeight(doc, questionData.questionHtml, fontSize, usableWidth); 
-      height += lineHeight; 
-      questionData.choices.forEach(c => {
-        const isCorrect = showAnswer && questionData.choices.find(ch => ch.letter === c.letter)?.isCorrect;
-        height += estimateHtmlHeight(doc, `${c.letter}. ${c.text}`, fontSize, usableWidth, isCorrect ? 'bold' : 'normal');
-        height += lineHeight * 0.25; 
-      });
-      height += lineHeight; 
-      if (showAnswer && questionData.feedbacks) {
-        questionData.feedbacks.forEach(fbHtml => {
-          height += estimateHtmlHeight(doc, fbHtml, fontSize, usableWidth); 
-          height += lineHeight * 0.5; 
-        });
-      }
-      if (showAnswer && questionData.postChoiceHtml) {
-        height += estimateHtmlHeight(doc, questionData.postChoiceHtml, fontSize - 2, usableWidth, 'italic'); 
-      }
-      return height + 20; 
-    };
-
-    const processInlineText = (parentNode, initialStyle = 'normal', isTableCell = false) => {
-      let segments = [];
-      const processChildren = (node, currentStyle, isUnderlined = false) => {
-        if (node.nodeType === Node.TEXT_NODE) {
-          let text = node.textContent; 
-          text = cleanZeroWidthSpaces(text); 
-          text = cleanRepeatedNBSP(text); 
-          text = preserveSpecialCharacters(text);
-          if (isTableCell) {
-            text = text.trim();
-          }
-          if (text.length > 0) {
-            const inlineUnderlined = isUnderlined || node.parentNode?.getAttribute('style')?.includes('text-decoration: underline');
-            segments.push({ text: text, style: currentStyle, type: 'TEXT', isUnderlined: inlineUnderlined });
-          }
-        } else if (node.nodeType === Node.ELEMENT_NODE) {
-          let newStyle = currentStyle;
-          let newUnderlined = isUnderlined;
-          const tagName = node.tagName.toUpperCase();
-          if (tagName === 'STRONG' || tagName === 'B') newStyle = 'bold';
-          else if (tagName === 'EM' || tagName === 'I') newStyle = 'italic';
-          else if (tagName === 'U') newUnderlined = true;
-          
-          if (tagName === 'BR') {
-            segments.push({ type: 'BR_TAG' });
-          } else if (!node.hasAttribute('data-is-image-placeholder')) { 
-            for (const child of Array.from(node.childNodes)) processChildren(child, newStyle, newUnderlined);
-          }
-        }
-      };
-      for (const child of Array.from(parentNode.childNodes)) processChildren(child, initialStyle);
-      return segments;
-    };
-
-    const renderInlineText = (doc, textSegments, x, y, maxWidth, currentFontSize, align = 'left') => { 
-      let currentX = x;
-      let currentY = y;
-
-      const ensureSpaceForOneLine = () => {
-        if (currentY >= maxY - lineHeight) {
-          doc.addPage();
-          currentY = margin;
-          currentX = x; 
-          return true;
-        }
-        return false;
-      };
-
-      for (let i = 0; i < textSegments.length; i++) {
-        const segment = textSegments[i];
-        if (segment.type === 'BR_TAG') {
-          currentY += lineHeight;
-          currentX = x; 
-          ensureSpaceForOneLine(); 
-          continue; 
-        }
-
-        let segmentText = segment.text;
-        if (!segmentText) continue; 
-
-        doc.setFontSize(currentFontSize).setFont(undefined, segment.style);
-        const words = segmentText.split(/(\s+)/); // Split by spaces, keeping spaces as separate items
-
-        for (let j = 0; j < words.length; j++) {
-          let word = words[j];
-          if (!word) continue;
-
-          const isSpace = word.match(/^\s+$/);
-          const wordWidth = doc.getStringUnitWidth(word) * currentFontSize / doc.internal.scaleFactor;
-
-          if (currentX + wordWidth > x + maxWidth && currentX > x && !isSpace) { 
-            currentY += lineHeight; 
-            currentX = x;          
-          }
-          
-          if (ensureSpaceForOneLine() && currentX === x) {
-          }
-
-          if (!isSpace || (isSpace && currentX > x)) { 
-            const textWidth = doc.getStringUnitWidth(word) * currentFontSize / doc.internal.scaleFactor;
-            let xPos = currentX;
-            if (align === 'right') xPos = x + maxWidth - textWidth;
-            else if (align === 'center') xPos = x + (maxWidth - textWidth) / 2;
-            console.log(`[renderInlineText] Rendering word: "${word}", xPos: ${xPos}, currentX: ${currentX}, style: ${segment.style}`);
-            doc.text(word, xPos, currentY);
-
-            if (segment.isUnderlined) {
-              const lineY = currentY + 0.5; 
-              doc.setLineWidth(0.2);
-              doc.line(xPos, lineY, xPos + textWidth, lineY);
-            }
-          }
-          currentX += wordWidth;
-        }
-
-        // Add space between segments if next segment exists and is not empty
-        if (i < textSegments.length - 1 && textSegments[i + 1].text?.trim()) {
-          const spaceWidth = doc.getStringUnitWidth(' ') * currentFontSize / doc.internal.scaleFactor;
-          if (currentX + spaceWidth <= x + maxWidth) {
-            console.log(`[renderInlineText] Adding space after segment ${i}: "${segmentText}"`);
-            currentX += spaceWidth;
-          } else {
-            currentY += lineHeight;
-            currentX = x;
-            ensureSpaceForOneLine();
-          }
-        }
-      }
-      return currentY; 
-    };
-
-    const calculateColumnWidths = (doc, rows, usableWidth, currentFontSize) => {
-      const colMaxWidths = [];
-      const widthFontSize = 12;
-      const charWidth = doc.getStringUnitWidth('M') * widthFontSize / doc.internal.scaleFactor;
-
-      rows.forEach(row => {
-        let currentColIndex = 0;
-        Array.from(row.cells).forEach(cell => {
-          let cellTextContent = cell.innerHTML;
-          cellTextContent = cleanZeroWidthSpaces(cellTextContent);
-          cellTextContent = cleanRepeatedNBSP(cellTextContent); 
-          cellTextContent = preserveSpecialCharacters(cellTextContent);
-
-          const tempDiv = document.createElement('div');
-          tempDiv.innerHTML = cellTextContent;
-          const segments = processInlineText(tempDiv, 'normal', true);
-          let maxCharLength = 0;
-
-          let currentLine = '';
-          segments.forEach(segment => {
-            if (segment.type === 'BR_TAG') {
-              if (currentLine.length > maxCharLength) {
-                maxCharLength = currentLine.length;
-              }
-              currentLine = '';
-            } else if (segment.text) {
-              currentLine += segment.text;
-            }
-          });
-          if (currentLine.length > maxCharLength) {
-            maxCharLength = currentLine.length;
-          }
-
-          const colspan = parseInt(cell.getAttribute('colspan')) || 1;
-          const estimatedWidth = maxCharLength * charWidth;
-
-          for (let i = 0; i < colspan; i++) {
-            const colIndex = currentColIndex + i;
-            if (!colMaxWidths[colIndex]) {
-              colMaxWidths[colIndex] = { width: 0, colspanSum: 0 };
-            }
-            if (estimatedWidth / colspan > colMaxWidths[colIndex].width) {
-              colMaxWidths[colIndex].width = estimatedWidth / colspan;
-            }
-            colMaxWidths[colIndex].colspanSum = Math.max(colMaxWidths[colIndex].colspanSum, colspan);
-          }
-          currentColIndex += colspan;
-        });
-      });
-
-      let totalWidth = colMaxWidths.reduce((sum, col) => sum + col.width, 0);
-      const numColumns = colMaxWidths.length;
-
-      let scaleFactor = 1;
-      if (totalWidth > usableWidth) {
-        scaleFactor = usableWidth / totalWidth;
-      }
-
-      colMaxWidths.forEach(col => {
-        col.width *= scaleFactor;
-        if (!col.width || col.width < charWidth * 1.5) {
-          col.width = charWidth * 1.5;
-        }
-      });
-
-      const table = rows[0]?.closest('table');
-      if (table) {
-        const cellspacing = parseFloat(table.getAttribute('cellspacing') || 0);
-        const cellpadding = parseFloat(table.getAttribute('cellpadding') || 0);
-        const extraSpacing = (cellspacing + cellpadding) * PX_TO_MM_SCALE;
-        if (totalWidth + extraSpacing * numColumns > usableWidth) {
-          const adjustedScale = (usableWidth - extraSpacing * numColumns) / totalWidth;
-          colMaxWidths.forEach(col => {
-            col.width *= adjustedScale;
-            if (col.width < charWidth * 1.5) {
-              col.width = charWidth * 1.5;
-            }
-          });
-        }
-      }
-
-      console.log('Column Widths:', colMaxWidths.map(w => w.width));
-      return colMaxWidths;
-    };
-
-    const renderHTML = (doc, html, startY, initialStyle = 'normal', currentFontSize = 12, currentXIndent = margin) => {
-      const tempDiv = document.createElement('div');
-      tempDiv.innerHTML = cleanZeroWidthSpaces(html); 
-      tempDiv.innerHTML = preserveSpecialCharacters(tempDiv.innerHTML);
-      let currentY = startY;
-
-      const processBlockNode = (node, yPos, style, listLevel = 0, listCounter = 1, listType = null, xIndent) => {
-        let newY = yPos;
-        let nodeStyle = style; 
-        let childNodesStyle = style; 
-        const effectiveXIndent = xIndent + (listLevel * 6); 
-
-        if (node.nodeType === Node.ELEMENT_NODE) {
-          const tagName = node.tagName.toUpperCase();
-          
-          if (node.hasAttribute('data-is-image-placeholder')) {
-            if (newY !== startY && newY > margin && newY < maxY - lineHeight) newY += lineHeight * 0.5;
-            
-            const imgSrc = cleanZeroWidthSpaces(node.getAttribute('data-img-src'));
-            const altText = cleanZeroWidthSpaces(node.getAttribute('data-img-alt') || 'Image');
-            const htmlWidthStr = node.getAttribute('data-img-html-width');
-            const htmlHeightStr = node.getAttribute('data-img-html-height');
-
-            let placeholderText = `[Gambar: ${altText} | URL: ${imgSrc}`;
-            if (htmlWidthStr || htmlHeightStr) { 
-              placeholderText += ` | Dimensi HTML: ${htmlWidthStr || 'auto'}x${htmlHeightStr || 'auto'}`;
-            }
-            placeholderText += "]";
-
-            placeholderText = preserveSpecialCharacters(placeholderText);
-            
-            doc.setFontSize(currentFontSize - 2).setFont(undefined, 'italic'); 
-            const lines = doc.splitTextToSize(placeholderText, usableWidth - (effectiveXIndent - margin));
-            for (const line of lines) {
-              if (newY + lineHeight > maxY && newY > margin + lineHeight/2) { doc.addPage(); newY = margin; }
-              doc.text(line, effectiveXIndent, newY);
-              newY += lineHeight;
-            }
-            doc.setFontSize(currentFontSize).setFont(undefined, style); 
-
-            if (htmlHeightStr && !isNaN(parseFloat(htmlHeightStr))) {
-              const htmlHeightPx = parseFloat(htmlHeightStr);
-              const pdfReservedHeightMm = htmlHeightPx * PX_TO_MM_SCALE;
-              if (newY + pdfReservedHeightMm > maxY && newY > margin) { 
-                doc.addPage(); newY = margin;
-                doc.setFontSize(currentFontSize - 2).setFont(undefined, 'italic');
-                const linesOnNewPage = doc.splitTextToSize(placeholderText, usableWidth - (effectiveXIndent - margin));
-                for (const line of linesOnNewPage) { 
-                  if (newY + lineHeight > maxY && newY > margin + lineHeight/2) { doc.addPage(); newY = margin; }
-                  doc.text(line, effectiveXIndent, newY);
-                  newY += lineHeight;
-                }
-                doc.setFontSize(currentFontSize).setFont(undefined, style);
-              }
-              newY += pdfReservedHeightMm; 
-            } else {
-              newY += lineHeight * 5; 
-            }
-            if (newY > yPos && newY < maxY - (lineHeight*0.5)) newY += lineHeight * 0.25;
-            return newY;
-
-          } else if (tagName === 'P' || tagName === 'DIV' || (tagName.match(/^H[1-6]$/))) {
-            if (newY !== startY && newY > margin && newY < maxY - lineHeight) newY += lineHeight * 0.5; 
-            if (tagName.match(/^H[1-6]$/)) doc.setFont(undefined, 'bold'); 
-            
-            const segments = processInlineText(node, style); 
-            console.log(`[renderHTML] P/DIV segments:`, segments.map(s => s.text || 'BR'));
-            newY = renderInlineText(doc, segments, effectiveXIndent, newY, usableWidth - (effectiveXIndent - margin), currentFontSize);
-            
-            if (segments.some(s => (s.text && s.text.trim() !== '') || s.type === 'BR_TAG')) {
-              if (!(newY > maxY - lineHeight && newY <= maxY) && newY <= maxY - lineHeight) {
-                newY += lineHeight;
-              }
-            }
-            
-            if (tagName.match(/^H[1-6]$/)) doc.setFont(undefined, style); 
-            if (newY > yPos && newY < maxY - (lineHeight*0.5)) newY += lineHeight * 0.25; 
-            return newY;
-
-          } else if (tagName === 'STRONG' || tagName === 'B' || tagName.match(/^H[1-4]$/)) {
-            childNodesStyle = 'bold';
-          } else if (tagName === 'EM' || tagName === 'I') {
-            childNodesStyle = 'italic';
-          } else if (node.classList.contains('watupro_num')) {
-            return newY;
-          } else if (tagName === 'BR') { 
-            newY += lineHeight;
-            if (newY + lineHeight > maxY && newY > margin + lineHeight/2) { doc.addPage(); newY = margin; }
-          } else if (tagName === 'OL' || tagName === 'UL') {
-            if (newY !== startY && newY > margin && newY < maxY - lineHeight) newY += lineHeight * 0.5; 
-            let itemCounter = 1;
-            const currentListType = tagName === 'OL' ? (node.getAttribute('type') || '1') : 'disc';
-            for (const li of Array.from(node.children).filter(c => c.tagName === 'LI')) {
-              newY = processBlockNode(li, newY, childNodesStyle, listLevel + 1, itemCounter, currentListType, xIndent); 
-              itemCounter++;
-            }
-            if (newY > startY && newY < maxY - lineHeight) newY += lineHeight * 0.5; 
-          } else if (tagName === 'LI') {
-            if (newY !== startY && newY > margin && newY < maxY - lineHeight) newY += lineHeight * 0.25; 
-            let marker;
-            if (listType === 'disc') marker = '•';
-            else if (listType === '1') marker = `${listCounter}.`;
-            else if (listType === 'I') marker = `${toRoman(listCounter)}.`;
-            else marker = `${listCounter}.`; 
-
-            if (newY + lineHeight > maxY && newY > margin + lineHeight/2) { doc.addPage(); newY = margin; }
-            doc.setFontSize(currentFontSize).setFont(undefined, style); 
-            doc.text(marker, effectiveXIndent - 4, newY); 
-
-            const segments = processInlineText(node, childNodesStyle); 
-            newY = renderInlineText(doc, segments, effectiveXIndent + 2, newY, usableWidth - (effectiveXIndent + 2 - margin), currentFontSize);
-            newY += lineHeight; 
-            
-          } else if (tagName === 'TABLE') { 
-            if (newY !== startY && newY > margin && newY < maxY - lineHeight) newY += lineHeight * 0.5;
-
-            const rows = Array.from(node.querySelectorAll('tbody > tr, tr'));
-            if (rows.length === 0) return newY;
-
-            const tableFontSize = 12;
-
-            const colWidths = calculateColumnWidths(doc, rows, usableWidth - (effectiveXIndent - margin), tableFontSize);
-
-            let currentRowIndex = 0;
-            for (const row of rows) {
-              const cells = Array.from(row.cells);
-              if (cells.length === 0) {
-                currentRowIndex++;
-                continue;
-              }
-
-              let currentCellX = effectiveXIndent;
-              let yForRowCells = newY;
-              let maxHeightInThisPdfRow = 0;
-              let cellIndex = 0;
-
-              for (const cell of cells) {
-                const cellColspan = parseInt(cell.getAttribute('colspan')) || 1;
-                let actualCellWidth = 0;
-                for (let i = cellIndex; i < cellIndex + cellColspan && i < colWidths.length; i++) {
-                  actualCellWidth += colWidths[i].width;
-                }
-
-                const tempDiv = document.createElement('div');
-                tempDiv.innerHTML = cleanZeroWidthSpaces(cell.innerHTML);
-                tempDiv.innerHTML = preserveSpecialCharacters(tempDiv.innerHTML);
-                console.log(`[renderHTML] Table cell row ${currentRowIndex + 1}, col ${cellIndex + 1}: ${tempDiv.innerHTML}`);
-                const segments = processInlineText(tempDiv, style, true);
-
-                let cellStyle = style;
-                if (cell.querySelector('strong') || cell.tagName === 'TH') cellStyle = 'bold';
-                doc.setFontSize(tableFontSize).setFont(undefined, cellStyle);
-
-                let cellHtmlAlign = cell.getAttribute('align') || 'left';
-                if (cellHtmlAlign === 'right') cellHtmlAlign = 'center';
-                console.log(`[renderHTML] Cell align row ${currentRowIndex + 1}, col ${cellIndex + 1}: ${cell.getAttribute('align')} -> ${cellHtmlAlign}`);
-                let yForCurrentCell = yForRowCells;
-
-                let currentLine = '';
-                let lineSegments = [];
-                let hasBR = false;
-                for (const segment of segments) {
-                  if (segment.type === 'BR_TAG') {
-                    hasBR = true;
-                    if (currentLine) {
-                      const textWidth = doc.getStringUnitWidth(currentLine) * tableFontSize / doc.internal.scaleFactor;
-                      if (yForCurrentCell + lineHeight > maxY && yForCurrentCell > margin + lineHeight/2) {
-                        doc.addPage();
-                        yForCurrentCell = margin;
-                        yForRowCells = margin;
-                      }
-                      let xPos;
-                      if (cellHtmlAlign === 'right') xPos = currentCellX + actualCellWidth - textWidth - 1;
-                      else if (cellHtmlAlign === 'center') xPos = currentCellX + (actualCellWidth - textWidth) / 2;
-                      else xPos = currentCellX + 1;
-                      doc.text(currentLine, xPos, yForCurrentCell);
-                      if (lineSegments.some(s => s.isUnderlined)) {
-                        const lineY = yForCurrentCell + 0.5;
-                        doc.setLineWidth(0.2);
-                        doc.line(xPos, lineY, xPos + textWidth, lineY);
-                      }
-                      yForCurrentCell += lineHeight;
-                    }
-                    currentLine = '';
-                    lineSegments = [];
-                    yForCurrentCell += lineHeight * 0.25;
-                  } else if (segment.text) {
-                    currentLine += segment.text;
-                    lineSegments.push(segment);
-                  }
-                }
-
-                if (currentLine) {
-                  if (hasBR) {
-                    const textWidth = doc.getStringUnitWidth(currentLine) * tableFontSize / doc.internal.scaleFactor;
-                    if (yForCurrentCell + lineHeight > maxY && yForCurrentCell > margin + lineHeight/2) {
-                      doc.addPage();
-                      yForCurrentCell = margin;
-                      yForRowCells = margin;
-                    }
-                    let xPos;
-                    if (cellHtmlAlign === 'right') xPos = currentCellX + actualCellWidth - textWidth - 1;
-                    else if (cellHtmlAlign === 'center') xPos = currentCellX + (actualCellWidth - textWidth) / 2;
-                    else xPos = currentCellX + 1;
-                    doc.text(currentLine, xPos, yForCurrentCell);
-                    if (lineSegments.some(s => s.isUnderlined)) {
-                      const lineY = yForCurrentCell + 0.5;
-                      doc.setLineWidth(0.2);
-                      doc.line(xPos, lineY, xPos + textWidth, lineY);
-                    }
-                    yForCurrentCell += lineHeight;
-                  } else {
-                    const lines = doc.splitTextToSize(currentLine, actualCellWidth - 1);
-                    for (const line of lines) {
-                      if (yForCurrentCell + lineHeight > maxY && yForCurrentCell > margin + lineHeight/2) {
-                        doc.addPage();
-                        yForCurrentCell = margin;
-                        yForRowCells = margin;
-                      }
-                      const textWidth = doc.getStringUnitWidth(line) * tableFontSize / doc.internal.scaleFactor;
-                      let xPos;
-                      if (cellHtmlAlign === 'right') xPos = currentCellX + actualCellWidth - textWidth - 1;
-                      else if (cellHtmlAlign === 'center') xPos = currentCellX + (actualCellWidth - textWidth) / 2;
-                      else xPos = currentCellX + 1;
-                      console.log(`[renderHTML] Rendering line: ${line}, xPos: ${xPos}, width: ${textWidth}, cellWidth: ${actualCellWidth}`);
-                      doc.text(line, xPos, yForCurrentCell);
-                      if (lineSegments.some(s => s.isUnderlined)) {
-                        const lineY = yForCurrentCell + 0.5;
-                        doc.setLineWidth(0.2);
-                        doc.line(xPos, lineY, xPos + textWidth, lineY);
-                      }
-                      yForCurrentCell += lineHeight;
-                    }
-                  }
-                }
-
-                maxHeightInThisPdfRow = Math.max(maxHeightInThisPdfRow, yForCurrentCell - yForRowCells);
-                currentCellX += actualCellWidth;
-                cellIndex += cellColspan;
-                doc.setFont(undefined, style);
-              }
-
-              newY = yForRowCells + maxHeightInThisPdfRow;
-              if (currentRowIndex < rows.length - 1 && newY < maxY - lineHeight * 0.1) newY += lineHeight * 0.1;
-              currentRowIndex++;
-            }
-
-            if (newY > startY && newY < maxY - lineHeight) newY += lineHeight;
-          } else { 
-            for (let child of Array.from(node.childNodes)) {
-              newY = processBlockNode(child, newY, childNodesStyle, listLevel, listCounter, listType, xIndent); 
-            }
-          }
-        } else if (node.nodeType === Node.TEXT_NODE) {
-          let textContent = node.textContent;
-          if (textContent && typeof textContent.trim === 'function') {
-            textContent = cleanZeroWidthSpaces(textContent.trim()); 
-            textContent = cleanRepeatedNBSP(textContent); 
-            textContent = preserveSpecialCharacters(textContent);
-            if (textContent) {
-              doc.setFontSize(currentFontSize).setFont(undefined, style);
-              const lines = doc.splitTextToSize(textContent.replace(/\s+/g, ' ').trim(), usableWidth - (xIndent - margin));
-              for (const line of lines) {
-                if (newY >= maxY && newY > margin + lineHeight/2) { doc.addPage(); newY = margin; }
-                doc.text(line.trim(), xIndent, newY);
-                if (node.parentNode?.getAttribute('style')?.includes('text-decoration: underline')) {
-                  const textWidth = doc.getStringUnitWidth(line) * currentFontSize / doc.internal.scaleFactor;
-                  const lineY = newY + 0.5;
-                  doc.setLineWidth(0.2);
-                  doc.line(xIndent, lineY, xIndent + textWidth, lineY);
-                }
-                newY += lineHeight;
-              }
-            }
-          }
-        }
-        return newY;
-      };
-
-      for (const child of Array.from(tempDiv.childNodes)) { 
-        currentY = processBlockNode(child, currentY, initialStyle, 0, 1, null, currentXIndent); 
-      }
-      return currentY;
-    };
-
-    const renderQuestionBlock = (doc, q, qIndex, totalQuestions, showAnswer, startY, fontSize = 12) => { 
-      let y = startY;
-      doc.setFontSize(14).setFont(undefined, 'bold');
-      doc.text(`Question ${qIndex + 1} of ${totalQuestions}`, margin, y);
-      y += 5;
-      doc.setDrawColor(0); doc.setLineWidth(0.2);
-      doc.line(margin, y, pageWidth - margin, y);
-      y += 6;
-      doc.setFontSize(fontSize).setFont(undefined, 'normal');
-      y = renderHTML(doc, q.questionHtml, y, 'normal', fontSize, margin); 
-      if (y < maxY - lineHeight) y += lineHeight * 0.5; 
-      const choicesToRender = Array.from(q.choices.filter(c => ['A', 'B', 'C', 'D'].includes(c.letter?.toUpperCase())));
-      choicesToRender.forEach(choice => {
-        const choiceText = `<p>${choice.letter}. ${cleanZeroWidthSpaces(choice.text)}</p>`; 
-        const isCorrectChoice = showAnswer && choice.isCorrect;
-        y = renderHTML(doc, choiceText, y, isCorrectChoice ? 'bold' : 'normal', fontSize, margin); 
-        if (y < maxY - lineHeight * 0.25) y += lineHeight * 0.25; 
-      });
-      if (showAnswer && q.feedbacks?.length) {
-        if (y < maxY - lineHeight * 0.5) y += lineHeight * 0.5; 
-        for (const fb of q.feedbacks) {
-          const fbHeight = estimateHtmlHeight(doc, fb, fontSize, usableWidth);
-          console.log(`[renderQuestionBlock] Feedback height: ${fbHeight}, y: ${y}, maxY: ${maxY}`);
-          if (y + fbHeight > maxY && y > margin + lineHeight + fbHeight) {
-            doc.addPage();
-            y = margin;
-          }
-          y = renderHTML(doc, fb, y, 'normal', fontSize, margin); 
-          if (y < maxY - lineHeight * 0.5) y += lineHeight * 0.5; 
-        }
-      }
-      if (showAnswer && q.postChoiceHtml && q.postChoiceHtml.trim() !== '') {
-        if (y < maxY - lineHeight * 0.5) y += lineHeight * 0.5; 
-        y = renderHTML(doc, q.postChoiceHtml, y, 'italic', fontSize - 2, margin); 
-      }
-      return y; 
-    };
-
-    const docQ = new jsPDF(), docA = new jsPDF();
-    let yQ = margin, yA = margin;
-    const interQuestionSpacing = lineHeight * 1.5; 
+    const docQ = new jsPDF();
+    const docA = new jsPDF();
+    let yQ = margin;
+    let yA = margin;
+    const interQuestionSpacing = lineHeight * 1.5;
     const defaultFontSize = 12;
 
-    data.forEach((q, i) => { 
+    for (let i = 0; i < data.length; i++) {
+      const q = data[i];
       const estHeightQ = estimateBlockHeight(docQ, q, false, defaultFontSize);
       if (i > 0 && (yQ + estHeightQ > maxY)) {
-        docQ.addPage(); yQ = margin;
+        docQ.addPage();
+        yQ = margin;
       } else if (i > 0) {
         yQ += interQuestionSpacing;
-        if (yQ + estHeightQ > maxY) { 
-          docQ.addPage(); yQ = margin;
+        if (yQ + estHeightQ > maxY) {
+          docQ.addPage();
+          yQ = margin;
         }
       }
-      yQ = renderQuestionBlock(docQ, q, i, data.length, false, yQ, defaultFontSize);
-      if (i > 0) { 
-        docA.addPage(); 
-      }
-      yA = margin; 
-      yA = renderQuestionBlock(docA, q, i, data.length, true, yA, defaultFontSize);
-    });
+      yQ = await renderQuestionBlock(docQ, q, i, data.length, false, yQ, defaultFontSize);
+      if (i > 0) docA.addPage();
+      yA = margin;
+      yA = await renderQuestionBlock(docA, q, i, data.length, true, yA, defaultFontSize);
+    }
     docQ.save(`${topic} - Questions.pdf`);
     docA.save(`${topic} - Answers.pdf`);
     console.log("PDFs generated.");
@@ -889,44 +608,43 @@
 
   const handleSaveAndGeneratePDFs = async () => {
     try {
-      console.log("● Langkah 1: Menginjeksi jsPDF...");
-      await injectJsPDF(); 
-      console.log("✔ Injeksi jsPDF selesai.");
+      console.log("● Langkah 1: Menginjeksi dependensi...");
+      await injectDependencies();
+      console.log("✔ Injeksi dependensi selesai.");
 
       console.log("● Langkah 2: Menyimpan data...");
-      autoSave(); 
-      console.log("✔ autoSave selesai.");
+      autoSave();
+      console.log("✔ Penyimpanan data selesai.");
 
       console.log("● Langkah 3: Merender PDF...");
-      renderPDFs(); 
-      console.log("✔ renderPDFs selesai.");
+      await renderPDFs();
+      console.log("✔ Render PDF selesai.");
     } catch (error) {
-      console.error("Error dalam handleSaveAndGeneratePDFs:", error);
+      console.error("Error during handleSaveAndGeneratePDFs:", error);
       console.log("Terjadi kesalahan selama proses. Silakan periksa konsol untuk detail.");
     }
   };
 
-  if (!document.getElementById('pdfToolsUI')) {
+  if (!document.getElementById("pdfToolsUI")) {
     const panel = document.createElement("div");
-    panel.id = 'pdfToolsUI';
-    panel.style = 'position: fixed; right: 20px; top: 20px; z-index: 10000; padding: 10px; background: white; border: 1px solid black; font-family: Arial, sans-serif';
+    panel.id = "pdfToolsUI";
+    panel.style = "position: fixed; right: 20px; top: 20px; z-index: 10000; padding: 10px; background: white; border: 1px solid black; font-family: Arial, sans-serif;";
     panel.innerHTML = `
       <h3 style="margin-top: 0; margin-bottom: 5px;">PDF Generator</h3>
-      <button id="handleSaveAndGeneratePDFs" style="background: blue; color: white; border: none; padding: 5px; cursor: pointer;">Save All to PDF</button>
+      <button id="handleSaveBtn" style="background: blue; color: white; border: none; padding: 5px; cursor: pointer;">Save All to PDF</button>
       <p style="font-size: 10px; color: grey; margin-top: 5px;">Click to extract questions and generate PDFs.</p>
     `;
     document.body.appendChild(panel);
-    console.log('Panel UI PDF Tool telah ditambahkan ke body.');
-    
-    const button = document.getElementById('handleSaveAndGeneratePDFs');
+    console.log("Panel UI PDF Tool added to body.");
+
+    const button = document.getElementById("handleSaveBtn");
     if (button) {
-      button.onclick = handleSaveAndGeneratePDFs; 
-      console.log("Button untuk generate PDF ditemukan dan event click terpasang.");
+      button.onclick = handleSaveAndGeneratePDFs;
+      console.log("Button for PDF generation found and click event attached.");
     } else {
-      console.error('Button handleSaveAndGeneratePDFs tidak ditemukan.');
+      console.error("Button handleSaveBtn not found.");
     }
-    
   } else {
-    console.log("Panel UI pdfToolsUI sudah ada.");
+    console.log("Panel UI pdfToolsUI already exists.");
   }
 })();
