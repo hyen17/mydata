@@ -574,7 +574,7 @@
         if (h2 && h2.innerText.trim() !== "") topic = h2.innerText.trim();
       }
     }
-    topic = topic.replace(/[^a-z0-9\s,-]/gi, "").replace(/\s+/g, " ").trim() || "Quiz Export";
+    topic = topic.replace(/[^a-z0-9\s\.,-]/gi, "").replace(/\s+/g, " ").trim() || "Quiz Export";
 
     const docQ = new jsPDF();
     const docA = new jsPDF();
