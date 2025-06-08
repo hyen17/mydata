@@ -1,0 +1,129 @@
+// == Multi-Quiz Merger Script (streamlined + improved UI contrast + handle empty URLs) ==
+(async () => {
+  const extractQuizData = async () => {
+    const data = [];
+    while (true) {
+      const questionBlock = document.querySelector('div.contentBlock--practice.contentBlock--print');
+      const questionHTML = questionBlock?.outerHTML || '';
+      const answers = [];
+      document.querySelectorAll('label._answer_1f8fe_1').forEach((el, i) => {
+        const isCorrect = el.classList.contains('_is-correct_1f8fe_79');
+        const rawTextEl = el.querySelector('div._text_1f8fe_9');
+        const textHTML = rawTextEl?.textContent.trim() || '';
+        const letter = String.fromCharCode(65 + i);
+        answers.push({ letter, textHTML, isCorrect });
+      });
+      const explanationBlock = document.querySelector('div._supplementAreaDesktop_13gwe_59 div.contentBlock--practice.contentBlock--print');
+      const explanationHTML = explanationBlock?.outerHTML || '';
+      data.push({ questionHTML, answers, explanationHTML });
+      const nextBtn = document.querySelector('button._next_1025s_1');
+      if (!nextBtn || nextBtn.disabled) break;
+      nextBtn.click();
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    return data;
+  };
+
+  let allData = [];
+  let pendingUrls = [];
+  let receivedCount = 0;
+
+  const ui = document.createElement('div');
+  ui.style = 'position:fixed;top:10px;right:10px;z-index:9999;background:#fff;color:#000;padding:10px;border:1px solid #333;box-shadow:0 2px 6px rgba(0,0,0,0.3);max-width:320px;font-family:sans-serif;font-size:14px;';
+  ui.innerHTML = `
+    <h4 style="margin:0 0 10px 0;font-size:16px;font-weight:bold;color:#222;">Multi-Quiz Merger</h4>
+    <div id="url-list"></div>
+    <button id="add-url" style="margin-bottom:10px;padding:4px 8px;background:#eee;border:1px solid #999;cursor:pointer;">+ Tambah URL</button><br>
+    <button id="start-process" style="padding:6px 10px;background:#004080;color:#fff;border:none;cursor:pointer;">Proses Semua Quiz</button>
+  `;
+  document.body.appendChild(ui);
+
+  const urlListDiv = ui.querySelector('#url-list');
+  const addUrl = () => {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'https://...';
+    input.style = 'width:100%;margin-bottom:5px;padding:4px;border:1px solid #ccc;color:#000;background:#f9f9f9;';
+    urlListDiv.appendChild(input);
+  };
+  ui.querySelector('#add-url').onclick = addUrl;
+  addUrl();
+
+  const renderMergedQuiz = () => {
+    const css = `
+      <style>
+        body { font-family: Arial, sans-serif; font-size: 16px; line-height: 1.6; color: #000; padding: 40px; white-space: normal; }
+        hr { margin: 12px 0; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 16px; font-size: 16px; }
+        table, th, td { border: 1px solid black; padding: 4px; text-align: center; }
+        .question { break-inside: avoid; margin-bottom: 24px; }
+        .answer-line { display: flex; align-items: flex-start; margin: 6px 0; }
+        .answer-line strong { margin-right: 6px; min-width: 18px; display: inline-block; }
+        mjx-container svg { stroke: black !important; fill: black !important; }
+      </style>
+    `;
+
+    const renderPageHTML = (item, idx, total, showAnswer = false) => {
+      const answerBlock = item.answers.map(a => `
+        <div class="answer-line">
+          <strong>${a.letter}.</strong>
+          <span style="${showAnswer && a.isCorrect ? 'font-weight:bold;' : ''}">${a.textHTML}</span>
+        </div>`).join('');
+      const explanationBlock = showAnswer ? `<div style="margin-top:12px;"><b><i>Explanation:</i></b><br>${item.explanationHTML}</div>` : '';
+      const sanitizedQ = item.questionHTML.replace(/<mjx-assistive-mml[^>]*>[\s\S]*?<\/mjx-assistive-mml>/g, '');
+      const sanitizedE = explanationBlock.replace(/<mjx-assistive-mml[^>]*>[\s\S]*?<\/mjx-assistive-mml>/g, '');
+      return `
+        <div class="question">
+          <div style="font-weight:bold; font-size:17px; margin-bottom:4px;">Question ${idx + 1} of ${total}</div>
+          <hr style="margin-bottom:12px;">
+          <div style="font-weight:normal;">${sanitizedQ}</div>
+          <div style="margin-top:12px;">${answerBlock}</div>
+          ${sanitizedE}
+        </div>
+      `;
+    };
+
+    const html = (showAnswer = false) => `
+      <html>
+        <head>
+          <title>${showAnswer ? 'Answers' : 'Questions'}</title>
+          <script>window.MathJax = { startup: { typeset: false } }; window.onload = () => setTimeout(() => window.print(), 800);</script>
+          ${css}
+        </head>
+        <body>
+          ${allData.map((item, i) => renderPageHTML(item, i, allData.length, showAnswer)).join('')}
+        </body>
+      </html>`;
+
+    const qTab = window.open('', '_blank');
+    qTab.document.write(html(false));
+    qTab.document.close();
+
+    const aTab = window.open('', '_blank');
+    aTab.document.write(html(true));
+    aTab.document.close();
+  };
+
+  window.addEventListener('message', e => {
+    if (e.data && e.data.__quizData) {
+      allData = allData.concat(e.data.__quizData);
+      receivedCount++;
+      if (receivedCount === pendingUrls.length) renderMergedQuiz();
+    }
+  });
+
+  ui.querySelector('#start-process').onclick = async () => {
+    ui.remove();
+    const current = await extractQuizData();
+    allData = allData.concat(current);
+    const inputs = Array.from(urlListDiv.querySelectorAll('input'));
+    pendingUrls = inputs.map(i => i.value.trim()).filter(v => v);
+    if (pendingUrls.length === 0) {
+      renderMergedQuiz();
+    } else {
+      for (const url of pendingUrls) {
+        window.open(url + (url.includes('?') ? '&' : '?') + 'autostart=1');
+      }
+    }
+  };
+})();
