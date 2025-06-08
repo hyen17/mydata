@@ -96,7 +96,7 @@
     return `
       <div class="question">
         <div style="font-weight:bold; font-size:17px; margin-bottom:4px;">
-          QUESTION ${idx + 1} OF ${total}
+          QUESTION ${idx + 1} of ${total}
         </div>
         <hr style="margin-bottom:12px;">
         <div style="font-weight:normal;">
