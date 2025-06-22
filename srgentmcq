@@ -1,0 +1,256 @@
+(async () => {
+  const savedData = [];
+  let lastQuestionHtml = "";
+
+  const codeMap = {
+    "1110": "IS Audit Standards, Guidelines, and Codes of Ethics",
+    "1120": "Audit Business Processes",
+    "1130": "Types of Controls",
+    "1140": "Risk‐Based Audit Planning",
+    "1150": "Types of Audits and Assessments",
+    "1210": "Audit Project Management",
+    "1220": "Sampling Methodology",
+    "1230": "Audit Evidence Collection Techniques",
+    "1240": "Data Analytics",
+    "1250": "Reporting and Communication Techniques",
+    "1260": "Quality Assurance and Improvement of the Audit Process",
+    "2110": "IT Governance and IT Strategy",
+    "2120": "IT‐Related Frameworks",
+    "2130": "IT Standards, Policies, and Procedures",
+    "2140": "Organizational Structure",
+    "2150": "Enterprise Architecture",
+    "2160": "Enterprise Risk Management",
+    "2170": "Maturity Models",
+    "2180": "Laws, Regulations, and Industry Standards Affecting the Organization",
+    "2210": "IT Resource Management",
+    "2220": "IT Service Provider Acquisition and Management",
+    "2230": "IT Performance Monitoring and Reporting",
+    "2240": "Quality Assurance and Quality Management of IT",
+    "3110": "Project Governance and Management",
+    "3120": "Business Case and Feasibility Analysis",
+    "3130": "System Development Methodologies",
+    "3140": "Control Identification and Design",
+    "3210": "Testing Methodologies",
+    "3220": "Configuration and Release Management",
+    "3230": "System Migration, Infrastructure Deployment, and Data Conversion",
+    "3240": "Post‐implementation Review",
+    "4110": "Common Technology Components",
+    "4120": "IT Asset Management",
+    "4130": "Job Scheduling and Production Process Automation",
+    "4140": "System Interfaces",
+    "4150": "End‐User Computing",
+    "4160": "Data Governance",
+    "4170": "Systems Performance Management",
+    "4180": "Problem and Incident Management",
+    "4185": "Change, Configuration, Release, and Patch Management",
+    "4190": "IT Service‐Level Management",
+    "4195": "Database Management",
+    "4210": "Business Impact Analysis",
+    "4220": "System Resiliency",
+    "4230": "Data Backup, Storage, and Restoration",
+    "4240": "Business Continuity Plan",
+    "4250": "Disaster Recovery Plans",
+    "5110": "Information Asset Security Frameworks, Standards, and Guidelines",
+    "5120": "Privacy Principles",
+    "5130": "Physical Access and Environmental Controls",
+    "5140": "Identity and Access Management",
+    "5150": "Network and Endpoint Security",
+    "5160": "Data Classification",
+    "5170": "Data Encryption and Encryption‐Related Techniques",
+    "5180": "Public Key Infrastructure (PKI)",
+    "5185": "Web‐Based Communication Technologies",
+    "5190": "Virtualized Environments",
+    "5195": "Mobile, Wireless, and Internet‐of‐Things (IoT) Devices",
+    "5210": "Security Awareness Training and Programs",
+    "5220": "Information System Attack Methods and Techniques",
+    "5230": "Security Testing Tools and Techniques",
+    "5240": "Security Monitoring Tools and Techniques",
+    "5250": "Incident Response Management",
+    "5260": "Evidence Collection and Forensics"
+  };
+
+  const questionWindow = window.open(window.location.href, "questionTab");
+  if (!questionWindow) {
+    alert("Pop-up diblokir. Harap izinkan pop-up untuk situs ini.");
+    return;
+  }
+  alert("Tab B dibuka. Silakan klik NEXT di Tab B untuk berpindah soal. Tab A akan menyimpan otomatis.");
+
+  const pollInterval = 3000;
+  const poller = setInterval(() => {
+    if (questionWindow.closed) {
+      alert("Tab B ditutup. Simpan jika sudah selesai.");
+      clearInterval(poller);
+      return;
+    }
+
+    try {
+      const doc = questionWindow.document;
+      const questionDiv = doc.querySelector(".question-text");
+      const choicesDiv = doc.querySelector(".answer-choices");
+      const explanationDiv = doc.querySelector("#explanationPanel .question-explanation");
+
+      if (!questionDiv || !choicesDiv) return;
+      const currentHtml = questionDiv.innerHTML.trim();
+      if (currentHtml === lastQuestionHtml) return;
+
+      const choices = Array.from(choicesDiv.querySelectorAll("label.session-radio")).map(label => {
+        const html = label.outerHTML;
+        const isCorrect = label.classList.contains("session-radio-proper");
+        return { html, isCorrect };
+      });
+
+      const explanation = explanationDiv ? [explanationDiv.innerHTML.trim()] : [];
+
+      const categoryHeaders = Array.from(doc.querySelectorAll(".question-explanation-category")).map(e => e.textContent.trim());
+      const refIndex = categoryHeaders.lastIndexOf("Reference");
+      let references = [];
+
+      if (refIndex !== -1) {
+        const headers = Array.from(doc.querySelectorAll(".question-explanation-category"));
+        const refHeader = headers[refIndex];
+        const parentUl = refHeader.closest("ul");
+        let el = parentUl?.nextElementSibling;
+        while (el) {
+          if (el.matches("ul")) break;
+          if (el.matches("a.btnInfoDialog.question-explanation-link")) {
+            const text = el.textContent.trim(); // contoh: 1260.02
+            const code = text.match(/^\d{4}/)?.[0]; // 1260
+            const mapped = code && codeMap[code] ? `${text} ${codeMap[code]}` : text;
+            references.push(mapped);
+          }
+          el = el.nextElementSibling;
+        }
+      }
+
+      savedData.push({
+        questionHtml: currentHtml,
+        choices,
+        feedbacks: explanation,
+        references
+      });
+
+      lastQuestionHtml = currentHtml;
+      console.log(`✔ Saved Question ${savedData.length}`);
+    } catch (e) {
+      console.warn("Gagal membaca Tab B:", e);
+    }
+  }, pollInterval);
+
+  const buildPrintableHTML = (showAnswers = false) => {
+    const css = `
+      <style>
+        @page:first {
+          margin-top: 0;
+        }
+        body {
+          font-family: Arial, sans-serif;
+          font-size: 16px;
+          color: #000;
+          line-height: 1.6;
+          padding: 30px;
+          margin-top: 0 !important;
+        }
+        .question-block {
+          page-break-inside: avoid;
+          margin-bottom: 30px;
+        }
+        .question-title {
+          font-size: 18px;
+          font-weight: bold;
+          margin-bottom: 6px;
+        }
+        .question-body {
+          margin-bottom: 12px;
+        }
+        label.session-radio {
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
+          margin-bottom: 8px;
+        }
+        label.session-radio input[type="radio"] {
+          margin-top: 5px;
+        }
+        label.session-radio p {
+          margin: 0;
+        }
+        .question-mode .session-radio-proper {
+          font-weight: normal !important;
+        }
+        .answer-mode .session-radio-proper {
+          font-weight: bold !important;
+        }
+        .explanation {
+          margin-top: 10px;
+          background: #f3f3f3;
+          padding: 10px;
+          border-left: 4px solid #999;
+        }
+        .reference {
+          margin-top: 0;
+        }
+        hr {
+          margin: 12px 0;
+        }
+      </style>
+    `;
+
+    const content = savedData.map((q, i) => {
+      const modeClass = showAnswers ? "answer-mode" : "question-mode";
+      const choicesHtml = q.choices.map(c => `<div class="${modeClass}">${c.html}</div>`).join("");
+      const explanationHtml = showAnswers && q.feedbacks?.length ? `
+        <div class="explanation">
+          <b><i>Explanation:</i></b><br>${q.feedbacks.join("<br><br>")}
+          ${q.references?.length ? `<div class="reference"><b><i>Reference:</i></b><br>${q.references.join("<br>")}</div>` : ""}
+        </div>` : "";
+
+      return `
+        <div class="question-block">
+          <div class="question-title">Question ${i + 1} of ${savedData.length}</div>
+          <hr/>
+          <div class="question-body">${q.questionHtml}</div>
+          ${choicesHtml}
+          ${explanationHtml}
+        </div>
+      `;
+    }).join("");
+
+    return `
+      <html>
+        <head>
+          <title>${showAnswers ? "Answers" : "Questions"}</title>
+          ${css}
+          <script>window.onload = () => setTimeout(() => window.print(), 600);</script>
+        </head>
+        <body>${content}</body>
+      </html>
+    `;
+  };
+
+  const renderPrintableHTML = () => {
+    const qWin = window.open("", "_blank");
+    qWin.document.write(buildPrintableHTML(false));
+    qWin.document.close();
+
+    const aWin = window.open("", "_blank");
+    aWin.document.write(buildPrintableHTML(true));
+    aWin.document.close();
+
+    savedData.length = 0;
+    alert("✅ Tab PDF berhasil dibuat. Silakan tekan Ctrl+P untuk menyimpan.");
+  };
+
+  const panel = document.createElement("div");
+  panel.style = `
+    position: fixed; top: 20px; right: 20px; z-index: 9999;
+    background: #fff; padding: 12px; border: 1px solid #ccc;
+    box-shadow: 0 0 6px rgba(0,0,0,0.2); font-family: sans-serif;
+  `;
+  panel.innerHTML = `
+    <strong>PDF Tool v2.8.2 (Fix full reference code)</strong><br/><br/>
+    <button id="generateHTMLPDF">Generate Printable HTML</button>
+  `;
+  document.body.appendChild(panel);
+  document.getElementById("generateHTMLPDF").onclick = renderPrintableHTML;
+})();
