@@ -47,16 +47,20 @@ javascript:(async () => {
 
     labels.forEach((label, idx) => {
       const isTable = label.querySelector('table');
-      const isParagraph = label.querySelector('p');
+      const pTag = label.querySelector('p');
+      const hasBr = pTag && pTag.querySelector('br');
       let wrapped;
 
       if (isTable) {
         wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content">${label.innerHTML.trim()}</div></div>`;
-      } else if (isParagraph) {
-        const text = label.querySelector('p')?.innerText.trim() || '';
-        wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content"><p>${text}</p></div></div>`;
+      } else if (pTag && hasBr) {
+        const htmlWithBr = pTag.innerHTML.trim();
+        wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content"><p>${htmlWithBr}</p></div></div>`;
+      } else if (pTag) {
+        const plainText = pTag.innerText.trim();
+        wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content"><p>${plainText}</p></div></div>`;
       } else {
-        const rawText = label.innerHTML.trim();
+        const rawText = label.innerText.trim();
         wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content"><p>${rawText}</p></div></div>`;
       }
 
