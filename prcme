@@ -1,132 +1,201 @@
 javascript:(async () => {
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const totalQuestions = document.querySelectorAll('#questionsSelect option').length;
-  const questionSelect = document.querySelector('#questionsSelect');
-  const delayAfterChange = 5000; // tunggu setelah pindah soal agar explanation siap
-  const questions = [];
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    // Mengubah selektor untuk menemukan elemen select yang benar berdasarkan atribut 'name'
+    const questionSelect = document.querySelector('select[name="qId"]');
 
-  const extractQuestionData = () => {
-    const questionText = document.querySelector('#description')?.innerHTML.trim() || '';
-    const answerBody = document.querySelector('#answerBody');
-    const labels = Array.from(answerBody?.querySelectorAll('label') || []);
-    const choices = [];
-    const letters = ['A', 'B', 'C', 'D', 'E', 'F'];
+    // Tambahkan pemeriksaan jika questionSelect tidak ditemukan
+    if (!questionSelect) {
+        alert('Tidak dapat menemukan elemen pemilihan pertanyaan (select). Pastikan elemen tersebut ada di halaman.');
+        return;
+    }
 
-    labels.forEach((label, idx) => {
-      const content = label.innerHTML.trim();
-      const isTable = label.querySelector('table');
-      let wrapped;
+    const totalQuestions = questionSelect.querySelectorAll('option').length;
+    // const delayBeforeClickAnswer = 2000; // Tidak lagi digunakan
+    // const delayAfterClick = 3000;      // Tidak lagi digunakan
+    // const delayAfterChange = 3000;       // Delay setelah mengganti pertanyaan, sebelum delay 5 detik untuk memastikan semua termuat (Digabung)
+    // const delayBeforeSave = 5000;        // Delay 5 detik untuk memastikan semua konten termuat sebelum ekstraksi (Digabung)
+    const delayAfterContentLoad = 4000;  // Penundaan total 4 detik untuk memastikan semua konten termuat setelah pergantian pertanyaan
+    const questions = [];
 
-      if (isTable) {
-        wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content">${content}</div></div>`;
-      } else {
-        const text = label.querySelector('p')?.innerText.trim() || '';
-        wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content"><p>${text}</p></div></div>`;
-      }
+    // Fungsi clickFirstChoice tidak lagi diperlukan karena tidak ada klik jawaban
+    // const clickFirstChoice = () => {
+    //     const firstRadio = document.querySelector('#answerBody input[type=radio]');
+    //     if (firstRadio) firstRadio.click();
+    // };
 
-      choices.push(wrapped);
-    });
+    // Fungsi waitForFeedback tidak lagi diperlukan karena diasumsikan penjelasan sudah ada dan ada delayBeforeSave yang lebih lama
+    // const waitForFeedback = async () => {
+    //     for (let i = 0; i < 10; i++) {
+    //         const feedback = document.querySelector('.feedback-container');
+    //         if (feedback && feedback.innerText.trim()) break;
+    //         await sleep(300);
+    //     }
+    // };
 
-    const correctIndex = [...document.querySelectorAll('.choice-order')].findIndex(span =>
-      span.classList.contains('correct')
-    );
-
-    const feedbackDivs = Array.from(document.querySelectorAll('.feedback-element, .last-feedback-element'));
-    const explanationHTML = feedbackDivs.map(div => div.outerHTML).join('');
-
-    return {
-      questionText,
-      choices,
-      correctIndex,
-      explanation: explanationHTML
+    const parseRange = (input, max) => {
+        if (input.toLowerCase() === 'all') return Array.from({ length: max }, (_, i) => i);
+        const parts = input.split(',').flatMap(part => {
+            if (part.includes('-')) {
+                const [start, end] = part.split('-').map(n => parseInt(n.trim(), 10) - 1);
+                return Array.from({ length: end - start + 1 }, (_, i) => start + i);
+            } else {
+                const idx = parseInt(part.trim(), 10) - 1;
+                return isNaN(idx) ? [] : [idx];
+            }
+        });
+        return parts.filter(i => i >= 0 && i < max);
     };
-  };
 
-  const generateHTML = (withAnswers = false) => {
-    const doc = document.implementation.createHTMLDocument();
-    const style = document.createElement('style');
-    style.textContent = `
-      body { font-family: Arial, sans-serif; font-size: 17px; margin: 40px; }
-      .question-block { page-break-inside: avoid; margin-bottom: 50px; }
-      .question-title { font-weight: bold; margin-bottom: 10px; }
-      .question-text { margin-bottom: 10px; }
-      .choice { display: flex; margin: 4px 0; }
-      .choice-letter { width: 30px; flex-shrink: 0; }
-      .choice-content p { margin: 0; }
-      .choice.correct { font-weight: bold; }
-      .explanation { margin-top: 15px; }
-      .explanation .feedback-element,
-      .explanation .last-feedback-element {
-        margin: 4px 0 !important;
-      }
-      .explanation p {
-        margin: 0 !important;
-      }
-      .explanation br { display: block; margin-top: 5px; }
-      td, tr { height: auto !important; }
-      table p { margin: 0 !important; }
-      .hr-line { border: 0; border-top: 2px solid #000; margin-top: 5px; margin-bottom: 15px; }
-    `;
-    doc.head.appendChild(style);
+    const userInput = prompt(`Nomor pertanyaan mana yang akan disimpan? Contoh:\nall\n1-10\n1,3,5-7`);
+    if (!userInput) {
+        alert('Pembatalan: Tidak ada pertanyaan yang akan disimpan.');
+        return; // Hentikan eksekusi jika pengguna membatalkan prompt
+    }
+    const selectedIndexes = parseRange(userInput, totalQuestions);
 
-    questions.forEach((q, index) => {
-      const block = doc.createElement('div');
-      block.className = 'question-block';
+    // Tambahkan pemeriksaan ini untuk memastikan ada pertanyaan yang dipilih
+    if (selectedIndexes.length === 0) {
+        alert('Tidak ada pertanyaan yang valid dipilih. Pastikan input Anda benar. Contoh: all, 1-10, 1,3,5-7');
+        return; // Hentikan eksekusi jika tidak ada pertanyaan yang valid dipilih
+    }
 
-      const title = document.createElement('div');
-      title.className = 'question-title';
-      title.textContent = `Question ${index + 1} of ${questions.length}`;
-      block.appendChild(title);
+    const extractQuestionData = () => {
+        const questionText = document.querySelector('#description')?.innerHTML.trim() || '';
+        const answerBody = document.querySelector('#answerBody');
+        const labels = Array.from(answerBody?.querySelectorAll('label') || []);
+        const choices = [];
+        const letters = ['A', 'B', 'C', 'D', 'E', 'F'];
 
-      const line = document.createElement('hr');
-      line.className = 'hr-line';
-      block.appendChild(line);
+        labels.forEach((label, idx) => {
+            const isTable = label.querySelector('table');
+            const pTag = label.querySelector('p');
+            const hasBr = pTag && pTag.querySelector('br');
+            let wrapped;
 
-      const qtext = document.createElement('div');
-      qtext.className = 'question-text';
-      qtext.innerHTML = q.questionText;
-      block.appendChild(qtext);
+            if (isTable) {
+                wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content">${label.innerHTML.trim()}</div></div>`;
+            } else if (pTag && hasBr) {
+                const htmlWithBr = pTag.innerHTML.trim();
+                wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content"><p>${htmlWithBr}</p></div></div>`;
+            } else if (pTag) {
+                const plainText = pTag.innerText.trim();
+                wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content"><p>${plainText}</p></div></div>`;
+            } else {
+                const rawText = label.innerText.trim();
+                wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content"><p>${rawText}</p></div></div>`;
+            }
 
-      q.choices.forEach((choiceHTML, idx) => {
-        const wrapper = document.createElement('div');
-        wrapper.innerHTML = choiceHTML.trim();
-        const choiceDiv = wrapper.firstChild;
-        if (withAnswers && idx === q.correctIndex) {
-          choiceDiv.classList.add('correct');
-        }
-        block.appendChild(choiceDiv);
-      });
+            choices.push(wrapped);
+        });
 
-      if (withAnswers && q.explanation) {
-        const exp = document.createElement('div');
-        exp.className = 'explanation';
-        exp.innerHTML = `<b><i>Explanation:</i></b><br>${q.explanation}`;
-        block.appendChild(exp);
-      }
+        const correctIndex = [...document.querySelectorAll('.choice-order')].findIndex(span =>
+            span.classList.contains('correct')
+        );
 
-      doc.body.appendChild(block);
-    });
+        const feedbackDivs = Array.from(document.querySelectorAll('.feedback-element, .last-feedback-element'));
+        const explanationHTML = feedbackDivs.map(div => div.outerHTML).join('<br>');
 
-    return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
-  };
+        return {
+            questionText,
+            choices,
+            correctIndex,
+            explanation: explanationHTML
+        };
+    };
 
-  const saveHTMLAsTab = (html, name) => {
-    const win = window.open();
-    win.document.open();
-    win.document.write(html);
-    win.document.close();
-    win.document.title = name;
-  };
+    const generateHTML = (withAnswers = false) => {
+        const doc = document.implementation.createHTMLDocument();
+        const style = document.createElement('style');
+        style.textContent = `
+            body { font-family: Arial, sans-serif; font-size: 17px; margin: 40px; }
+            .question-block { page-break-inside: avoid; margin-bottom: 50px; }
+            .question-title { font-weight: bold; margin-bottom: 10px; }
+            .question-text { margin-bottom: 10px; }
+            .choice { display: flex; margin: 4px 0; }
+            .choice-letter { width: 30px; flex-shrink: 0; }
+            .choice-content p { margin: 0; }
+            .choice.correct { font-weight: bold; }
+            .explanation { margin-top: 15px; }
+            .explanation .feedback-element,
+            .explanation .last-feedback-element {
+                margin: 4px 0 !important;
+            }
+            .explanation p {
+                margin: 0 !important;
+            }
+            .explanation br { display: block; margin-top: 5px; }
+            td, tr { height: auto !important; }
+            table p { margin: 0 !important; }
+            .hr-line { border: 0; border-top: 2px solid #000; margin-top: 5px; margin-bottom: 15px; }
+        `;
+        doc.head.appendChild(style);
 
-  for (let i = 0; i < totalQuestions; i++) {
-    questionSelect.selectedIndex = i;
-    questionSelect.dispatchEvent(new Event('change', { bubbles: true }));
-    await sleep(delayAfterChange); // ❗ tunggu sampai explanation sudah pasti terload
+        questions.forEach((q, index) => {
+            const block = doc.createElement('div');
+            block.className = 'question-block';
 
-    const data = extractQuestionData();
-    questions.push(data);
-  }
+            const title = document.createElement('div');
+            title.className = 'question-title';
+            title.textContent = `Question ${selectedIndexes[index] + 1} of ${totalQuestions}`;
+            block.appendChild(title);
 
-  saveHTMLAsTab(generateHTML(false), 'Questions');
-  saveHTMLAsTab(generateHTML(true), 'Answers');
+            const line = document.createElement('hr');
+            line.className = 'hr-line';
+            block.appendChild(line);
+
+            const qtext = document.createElement('div');
+            qtext.className = 'question-text';
+            qtext.innerHTML = q.questionText;
+            block.appendChild(qtext);
+
+            q.choices.forEach((choiceHTML, idx) => {
+                const wrapper = document.createElement('div');
+                wrapper.innerHTML = choiceHTML.trim();
+                const choiceDiv = wrapper.firstChild;
+                if (withAnswers && idx === q.correctIndex) {
+                    choiceDiv.classList.add('correct');
+                }
+                block.appendChild(choiceDiv);
+            });
+
+            if (withAnswers && q.explanation) {
+                const exp = document.createElement('div');
+                exp.className = 'explanation';
+                exp.innerHTML = `<b><i>Explanation:</i></b><br>${q.explanation}`;
+                block.appendChild(exp);
+            }
+
+            doc.body.appendChild(block);
+        });
+
+        return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
+    };
+
+    const saveHTMLAsTab = (html, name) => {
+        const win = window.open();
+        win.document.open();
+        win.document.write(html);
+        win.document.close();
+        win.document.title = name;
+    };
+
+    for (let i = 0; i < totalQuestions; i++) {
+        if (!selectedIndexes.includes(i)) continue;
+
+        questionSelect.selectedIndex = i;
+        questionSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        // Hanya satu penundaan 4 detik untuk memastikan konten dimuat sepenuhnya
+        await sleep(delayAfterContentLoad);
+
+        const data = extractQuestionData();
+        questions.push(data);
+    }
+
+    // Hanya panggil saveHTMLAsTab jika ada pertanyaan yang diekstraksi
+    if (questions.length > 0) {
+        saveHTMLAsTab(generateHTML(false), 'Questions');
+        saveHTMLAsTab(generateHTML(true), 'Answers');
+    } else {
+        alert('Tidak ada pertanyaan yang diekstraksi. Pastikan ada konten di halaman dan input Anda valid.');
+    }
 })();
