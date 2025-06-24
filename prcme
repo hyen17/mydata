@@ -1,0 +1,132 @@
+javascript:(async () => {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const totalQuestions = document.querySelectorAll('#questionsSelect option').length;
+  const questionSelect = document.querySelector('#questionsSelect');
+  const delayAfterChange = 5000; // tunggu setelah pindah soal agar explanation siap
+  const questions = [];
+
+  const extractQuestionData = () => {
+    const questionText = document.querySelector('#description')?.innerHTML.trim() || '';
+    const answerBody = document.querySelector('#answerBody');
+    const labels = Array.from(answerBody?.querySelectorAll('label') || []);
+    const choices = [];
+    const letters = ['A', 'B', 'C', 'D', 'E', 'F'];
+
+    labels.forEach((label, idx) => {
+      const content = label.innerHTML.trim();
+      const isTable = label.querySelector('table');
+      let wrapped;
+
+      if (isTable) {
+        wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content">${content}</div></div>`;
+      } else {
+        const text = label.querySelector('p')?.innerText.trim() || '';
+        wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content"><p>${text}</p></div></div>`;
+      }
+
+      choices.push(wrapped);
+    });
+
+    const correctIndex = [...document.querySelectorAll('.choice-order')].findIndex(span =>
+      span.classList.contains('correct')
+    );
+
+    const feedbackDivs = Array.from(document.querySelectorAll('.feedback-element, .last-feedback-element'));
+    const explanationHTML = feedbackDivs.map(div => div.outerHTML).join('');
+
+    return {
+      questionText,
+      choices,
+      correctIndex,
+      explanation: explanationHTML
+    };
+  };
+
+  const generateHTML = (withAnswers = false) => {
+    const doc = document.implementation.createHTMLDocument();
+    const style = document.createElement('style');
+    style.textContent = `
+      body { font-family: Arial, sans-serif; font-size: 17px; margin: 40px; }
+      .question-block { page-break-inside: avoid; margin-bottom: 50px; }
+      .question-title { font-weight: bold; margin-bottom: 10px; }
+      .question-text { margin-bottom: 10px; }
+      .choice { display: flex; margin: 4px 0; }
+      .choice-letter { width: 30px; flex-shrink: 0; }
+      .choice-content p { margin: 0; }
+      .choice.correct { font-weight: bold; }
+      .explanation { margin-top: 15px; }
+      .explanation .feedback-element,
+      .explanation .last-feedback-element {
+        margin: 4px 0 !important;
+      }
+      .explanation p {
+        margin: 0 !important;
+      }
+      .explanation br { display: block; margin-top: 5px; }
+      td, tr { height: auto !important; }
+      table p { margin: 0 !important; }
+      .hr-line { border: 0; border-top: 2px solid #000; margin-top: 5px; margin-bottom: 15px; }
+    `;
+    doc.head.appendChild(style);
+
+    questions.forEach((q, index) => {
+      const block = doc.createElement('div');
+      block.className = 'question-block';
+
+      const title = document.createElement('div');
+      title.className = 'question-title';
+      title.textContent = `Question ${index + 1} of ${questions.length}`;
+      block.appendChild(title);
+
+      const line = document.createElement('hr');
+      line.className = 'hr-line';
+      block.appendChild(line);
+
+      const qtext = document.createElement('div');
+      qtext.className = 'question-text';
+      qtext.innerHTML = q.questionText;
+      block.appendChild(qtext);
+
+      q.choices.forEach((choiceHTML, idx) => {
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = choiceHTML.trim();
+        const choiceDiv = wrapper.firstChild;
+        if (withAnswers && idx === q.correctIndex) {
+          choiceDiv.classList.add('correct');
+        }
+        block.appendChild(choiceDiv);
+      });
+
+      if (withAnswers && q.explanation) {
+        const exp = document.createElement('div');
+        exp.className = 'explanation';
+        exp.innerHTML = `<b><i>Explanation:</i></b><br>${q.explanation}`;
+        block.appendChild(exp);
+      }
+
+      doc.body.appendChild(block);
+    });
+
+    return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
+  };
+
+  const saveHTMLAsTab = (html, name) => {
+    const win = window.open();
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    win.document.title = name;
+  };
+
+  for (let i = 0; i < totalQuestions; i++) {
+    questionSelect.selectedIndex = i;
+    questionSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    await sleep(delayAfterChange); // ❗ tunggu sampai explanation sudah pasti terload
+
+    const data = extractQuestionData();
+    questions.push(data);
+  }
+
+  saveHTMLAsTab(generateHTML(false), 'Questions');
+  saveHTMLAsTab(generateHTML(true), 'Answers');
+})();
