@@ -45,7 +45,8 @@ javascript:(async () => {
       if (isTable) {
         wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content">${content}</div></div>`;
       } else {
-        const text = label.querySelector('p')?.innerText.trim() || '';
+        const textEl = label.querySelector('p');
+        const text = textEl ? textEl.innerText.trim() : label.innerText.trim();
         wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content"><p>${text}</p></div></div>`;
       }
 
