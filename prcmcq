@@ -7,16 +7,6 @@ javascript:(async () => {
   const delayAfterChange = 3000;
   const questions = [];
 
-  const range = prompt(`Enter question range (e.g. 1-5) or "all":`, "all");
-  let from = 0, to = totalQuestions - 1;
-  if (range !== null && range.trim().toLowerCase() !== "all") {
-    const match = range.trim().match(/^(\d+)-(\d+)$/);
-    if (match) {
-      from = Math.max(0, parseInt(match[1], 10) - 1);
-      to = Math.min(totalQuestions - 1, parseInt(match[2], 10) - 1);
-    }
-  }
-
   const clickFirstChoice = () => {
     const firstRadio = document.querySelector('#answerBody input[type=radio]');
     if (firstRadio) firstRadio.click();
@@ -30,6 +20,24 @@ javascript:(async () => {
     }
   };
 
+  const parseRange = (input, max) => {
+    if (input.toLowerCase() === 'all') return Array.from({ length: max }, (_, i) => i);
+    const parts = input.split(',').flatMap(part => {
+      if (part.includes('-')) {
+        const [start, end] = part.split('-').map(n => parseInt(n.trim(), 10) - 1);
+        return Array.from({ length: end - start + 1 }, (_, i) => start + i);
+      } else {
+        const idx = parseInt(part.trim(), 10) - 1;
+        return isNaN(idx) ? [] : [idx];
+      }
+    });
+    return parts.filter(i => i >= 0 && i < max);
+  };
+
+  const userInput = prompt(`Which question numbers to save? Example:\nall\n1-10\n1,3,5-7`);
+  if (!userInput) return;
+  const selectedIndexes = parseRange(userInput, totalQuestions);
+
   const extractQuestionData = () => {
     const questionText = document.querySelector('#description')?.innerHTML.trim() || '';
     const answerBody = document.querySelector('#answerBody');
@@ -38,16 +46,18 @@ javascript:(async () => {
     const letters = ['A', 'B', 'C', 'D', 'E', 'F'];
 
     labels.forEach((label, idx) => {
-      const content = label.innerHTML.trim();
       const isTable = label.querySelector('table');
+      const isParagraph = label.querySelector('p');
       let wrapped;
 
       if (isTable) {
-        wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content">${content}</div></div>`;
-      } else {
-        const textEl = label.querySelector('p');
-        const text = textEl ? textEl.innerText.trim() : label.innerText.trim();
+        wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content">${label.innerHTML.trim()}</div></div>`;
+      } else if (isParagraph) {
+        const text = label.querySelector('p')?.innerText.trim() || '';
         wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content"><p>${text}</p></div></div>`;
+      } else {
+        const rawText = label.innerHTML.trim();
+        wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content"><p>${rawText}</p></div></div>`;
       }
 
       choices.push(wrapped);
@@ -101,7 +111,7 @@ javascript:(async () => {
 
       const title = document.createElement('div');
       title.className = 'question-title';
-      title.textContent = `Question ${from + index + 1} of ${totalQuestions}`;
+      title.textContent = `Question ${selectedIndexes[index] + 1} of ${totalQuestions}`;
       block.appendChild(title);
 
       const line = document.createElement('hr');
@@ -144,7 +154,9 @@ javascript:(async () => {
     win.document.title = name;
   };
 
-  for (let i = from; i <= to; i++) {
+  for (let i = 0; i < totalQuestions; i++) {
+    if (!selectedIndexes.includes(i)) continue;
+
     questionSelect.selectedIndex = i;
     questionSelect.dispatchEvent(new Event('change', { bubbles: true }));
     await sleep(delayAfterChange);
