@@ -4,8 +4,18 @@ javascript:(async () => {
   const questionSelect = document.querySelector('#questionsSelect');
   const delayBeforeClickAnswer = 2000;
   const delayAfterClick = 3000;
-  const delayAfterChange = 3000; // 🔁 FINAL VERSION CHANGE
+  const delayAfterChange = 3000;
   const questions = [];
+
+  const range = prompt(`Enter question range (e.g. 1-5) or "all":`, "all");
+  let from = 0, to = totalQuestions - 1;
+  if (range !== null && range.trim().toLowerCase() !== "all") {
+    const match = range.trim().match(/^(\d+)-(\d+)$/);
+    if (match) {
+      from = Math.max(0, parseInt(match[1], 10) - 1);
+      to = Math.min(totalQuestions - 1, parseInt(match[2], 10) - 1);
+    }
+  }
 
   const clickFirstChoice = () => {
     const firstRadio = document.querySelector('#answerBody input[type=radio]');
@@ -47,7 +57,7 @@ javascript:(async () => {
     );
 
     const feedbackDivs = Array.from(document.querySelectorAll('.feedback-element, .last-feedback-element'));
-    const explanationHTML = feedbackDivs.map(div => div.outerHTML).join('');
+    const explanationHTML = feedbackDivs.map(div => div.outerHTML).join('<br>');
 
     return {
       questionText,
@@ -90,7 +100,7 @@ javascript:(async () => {
 
       const title = document.createElement('div');
       title.className = 'question-title';
-      title.textContent = `Question ${index + 1} of ${questions.length}`;
+      title.textContent = `Question ${from + index + 1} of ${totalQuestions}`;
       block.appendChild(title);
 
       const line = document.createElement('hr');
@@ -133,15 +143,15 @@ javascript:(async () => {
     win.document.title = name;
   };
 
-  for (let i = 0; i < totalQuestions; i++) {
+  for (let i = from; i <= to; i++) {
     questionSelect.selectedIndex = i;
     questionSelect.dispatchEvent(new Event('change', { bubbles: true }));
-    await sleep(delayAfterChange); // 🔁 WAIT AFTER CHANGING QUESTION
+    await sleep(delayAfterChange);
 
-    await sleep(delayBeforeClickAnswer); // ⏳ WAIT BEFORE CLICKING ANSWER
-    clickFirstChoice();                   // ✅ AUTO-CLICK FIRST OPTION
-    await sleep(delayAfterClick);        // ⏳ WAIT FOR FEEDBACK TO LOAD
-    await waitForFeedback();             // ⏳ POLL UNTIL FEEDBACK IS PRESENT
+    await sleep(delayBeforeClickAnswer);
+    clickFirstChoice();
+    await sleep(delayAfterClick);
+    await waitForFeedback();
 
     const data = extractQuestionData();
     questions.push(data);
