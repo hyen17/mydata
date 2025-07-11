@@ -1,175 +1,264 @@
-javascript:(async () => {
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const totalQuestions = document.querySelectorAll('#questionsSelect option').length;
-  const questionSelect = document.querySelector('#questionsSelect');
-  const delayBeforeClickAnswer = 2000;
-  const delayAfterClick = 3000;
-  const delayAfterChange = 3000;
-  const questions = [];
+(function() {
+    // Variabel untuk state kontrol
+    let isAutoNextRunning = false;
+    let autoNextInterval;
+    let failedAttempts = 0;
+    const MAX_FAILED_ATTEMPTS = 2;
+    const responseMap = new Map();
+    let isDragging = false;
+    let offsetX, offsetY;
 
-  const clickFirstChoice = () => {
-    const firstRadio = document.querySelector('#answerBody input[type=radio]');
-    if (firstRadio) firstRadio.click();
-  };
+    // Fungsi untuk membuat UI yang bisa digeser
+    function createDraggableUI() {
+        // Hapus UI lama jika ada
+        const existingUI = document.getElementById('quizHelperUI');
+        if (existingUI) existingUI.remove();
 
-  const waitForFeedback = async () => {
-    for (let i = 0; i < 10; i++) {
-      const feedback = document.querySelector('.feedback-container');
-      if (feedback && feedback.innerText.trim()) break;
-      await sleep(300);
-    }
-  };
+        const container = document.createElement('div');
+        container.id = 'quizHelperUI';
+        container.style.position = 'fixed';
+        container.style.top = '20px';
+        container.style.right = '20px';
+        container.style.zIndex = '9999';
+        container.style.display = 'flex';
+        container.style.flexDirection = 'column';
+        container.style.gap = '10px';
+        container.style.backgroundColor = 'white';
+        container.style.padding = '15px';
+        container.style.borderRadius = '8px';
+        container.style.boxShadow = '0 2px 10px rgba(0,0,0,0.2)';
+        container.style.cursor = 'move';
+        container.style.userSelect = 'none';
 
-  const parseRange = (input, max) => {
-    if (input.toLowerCase() === 'all') return Array.from({ length: max }, (_, i) => i);
-    const parts = input.split(',').flatMap(part => {
-      if (part.includes('-')) {
-        const [start, end] = part.split('-').map(n => parseInt(n.trim(), 10) - 1);
-        return Array.from({ length: end - start + 1 }, (_, i) => start + i);
-      } else {
-        const idx = parseInt(part.trim(), 10) - 1;
-        return isNaN(idx) ? [] : [idx];
-      }
-    });
-    return parts.filter(i => i >= 0 && i < max);
-  };
+        // Header untuk drag area
+        const header = document.createElement('div');
+        header.textContent = 'Quiz Helper';
+        header.style.fontWeight = 'bold';
+        header.style.paddingBottom = '10px';
+        header.style.borderBottom = '1px solid #eee';
+        header.style.cursor = 'move';
 
-  const userInput = prompt(`Which question numbers to save? Example:\nall\n1-10\n1,3,5-7`);
-  if (!userInput) return;
-  const selectedIndexes = parseRange(userInput, totalQuestions);
+        // Tombol Next Auto
+        const nextButton = document.createElement('button');
+        nextButton.className = 'quiz-helper-btn';
+        nextButton.textContent = 'Next Auto';
+        nextButton.style.backgroundColor = '#4CAF50';
 
-  const extractQuestionData = () => {
-    const questionText = document.querySelector('#description')?.innerHTML.trim() || '';
-    const answerBody = document.querySelector('#answerBody');
-    const labels = Array.from(answerBody?.querySelectorAll('label') || []);
-    const choices = [];
-    const letters = ['A', 'B', 'C', 'D', 'E', 'F'];
+        // Tombol Download
+        const downloadButton = document.createElement('button');
+        downloadButton.className = 'quiz-helper-btn';
+        downloadButton.textContent = 'Download';
+        downloadButton.style.backgroundColor = '#2196F3';
 
-    labels.forEach((label, idx) => {
-      const isTable = label.querySelector('table');
-      const isParagraph = label.querySelector('p');
-      let wrapped;
+        // Status Monitor
+        const statusDisplay = document.createElement('div');
+        statusDisplay.id = 'statusDisplay';
+        statusDisplay.textContent = 'Ready';
+        statusDisplay.style.fontSize = '12px';
+        statusDisplay.style.textAlign = 'center';
+        statusDisplay.style.marginTop = '5px';
 
-      if (isTable) {
-        wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content">${label.innerHTML.trim()}</div></div>`;
-      } else if (isParagraph) {
-        const text = label.querySelector('p')?.innerText.trim() || '';
-        wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content"><p>${text}</p></div></div>`;
-      } else {
-        const rawText = label.innerHTML.trim();
-        wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content"><p>${rawText}</p></div></div>`;
-      }
+        container.appendChild(header);
+        container.appendChild(nextButton);
+        container.appendChild(downloadButton);
+        container.appendChild(statusDisplay);
+        document.body.appendChild(container);
 
-      choices.push(wrapped);
-    });
+        // Tambahkan style untuk tombol
+        const style = document.createElement('style');
+        style.textContent = `
+            .quiz-helper-btn {
+                padding: 8px 15px;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                transition: opacity 0.2s;
+            }
+            .quiz-helper-btn:hover {
+                opacity: 0.9;
+            }
+        `;
+        document.head.appendChild(style);
 
-    const correctIndex = [...document.querySelectorAll('.choice-order')].findIndex(span =>
-      span.classList.contains('correct')
-    );
-
-    const feedbackDivs = Array.from(document.querySelectorAll('.feedback-element, .last-feedback-element'));
-    const explanationHTML = feedbackDivs.map(div => div.outerHTML).join('<br>');
-
-    return {
-      questionText,
-      choices,
-      correctIndex,
-      explanation: explanationHTML
-    };
-  };
-
-  const generateHTML = (withAnswers = false) => {
-    const doc = document.implementation.createHTMLDocument();
-    const style = document.createElement('style');
-    style.textContent = `
-      body { font-family: Arial, sans-serif; font-size: 17px; margin: 40px; }
-      .question-block { page-break-inside: avoid; margin-bottom: 50px; }
-      .question-title { font-weight: bold; margin-bottom: 10px; }
-      .question-text { margin-bottom: 10px; }
-      .choice { display: flex; margin: 4px 0; }
-      .choice-letter { width: 30px; flex-shrink: 0; }
-      .choice-content p { margin: 0; }
-      .choice.correct { font-weight: bold; }
-      .explanation { margin-top: 15px; }
-      .explanation .feedback-element,
-      .explanation .last-feedback-element {
-        margin: 4px 0 !important;
-      }
-      .explanation p {
-        margin: 0 !important;
-      }
-      .explanation br { display: block; margin-top: 5px; }
-      td, tr { height: auto !important; }
-      table p { margin: 0 !important; }
-      .hr-line { border: 0; border-top: 2px solid #000; margin-top: 5px; margin-bottom: 15px; }
-    `;
-    doc.head.appendChild(style);
-
-    questions.forEach((q, index) => {
-      const block = doc.createElement('div');
-      block.className = 'question-block';
-
-      const title = document.createElement('div');
-      title.className = 'question-title';
-      title.textContent = `Question ${selectedIndexes[index] + 1} of ${totalQuestions}`;
-      block.appendChild(title);
-
-      const line = document.createElement('hr');
-      line.className = 'hr-line';
-      block.appendChild(line);
-
-      const qtext = document.createElement('div');
-      qtext.className = 'question-text';
-      qtext.innerHTML = q.questionText;
-      block.appendChild(qtext);
-
-      q.choices.forEach((choiceHTML, idx) => {
-        const wrapper = document.createElement('div');
-        wrapper.innerHTML = choiceHTML.trim();
-        const choiceDiv = wrapper.firstChild;
-        if (withAnswers && idx === q.correctIndex) {
-          choiceDiv.classList.add('correct');
+        // Fungsi drag and drop
+        function startDrag(e) {
+            isDragging = true;
+            const rect = container.getBoundingClientRect();
+            offsetX = e.clientX - rect.left;
+            offsetY = e.clientY - rect.top;
+            container.style.opacity = '0.8';
         }
-        block.appendChild(choiceDiv);
-      });
 
-      if (withAnswers && q.explanation) {
-        const exp = document.createElement('div');
-        exp.className = 'explanation';
-        exp.innerHTML = `<b><i>Explanation:</i></b><br>${q.explanation}`;
-        block.appendChild(exp);
-      }
+        function doDrag(e) {
+            if (!isDragging) return;
+            container.style.left = (e.clientX - offsetX) + 'px';
+            container.style.top = (e.clientY - offsetY) + 'px';
+            container.style.right = 'unset';
+        }
 
-      doc.body.appendChild(block);
-    });
+        function stopDrag() {
+            isDragging = false;
+            container.style.opacity = '1';
+        }
 
-    return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
-  };
+        // Event listeners untuk drag
+        header.addEventListener('mousedown', startDrag);
+        container.addEventListener('mousedown', startDrag);
+        document.addEventListener('mousemove', doDrag);
+        document.addEventListener('mouseup', stopDrag);
 
-  const saveHTMLAsTab = (html, name) => {
-    const win = window.open();
-    win.document.open();
-    win.document.write(html);
-    win.document.close();
-    win.document.title = name;
-  };
+        return { nextButton, downloadButton, statusDisplay };
+    }
 
-  for (let i = 0; i < totalQuestions; i++) {
-    if (!selectedIndexes.includes(i)) continue;
+    // Fungsi untuk intercept fetch
+    function setupFetchInterceptor() {
+        const originalFetch = window.fetch;
+        
+        window.fetch = async function(url, options) {
+            const response = await originalFetch(url, options);
+            
+            if (url.toString().includes('?details=content')) {
+                if (!responseMap.has(url)) {
+                    const clone = response.clone();
+                    try {
+                        const data = await clone.json();
+                        responseMap.set(url, {
+                            url: url.toString(),
+                            response: data,
+                            timestamp: new Date().toISOString()
+                        });
+                        console.log('Saved response:', { url, data });
+                        updateStatus(`Saved: ${responseMap.size} responses`);
+                    } catch (error) {
+                        console.error('Failed to parse response:', error);
+                    }
+                }
+            }
+            
+            return response;
+        };
+    }
 
-    questionSelect.selectedIndex = i;
-    questionSelect.dispatchEvent(new Event('change', { bubbles: true }));
-    await sleep(delayAfterChange);
+    // Fungsi untuk update status
+    function updateStatus(message) {
+        const statusDisplay = document.getElementById('statusDisplay');
+        if (statusDisplay) {
+            statusDisplay.textContent = message;
+            statusDisplay.style.color = '#333';
+        }
+    }
 
-    await sleep(delayBeforeClickAnswer);
-    clickFirstChoice();
-    await sleep(delayAfterClick);
-    await waitForFeedback();
+    // Fungsi untuk download response
+    function downloadResponses() {
+        if (responseMap.size === 0) {
+            updateStatus('No responses to download');
+            return;
+        }
+        
+        const responses = Array.from(responseMap.values());
+        const blob = new Blob([JSON.stringify(responses, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `quiz_responses_${new Date().toISOString().replace(/[:.]/g,'-')}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        // Clear responses setelah download
+        responseMap.clear(); // Ini menghapus semua respons yang telah disimpan
+        updateStatus('Responses downloaded & cleared');
+    }
 
-    const data = extractQuestionData();
-    questions.push(data);
-  }
+    // Fungsi untuk auto klik next dengan deteksi akhir
+    function startAutoNext() {
+        if (isAutoNextRunning) {
+            clearInterval(autoNextInterval);
+            isAutoNextRunning = false;
+            updateStatus('Auto Next Stopped');
+            return;
+        }
 
-  saveHTMLAsTab(generateHTML(false), 'Questions');
-  saveHTMLAsTab(generateHTML(true), 'Answers');
+        isAutoNextRunning = true;
+        failedAttempts = 0;
+        updateStatus('Auto Next Running...');
+
+        const nextButtonSelector = 'button[data-qa-label="bottom-next-button"]';
+        
+        autoNextInterval = setInterval(() => {
+            const nextBtn = document.querySelector(nextButtonSelector);
+            
+            if (nextBtn && !nextBtn.disabled) {
+                nextBtn.click();
+                failedAttempts = 0; // Reset counter jika berhasil
+                updateStatus(`Auto Next (${responseMap.size} saved)`);
+            } else {
+                failedAttempts++;
+                updateStatus(`Looking for next... (${failedAttempts}/${MAX_FAILED_ATTEMPTS})`);
+                
+                if (failedAttempts >= MAX_FAILED_ATTEMPTS) {
+                    clearInterval(autoNextInterval);
+                    isAutoNextRunning = false;
+                    showPopup('You have reached the last question!');
+                    updateStatus('Stopped - Last question reached');
+                }
+            }
+        }, 2000);
+    }
+
+    // Fungsi untuk menampilkan popup
+    function showPopup(message) {
+        const popup = document.createElement('div');
+        popup.style.position = 'fixed';
+        popup.style.top = '50%';
+        popup.style.left = '50%';
+        popup.style.transform = 'translate(-50%, -50%)';
+        popup.style.backgroundColor = 'white';
+        popup.style.padding = '20px';
+        popup.style.borderRadius = '8px';
+        popup.style.boxShadow = '0 2px 20px rgba(0,0,0,0.2)';
+        popup.style.zIndex = '10000';
+        popup.style.maxWidth = '300px';
+        popup.style.textAlign = 'center';
+        
+        popup.innerHTML = `
+            <h3 style="margin-top:0;">${message}</h3>
+            <button id="closePopup" style="padding:8px 16px;background:#2196F3;color:white;border:none;border-radius:4px;cursor:pointer;">
+                OK
+            </button>
+        `;
+        
+        document.body.appendChild(popup);
+        
+        document.getElementById('closePopup').addEventListener('click', () => {
+            popup.remove();
+        });
+    }
+
+    // Setup MutationObserver untuk deteksi perubahan DOM
+    function setupObserver() {
+        const observer = new MutationObserver(function() {
+            if (!document.getElementById('quizHelperUI')) {
+                const { nextButton, downloadButton } = createDraggableUI();
+                nextButton.addEventListener('click', startAutoNext);
+                downloadButton.addEventListener('click', downloadResponses);
+            }
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+    }
+
+    // Inisialisasi
+    setupFetchInterceptor();
+    setupObserver();
+    const { nextButton, downloadButton, statusDisplay } = createDraggableUI();
+    nextButton.addEventListener('click', startAutoNext);
+    downloadButton.addEventListener('click', downloadResponses);
+
+    console.log('Enhanced Quiz Helper with Draggable UI activated!');
 })();
