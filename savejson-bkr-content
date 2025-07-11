@@ -1,0 +1,216 @@
+(function() {
+    // Variabel untuk state kontrol
+    let isAutoNextRunning = false;
+    let autoNextInterval;
+    let failedAttempts = 0;
+    const MAX_FAILED_ATTEMPTS = 2;
+    const responseMap = new Map();
+
+    // Fungsi untuk membuat UI
+    function createPersistentUI() {
+        // Hapus UI lama jika ada
+        const existingUI = document.getElementById('quizHelperUI');
+        if (existingUI) existingUI.remove();
+
+        const container = document.createElement('div');
+        container.id = 'quizHelperUI';
+        container.style.position = 'fixed';
+        container.style.top = '20px';
+        container.style.right = '20px';
+        container.style.zIndex = '9999';
+        container.style.display = 'flex';
+        container.style.flexDirection = 'column';
+        container.style.gap = '10px';
+        container.style.backgroundColor = 'white';
+        container.style.padding = '10px';
+        container.style.borderRadius = '8px';
+        container.style.boxShadow = '0 2px 10px rgba(0,0,0,0.1)';
+
+        // Tombol Next Auto
+        const nextButton = document.createElement('button');
+        nextButton.id = 'autoNextButton';
+        nextButton.textContent = 'Next Auto';
+        nextButton.style.padding = '8px 15px';
+        nextButton.style.background = '#4CAF50';
+        nextButton.style.color = 'white';
+        nextButton.style.border = 'none';
+        nextButton.style.borderRadius = '4px';
+        nextButton.style.cursor = 'pointer';
+
+        // Tombol Download
+        const downloadButton = document.createElement('button');
+        downloadButton.id = 'downloadResponsesButton';
+        downloadButton.textContent = 'Download';
+        downloadButton.style.padding = '8px 15px';
+        downloadButton.style.background = '#2196F3';
+        downloadButton.style.color = 'white';
+        downloadButton.style.border = 'none';
+        downloadButton.style.borderRadius = '4px';
+        downloadButton.style.cursor = 'pointer';
+
+        // Status Monitor
+        const statusDisplay = document.createElement('div');
+        statusDisplay.id = 'statusDisplay';
+        statusDisplay.textContent = 'Ready';
+        statusDisplay.style.fontSize = '12px';
+        statusDisplay.style.textAlign = 'center';
+
+        container.appendChild(nextButton);
+        container.appendChild(downloadButton);
+        container.appendChild(statusDisplay);
+        document.body.appendChild(container);
+
+        return { nextButton, downloadButton, statusDisplay };
+    }
+
+    // Fungsi untuk menampilkan popup
+    function showPopup(message) {
+        const popup = document.createElement('div');
+        popup.style.position = 'fixed';
+        popup.style.top = '50%';
+        popup.style.left = '50%';
+        popup.style.transform = 'translate(-50%, -50%)';
+        popup.style.backgroundColor = 'white';
+        popup.style.padding = '20px';
+        popup.style.borderRadius = '8px';
+        popup.style.boxShadow = '0 2px 20px rgba(0,0,0,0.2)';
+        popup.style.zIndex = '10000';
+        popup.style.maxWidth = '300px';
+        popup.style.textAlign = 'center';
+        
+        popup.innerHTML = `
+            <h3 style="margin-top:0;">${message}</h3>
+            <button id="closePopup" style="padding:8px 16px;background:#2196F3;color:white;border:none;border-radius:4px;cursor:pointer;">
+                OK
+            </button>
+        `;
+        
+        document.body.appendChild(popup);
+        
+        document.getElementById('closePopup').addEventListener('click', () => {
+            popup.remove();
+        });
+    }
+
+    // Fungsi untuk intercept fetch
+    function setupFetchInterceptor() {
+        const originalFetch = window.fetch;
+        
+        window.fetch = async function(url, options) {
+            const response = await originalFetch(url, options);
+            
+            if (url.toString().includes('?details=content')) {
+                if (!responseMap.has(url)) {
+                    const clone = response.clone();
+                    try {
+                        const data = await clone.json();
+                        responseMap.set(url, {
+                            url: url.toString(),
+                            response: data,
+                            timestamp: new Date().toISOString()
+                        });
+                        console.log('Saved response:', { url, data });
+                        updateStatus(`Saved: ${responseMap.size} responses`);
+                    } catch (error) {
+                        console.error('Failed to parse response:', error);
+                    }
+                }
+            }
+            
+            return response;
+        };
+    }
+
+    // Fungsi untuk update status
+    function updateStatus(message) {
+        const statusDisplay = document.getElementById('statusDisplay');
+        if (statusDisplay) {
+            statusDisplay.textContent = message;
+            statusDisplay.style.color = '#333';
+        }
+    }
+
+    // Fungsi untuk download response
+    function downloadResponses() {
+        if (responseMap.size === 0) {
+            updateStatus('No responses to download');
+            return;
+        }
+        
+        const responses = Array.from(responseMap.values());
+        const blob = new Blob([JSON.stringify(responses, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `quiz_responses_${new Date().toISOString().replace(/[:.]/g,'-')}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        // Clear responses setelah download
+        responseMap.clear();
+        updateStatus('Responses downloaded & cleared');
+    }
+
+    // Fungsi untuk auto klik next dengan deteksi akhir
+    function startAutoNext() {
+        if (isAutoNextRunning) {
+            clearInterval(autoNextInterval);
+            isAutoNextRunning = false;
+            updateStatus('Auto Next Stopped');
+            return;
+        }
+
+        isAutoNextRunning = true;
+        failedAttempts = 0;
+        updateStatus('Auto Next Running...');
+
+        const nextButtonSelector = 'button[data-qa-label="bottom-next-button"]';
+        
+        autoNextInterval = setInterval(() => {
+            const nextBtn = document.querySelector(nextButtonSelector);
+            
+            if (nextBtn && !nextBtn.disabled) {
+                nextBtn.click();
+                failedAttempts = 0; // Reset counter jika berhasil
+                updateStatus(`Auto Next (${responseMap.size} saved)`);
+            } else {
+                failedAttempts++;
+                updateStatus(`Looking for next... (${failedAttempts}/${MAX_FAILED_ATTEMPTS})`);
+                
+                if (failedAttempts >= MAX_FAILED_ATTEMPTS) {
+                    clearInterval(autoNextInterval);
+                    isAutoNextRunning = false;
+                    showPopup('You have reached the last question!');
+                    updateStatus('Stopped - Last question reached');
+                }
+            }
+        }, 2000);
+    }
+
+    // Setup MutationObserver untuk deteksi perubahan DOM
+    function setupObserver() {
+        const observer = new MutationObserver(function() {
+            if (!document.getElementById('quizHelperUI')) {
+                const { nextButton, downloadButton } = createPersistentUI();
+                nextButton.addEventListener('click', startAutoNext);
+                downloadButton.addEventListener('click', downloadResponses);
+            }
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+    }
+
+    // Inisialisasi
+    setupFetchInterceptor();
+    setupObserver();
+    const { nextButton, downloadButton, statusDisplay } = createPersistentUI();
+    nextButton.addEventListener('click', startAutoNext);
+    downloadButton.addEventListener('click', downloadResponses);
+
+    console.log('Enhanced Quiz Helper activated!');
+})();
