@@ -61,7 +61,7 @@
 
     function cleanHTML(htmlString) {
         const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = htmlString;
+        tempDiv.innerHTML = htmlString.replace(/<br\s*>/gi, '<br/>');
 
         // Remove unwanted elements
         tempDiv.querySelectorAll('header, footer, aside, button, select, input, textarea, form, ._pointsWrapper_esijj_101, ._submitted_1efor_16, ._wrap_1ylu9_1, ._noLabel_1ylu9_7, ._inputSelect_1qywi_22, ._itemCompiled_1qywi_12 > div:first-child, ._title_18rg6_1 > h2:first-child, ._avg_1f8fe_31, ._letter_1f8fe_16, ._input_1f8fe_56, ._is-closed_1f8fe_70, ._is-wrong_1f8fe_70, ._is-correct_1f8fe_79, ._icon_1j3qu_47, ._vote_10umj_22, ._status_10umj_155, ._meta_10umj_76, ._ask_d2k3f_2').forEach(el => el.remove());
@@ -129,7 +129,7 @@
             }
         });
 
-        // Preserve single spaces between inline elements, remove other whitespace-only nodes
+        // Preserve text nodes after <br> tags and single spaces between inline elements
         function removeWhitespaceNodes(node) {
             const inlineTags = ['strong', 'i', 'em', 'b', 'span', 'a'];
             for (let i = node.childNodes.length - 1; i >= 0; i--) {
@@ -138,18 +138,21 @@
                     const text = child.textContent;
                     const prevSibling = child.previousSibling;
                     const nextSibling = child.nextSibling;
+                    const isAfterBr = prevSibling && prevSibling.nodeType === Node.ELEMENT_NODE && prevSibling.tagName.toLowerCase() === 'br';
                     const isBetweenInline = (prevSibling && nextSibling &&
                         prevSibling.nodeType === Node.ELEMENT_NODE && nextSibling.nodeType === Node.ELEMENT_NODE &&
                         inlineTags.includes(prevSibling.tagName.toLowerCase()) && inlineTags.includes(nextSibling.tagName.toLowerCase()));
-                    if (isBetweenInline && text === ' ') {
-                        // Preserve single space between inline elements
+                    if (isAfterBr || (isBetweenInline && text === ' ')) {
+                        // Preserve text after <br> or single space between inline elements
                         continue;
                     }
-                    // Normalize multiple spaces or newlines to a single space
-                    if (text.trim() === '' && text !== ' ') {
+                    // Normalize multiple spaces or newlines to a single space, but only if not after <br>
+                    if (text.trim() === '' && text !== ' ' && !isAfterBr) {
                         node.removeChild(child);
-                    } else if (text.match(/\s{2,}|\n+/)) {
+                        console.warn(`[Quiz Processor] Removed whitespace-only text node: "${text}"`);
+                    } else if (text.match(/\s{2,}|\n+/) && !isAfterBr) {
                         child.textContent = ' ';
+                        console.warn(`[Quiz Processor] Normalized text node to single space: "${text}"`);
                     }
                 } else if (child.nodeType === Node.ELEMENT_NODE) {
                     removeWhitespaceNodes(child);
