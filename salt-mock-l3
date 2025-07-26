@@ -391,7 +391,7 @@
                 </style>
             </head>
             <body>
-                <h1>Quiz Output - ${type === 'questions_only' ? 'Questions Only' : 'Questions with Solutions'}</h1>
+                <h1>Mock Exam - ${type === 'questions_only' ? 'Questions' : 'Questions with Solutions'}</h1>
         `);
 
         data.forEach((item, index) => {
