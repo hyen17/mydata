@@ -1,0 +1,70 @@
+(function() {
+    // Clone the original document body to avoid modifying the live DOM directly
+    const originalBody = document.body.cloneNode(true);
+
+    // Create a new window for printing
+    const printWindow = window.open('', '_blank');
+
+    // Create a new document in the print window
+    const newDocument = printWindow.document;
+    newDocument.open();
+    newDocument.write('<!DOCTYPE html><html lang="en"><head><title>Print Preview</title>');
+
+    // Copy essential styles from the original document
+    const styleSheets = document.querySelectorAll('link[rel="stylesheet"], style');
+    styleSheets.forEach(styleSheet => {
+        if (styleSheet.tagName === 'LINK') {
+            const newLink = newDocument.createElement('link');
+            newLink.rel = 'stylesheet';
+            newLink.href = styleSheet.href;
+            newDocument.head.appendChild(newLink);
+        } else if (styleSheet.tagName === 'STYLE') {
+            const newStyle = newDocument.createElement('style');
+            newStyle.textContent = styleSheet.textContent;
+            newDocument.head.appendChild(newStyle);
+        }
+    });
+
+    // Copy MathJax scripts to the new document
+    const mathJaxScripts = originalBody.querySelectorAll('script[src*="MathJax.js"], script[src*="mathjax"]');
+    mathJaxScripts.forEach(script => {
+        const newScript = newDocument.createElement('script');
+        newScript.src = script.src;
+        newScript.type = script.type;
+        newScript.async = script.async;
+        newDocument.head.appendChild(newScript);
+    });
+
+    // Add custom style to ensure a clean white background and no margins
+    newDocument.write('<style>');
+    newDocument.write('body { background-color: white !important; margin: 0 !important; padding: 20px !important; }'); // Added padding for better visual
+    newDocument.write('</style>');
+
+    newDocument.write('</head><body>');
+
+    // Find the target elements in the cloned body
+    const cardHeader = originalBody.querySelector('.card-header.title-font-size.sticky-header');
+    const cardBlock = originalBody.querySelector('.card-block');
+
+    if (cardHeader) {
+        newDocument.body.appendChild(cardHeader.cloneNode(true));
+    }
+
+    if (cardBlock) {
+        const clonedCardBlock = cardBlock.cloneNode(true);
+
+        // Remove specific elements within card-block
+        const elementsToRemove = clonedCardBlock.querySelectorAll('.col-sm-12.col-md-12.d-flex');
+        elementsToRemove.forEach(el => el.remove());
+
+        newDocument.body.appendChild(clonedCardBlock);
+    }
+
+    newDocument.write('</body></html>');
+    newDocument.close();
+
+    // Optional: Automatically trigger print dialog after a short delay
+    // printWindow.onload = function() {
+    //     printWindow.print();
+    // };
+})();
