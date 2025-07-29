@@ -43,7 +43,7 @@
     newDocument.write('</head><body>');
 
     // Find the target elements in the cloned body
-    const cardHeader = originalBody.querySelector('.card-header.title-font-size.sticky-header');
+    const cardHeader = originalBody.querySelector('.card-header.title-font-size');
     const cardBlock = originalBody.querySelector('.card-block');
 
     if (cardHeader) {
