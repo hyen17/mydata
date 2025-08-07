@@ -1,0 +1,81 @@
+(function () {
+    const content = document.querySelector('#wiki_page_show');
+    if (!content) {
+        alert('Elemen #wiki_page_show tidak ditemukan.');
+        return;
+    }
+
+    const clonedContent = content.cloneNode(true);
+
+    // Tampilkan semua tab-pane
+    clonedContent.querySelectorAll('.tab-pane').forEach(pane => {
+        pane.classList.add('show', 'active');
+        pane.classList.remove('fade');
+    });
+
+    // Tambahkan expander controls
+    document.querySelectorAll('.btn-group.dp-expander-controls').forEach(btn => {
+        clonedContent.appendChild(btn.cloneNode(true));
+    });
+
+    // 🔁 Tooltip converter: ubah menjadi teks dengan underline + tooltip dalam kurung italic
+    clonedContent.querySelectorAll('.dp-tooltip-container').forEach(container => {
+        const link = container.querySelector('.dp-tooltip-trigger');
+        const tooltip = container.querySelector('.dp-tooltip-content');
+
+        if (link && tooltip) {
+            const replaced = document.createElement('span');
+            replaced.innerHTML = `<u>${link.textContent}</u> <i>(${tooltip.textContent.trim()})</i>`;
+            container.replaceWith(replaced);
+        }
+    });
+
+    // 🔁 Tab handler: konversi dp-tabs menjadi block dengan judul bold
+    clonedContent.querySelectorAll('.dp-panels-wrapper.dp-tabs').forEach(wrapper => {
+        const tabTitles = Array.from(wrapper.querySelectorAll('.nav-tabs .nav-link'));
+        const tabContents = Array.from(wrapper.querySelectorAll('.tab-content .tab-pane'));
+
+        const fragment = document.createElement('div');
+        tabTitles.forEach((tab, i) => {
+            const tabId = tab.getAttribute('href')?.replace('#', '');
+            const tabContent = wrapper.querySelector(`#${tabId}`);
+            if (tabContent) {
+                const section = document.createElement('div');
+                const titleText = tab.textContent.trim();
+                section.innerHTML = `<b style="display:block; margin-top: 1em; margin-bottom: 0.5em;">${titleText}</b>` + tabContent.innerHTML;
+                fragment.appendChild(section);
+            }
+        });
+
+        // Ganti wrapper dengan konten terstruktur
+        wrapper.replaceWith(fragment);
+    });
+
+    // Ambil semua style dan link stylesheet
+    const styles = Array.from(document.querySelectorAll('link[rel="stylesheet"], style'))
+        .map(style => style.outerHTML).join('\n');
+
+    // Bangun HTML akhir
+    const html = `
+        <html>
+            <head>
+                <title>Printable Content</title>
+                ${styles}
+            </head>
+            <body>
+                ${clonedContent.outerHTML}
+                <script>
+                    window.onload = function () {
+                        window.print();
+                    };
+                </script>
+            </body>
+        </html>
+    `;
+
+    // Buka tab baru
+    const printWindow = window.open('', '_blank');
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+})();
