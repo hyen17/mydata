@@ -1,0 +1,82 @@
+(function() {
+  const questions = document.querySelectorAll('.display_question');
+  const total = questions.length;
+  let qData = [];
+  questions.forEach((q, i) => {
+    const num = i + 1;
+    const qText = q.querySelector('.question_text').innerHTML;
+    const choices = [];
+    let correctChoice = '';
+    let explanation = '';
+    q.querySelectorAll('.answers_wrapper .answer').forEach((ans, j) => {
+      const text = ans.querySelector('.answer_text').innerHTML;
+      const comm = ans.querySelector('.answer_comment');
+      const exp = comm ? comm.textContent.trim() : '';
+      const letter = String.fromCharCode(65 + j); // A, B, C, etc.
+      choices.push({ letter, text });
+      if (exp) {
+        correctChoice = text;
+        explanation = exp;
+      }
+    });
+    qData.push({ num, qText, choices, correctChoice, explanation });
+  });
+
+  let qHtml = '<html><head><title>Questions</title>';
+  qHtml += '<style>';
+  qHtml += 'body { font-family: Arial, sans-serif; }';
+  qHtml += '.question { page-break-inside: avoid; margin-bottom: 20px; }';
+  qHtml += 'h2 { font-size: 19px; }'; // Increased title size
+  qHtml += '.question-text { font-size: 16px; margin-bottom: 10px; }';
+  qHtml += '.choice { font-size: 17px; margin: 2px 0; }'; // Tighter spacing for choices
+  qHtml += '</style>';
+  qHtml += '</head><body>';
+  qData.forEach(d => {
+    qHtml += '<div class="question">';
+    qHtml += `<h2><strong>Question ${d.num} of ${total}</strong></h2>`;
+    qHtml += `<p class="question-text">${d.qText}</p>`;
+    d.choices.forEach(c => {
+      qHtml += `<p class="choice">${c.letter}. ${c.text}</p>`;
+    });
+    qHtml += '</div><hr>';
+  });
+  qHtml += '</body></html>';
+
+  let aHtml = '<html><head><title>Answers</title>';
+  aHtml += '<style>';
+  aHtml += 'body { font-family: Arial, sans-serif; }';
+  aHtml += '.question { page-break-inside: avoid; margin-bottom: 20px; }';
+  aHtml += 'h2 { font-size: 19px; }'; // Increased title size
+  aHtml += '.question-text { font-size: 16px; margin-bottom: 10px; }';
+  aHtml += '.choice { font-size: 17px; margin: 2px 0; }'; // Tighter spacing for choices
+  aHtml += '.explanation { font-weight: bold; font-size: 19px; margin: 10px 0 5px 0; }'; // Increased size, bold
+  aHtml += '.explanation-text { font-size: 16px; margin-bottom: 10px; }';
+  aHtml += '</style>';
+  aHtml += '</head><body>';
+  qData.forEach(d => {
+    aHtml += '<div class="question">';
+    aHtml += `<h2><strong>Question ${d.num} of ${total}</strong></h2>`;
+    aHtml += `<p class="question-text">${d.qText}</p>`;
+    d.choices.forEach(c => {
+      if (c.text === d.correctChoice) {
+        aHtml += `<p class="choice"><strong>${c.letter}. ${c.text}</strong></p>`;
+      } else {
+        aHtml += `<p class="choice">${c.letter}. ${c.text}</p>`;
+      }
+    });
+    aHtml += '<p class="explanation">Explanation</p>';
+    aHtml += `<p class="explanation-text">${d.explanation}</p>`;
+    aHtml += '</div><hr>';
+  });
+  aHtml += '</body></html>';
+
+  const qTab = window.open();
+  qTab.document.open();
+  qTab.document.write(qHtml);
+  qTab.document.close();
+
+  const aTab = window.open();
+  aTab.document.open();
+  aTab.document.write(aHtml);
+  aTab.document.close();
+})();
