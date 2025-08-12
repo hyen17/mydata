@@ -12,8 +12,7 @@
       const text = ans.querySelector('.answer_text').innerHTML;
       const comm = ans.querySelector('.answer_comment');
       const exp = comm ? comm.textContent.trim() : '';
-      const letter = String.fromCharCode(65 + j); // A, B, C, etc.
-      choices.push({ letter, text });
+      choices.push(text);
       if (exp) {
         correctChoice = text;
         explanation = exp;
@@ -24,49 +23,57 @@
 
   let qHtml = '<html><head><title>Questions</title>';
   qHtml += '<style>';
-  qHtml += 'body { font-family: Arial, sans-serif; }';
-  qHtml += '.question { page-break-inside: avoid; margin-bottom: 20px; }';
-  qHtml += 'h2 { font-size: 19px; }'; // Increased title size
+  qHtml += 'body { font-family: Arial, sans-serif; margin: 20px; }';
+  qHtml += '.question { page-break-inside: avoid; margin-bottom: 20px; border: 1px solid #ccc; padding: 15px; background-color: #fff; border-radius: 5px; }';
+  qHtml += '.question-title { font-size: 19px; margin-bottom: 10px; background-color: #f0f0f0; padding: 5px; border-radius: 5px 5px 0 0; }';
   qHtml += '.question-text { font-size: 16px; margin-bottom: 10px; }';
-  qHtml += '.choice { font-size: 17px; margin: 2px 0; }'; // Tighter spacing for choices
+  qHtml += 'ol.choices { list-style-type: upper-alpha; margin: 0; padding-left: 20px; font-size: 17px; }';
+  qHtml += 'ol.choices li { margin: 2px 0; }';
+  qHtml += '@media print { ol.choices li { white-space: normal; } }';
   qHtml += '</style>';
   qHtml += '</head><body>';
   qData.forEach(d => {
     qHtml += '<div class="question">';
-    qHtml += `<h2><strong>Question ${d.num} of ${total}</strong></h2>`;
+    qHtml += `<div class="question-title"><strong>Question ${d.num} of ${total}</strong></div>`;
     qHtml += `<p class="question-text">${d.qText}</p>`;
+    qHtml += '<ol class="choices">';
     d.choices.forEach(c => {
-      qHtml += `<p class="choice">${c.letter}. ${c.text}</p>`;
+      qHtml += `<li>${c}</li>`;
     });
-    qHtml += '</div><hr>';
+    qHtml += '</ol>';
+    qHtml += '</div>';
   });
   qHtml += '</body></html>';
 
   let aHtml = '<html><head><title>Answers</title>';
   aHtml += '<style>';
-  aHtml += 'body { font-family: Arial, sans-serif; }';
-  aHtml += '.question { page-break-inside: avoid; margin-bottom: 20px; }';
-  aHtml += 'h2 { font-size: 19px; }'; // Increased title size
+  aHtml += 'body { font-family: Arial, sans-serif; margin: 20px; }';
+  aHtml += '.question { page-break-inside: avoid; margin-bottom: 20px; border: 1px solid #ccc; padding: 15px; background-color: #fff; border-radius: 5px; }';
+  aHtml += '.question-title { font-size: 19px; margin-bottom: 10px; background-color: #f0f0f0; padding: 5px; border-radius: 5px 5px 0 0; }';
   aHtml += '.question-text { font-size: 16px; margin-bottom: 10px; }';
-  aHtml += '.choice { font-size: 17px; margin: 2px 0; }'; // Tighter spacing for choices
-  aHtml += '.explanation { font-weight: bold; font-size: 19px; margin: 10px 0 5px 0; }'; // Increased size, bold
-  aHtml += '.explanation-text { font-size: 16px; margin-bottom: 10px; }';
+  aHtml += 'ol.choices { list-style-type: upper-alpha; margin: 0; padding-left: 20px; font-size: 17px; }';
+  aHtml += 'ol.choices li { margin: 2px 0; }';
+  aHtml += '.explanation { font-weight: bold; font-size: 18px; margin: 10px 0 5px 0; }';
+  aHtml += '.explanation-text { font-size: 16px; margin-bottom: 10px; background-color: #f5f5f5; padding: 5px; border-radius: 5px; }';
+  aHtml += '@media print { ol.choices li { white-space: normal; } }';
   aHtml += '</style>';
   aHtml += '</head><body>';
   qData.forEach(d => {
     aHtml += '<div class="question">';
-    aHtml += `<h2><strong>Question ${d.num} of ${total}</strong></h2>`;
+    aHtml += `<div class="question-title"><strong>Question ${d.num} of ${total}</strong></div>`;
     aHtml += `<p class="question-text">${d.qText}</p>`;
+    aHtml += '<ol class="choices">';
     d.choices.forEach(c => {
-      if (c.text === d.correctChoice) {
-        aHtml += `<p class="choice"><strong>${c.letter}. ${c.text}</strong></p>`;
+      if (c === d.correctChoice) {
+        aHtml += `<li><strong>${c}</strong></li>`;
       } else {
-        aHtml += `<p class="choice">${c.letter}. ${c.text}</p>`;
+        aHtml += `<li>${c}</li>`;
       }
     });
+    aHtml += '</ol>';
     aHtml += '<p class="explanation">Explanation</p>';
     aHtml += `<p class="explanation-text">${d.explanation}</p>`;
-    aHtml += '</div><hr>';
+    aHtml += '</div>';
   });
   aHtml += '</body></html>';
 
