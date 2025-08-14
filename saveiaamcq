@@ -1,0 +1,164 @@
+(() => {
+  // ============ KONFIGURASI / OPSI ============ 
+  // ID stem yang Anda sebutkan:
+  const STEM_ID = "ItemMultipleChoice1_pnlEditStem";
+
+  // Teks & gaya tombol
+  const BUTTON_ID = "__saveMcqBtn";
+  const BUTTON_TEXT = "Save MCQ";
+  const BTN_STYLE = {
+    position: "fixed",
+    top: "12px",
+    right: "12px",
+    zIndex: 2147483647,
+    padding: "10px 14px",
+    border: "none",
+    borderRadius: "10px",
+    fontFamily: "system-ui, Arial, sans-serif",
+    fontSize: "14px",
+    cursor: "pointer",
+    boxShadow: "0 6px 18px rgba(0,0,0,.15)",
+    background: "#1a73e8",
+    color: "#fff",
+  };
+
+  // ============ UTIL ============ 
+  const $ = (sel, ctx = document) => ctx.querySelector(sel);
+  const $all = (sel, ctx = document) => Array.from(ctx.querySelectorAll(sel));
+
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const ts = () => {
+    const d = new Date();
+    return `${d.getFullYear()}${pad2(d.getMonth()+1)}${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}`;
+  };
+
+  const flash = (msg) => {
+    const tip = document.createElement("div");
+    tip.textContent = msg;
+    Object.assign(tip.style, {
+      position: "fixed",
+      top: "60px",
+      right: "12px",
+      background: "rgba(0,0,0,.85)",
+      color: "#fff",
+      padding: "8px 10px",
+      borderRadius: "8px",
+      fontSize: "12px",
+      zIndex: 2147483647,
+      maxWidth: "50vw",
+      wordBreak: "break-word"
+    });
+    document.body.appendChild(tip);
+    setTimeout(() => tip.remove(), 1600);
+  };
+
+  // ============ CEGAH DUPLIKASI TOMBOL ============ 
+  if (document.getElementById(BUTTON_ID)) {
+    console.log("Tombol Save MCQ sudah ada.");
+    return;
+  }
+
+  // ============ TEMUKAN PREFIX ID (mis. 'ItemMultipleChoice1') ============ 
+  const stemEl = document.getElementById(STEM_ID);
+  if (!stemEl) {
+    console.error(`Elemen stem '${STEM_ID}' tidak ditemukan.`);
+    alert(`Elemen stem '${STEM_ID}' tidak ditemukan.`);
+    return;
+  }
+  const idParts = STEM_ID.split("_"); // ['ItemMultipleChoice1','pnlEditStem']
+  const basePrefix = idParts[0];      // 'ItemMultipleChoice1'
+
+  // Susunan ID lain yang akan dicari
+  const IDS_TO_SAVE = [
+    `${basePrefix}_pnlEditStem`,       // pertanyaan / stem
+    `${basePrefix}_pnlViewDistractor`, // opsi jawaban
+    `${basePrefix}_pnlExplanation`,    // panel tombol/area explanation
+    `${basePrefix}_pnlQuestionHint`,   // isi rationale/explanation
+  ];
+
+  // ============ CARI itemId (opsional, untuk nama file) ============ 
+  const guessItemId = () => {
+    // Contoh dari markup Anda: banyak input hidden dengan *_hidItemId_0/1/2...
+    const cand = $(`input[id*="${basePrefix}_"][id*="_hidItemId_"]`);
+    if (cand && cand.value) return cand.value;
+
+    // Fallback: cari di seluruh halaman
+    const any = $(`input[id*="_hidItemId_"], input[name*="_hidItemId_"]`);
+    if (any && any.value) return any.value;
+
+    // Fallback lain: coba angka dari onclick di tombol explanation
+    const btn = document.getElementById(`${basePrefix}_btnExplanation`);
+    if (btn && btn.getAttribute("onclick")) {
+      const m = btn.getAttribute("onclick").match(/,\s*(\d+)\s*\)\s*;/);
+      if (m) return m[1];
+    }
+    return null;
+  };
+
+  // ============ RANGKAI KONTEN UNTUK DISIMPAN ============ 
+  const buildContent = () => {
+    const fragments = [];
+    IDS_TO_SAVE.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) {
+        // Simpan outerHTML apa adanya (termasuk display:none bila ada)
+        fragments.push(
+          `<!-- BEGIN ${id} -->\n${el.outerHTML}\n<!-- END ${id} -->`
+        );
+      }
+    });
+
+    if (!fragments.length) {
+      return null;
+    }
+
+    // Bungkus dengan komentar header (biar rapi saat baca ulang)
+    const header = [
+      "<!-- ======================================= -->",
+      "<!-- Exported MCQ Blocks (stem + choices + explanation) -->",
+      `<!-- Base Prefix: ${basePrefix} -->`,
+      `<!-- Exported At: ${new Date().toString()} -->`,
+      "<!-- ======================================= -->",
+      "",
+    ].join("\n");
+
+    return header + fragments.join("\n\n");
+  };
+
+  // ============ FUNGSI SIMPAN KE FILE .TXT ============ 
+  const saveText = (text, filename) => {
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 0);
+  };
+
+  // ============ BUAT TOMBOL & HANDLER ============ 
+  const btn = document.createElement("button");
+  btn.id = BUTTON_ID;
+  btn.textContent = BUTTON_TEXT;
+  Object.assign(btn.style, BTN_STYLE);
+
+  btn.addEventListener("click", () => {
+    const text = buildContent();
+    if (!text) {
+      alert("Blok MCQ tidak ditemukan. Pastikan elemen-elemen target ada di halaman.");
+      return;
+    }
+    const itemId = guessItemId();
+    const filename = `mcq${itemId ? "-" + itemId : ""}-${ts()}.txt`;
+    saveText(text, filename);
+    flash(`Saved: ${filename}`);
+  });
+
+  document.body.appendChild(btn);
+  console.log(
+    `Tombol "${BUTTON_TEXT}" ditambahkan. Klik untuk menyimpan:\n- ${IDS_TO_SAVE.join("\n- ")}`
+  );
+})();
