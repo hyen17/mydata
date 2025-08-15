@@ -1,0 +1,314 @@
+(() => {
+  /***********************
+   * CONFIG & UTILITIES  *
+   ***********************/
+  const CONFIG = {
+    MIN_WAIT_MS: 300,          // jeda minimal setelah klik Next
+    LOAD_TIMEOUT_MS: 10000     // batas tunggu perubahan pertanyaan
+  };
+  const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+  async function waitFor(predicate, timeoutMs = CONFIG.LOAD_TIMEOUT_MS, interval = 120) {
+    const start = performance.now();
+    while (performance.now() - start < timeoutMs) {
+      try { const v = await predicate(); if (v) return v; } catch(e) {}
+      await sleep(interval);
+    }
+    return null; // jangan throw; cukup null agar loop bisa memutus
+  }
+  const $ = (sel, root=document) => root.querySelector(sel);
+  const $all = (sel, root=document) => Array.from(root.querySelectorAll(sel));
+  const esc = (s) => s ? s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])) : '';
+
+  /***********************
+   * TITLE EXTRACTION    *
+   ***********************/
+  function pickText(el){ return el ? (el.textContent || el.innerText || '').trim() : ''; }
+
+  function getFullCourseTitleImmediate() {
+    const el =
+      $('h1.CourseNodeHeader-module__courseTitleHeadingTwo--RL41B[data-test-id="course-module-name"]') ||
+      $('h1[data-test-id="course-module-name"]') ||
+      $('h1[class*="courseTitleHeadingTwo"]') ||
+      $('[class*="CourseNodeHeader-module__wrapper"] h1') ||
+      $('h1');
+    const txt = pickText(el);
+    return txt || 'Quiz';
+  }
+
+  async function getFullCourseTitle() {
+    const now = getFullCourseTitleImmediate();
+    if (now !== 'Quiz') return now;
+    const el = await waitFor(() =>
+      $('h1[data-test-id="course-module-name"]') ||
+      $('h1[class*="courseTitleHeadingTwo"]') ||
+      $('[class*="CourseNodeHeader-module__wrapper"] h1') ||
+      null
+    , 2000, 120);
+    return el ? pickText(el) : 'Quiz';
+  }
+
+  function toShortModuleTitle(fullTitle) {
+    // Contoh: "Module 1.1: Interest Rates and Return Measurement Quiz"
+    // -> Ambil "Module 1.1" lalu tambahkan " Quiz"
+    // 1) Cari pola Module X[.Y[.Z...]]
+    const m = fullTitle.match(/(Module\s+\d+(?:\.\d+)*)(?::|$)/i);
+    if (m) return `${m[1]} Quiz`;
+    // 2) Fallback: ambil sebelum ":" + kata "Quiz"
+    const beforeColon = fullTitle.split(':')[0].trim();
+    if (/Module/i.test(beforeColon)) return `${beforeColon} Quiz`;
+    // 3) Fallback terakhir
+    return 'Quiz';
+  }
+
+  /*************************
+   * EXTRACT FROM CURRENT  *
+   *************************/
+  function getCurrentQuestionWrapper(){ return $('[data-id="question-content"]'); }
+  function getCurrentQuestionId(){
+    const wrap = getCurrentQuestionWrapper(); if (!wrap) return null;
+    const withId = wrap.closest('[id^="question_"]') || wrap; return withId.id || null;
+  }
+  function getQuestionIndexText(){
+    const h = $('[data-test-id="attempt-review-question-index"], .ReviewHeader-module__questionIndex--Arxul, h1[data-test-id="attempt-review-question-index"]');
+    return h ? h.innerText.trim() : null; // e.g. "Question 2"
+  }
+  function getCurrentQuestionNumber(){
+    const t = getQuestionIndexText(); if (!t) return null;
+    const m = t.match(/Question\s+(\d+)/i); return m ? parseInt(m[1],10) : null;
+  }
+  function extractQuestionText(){
+    const wrap = getCurrentQuestionWrapper(); if (!wrap) return {html:'',text:''};
+    const qEl = $('.QuestionBody-module__questionText--mVV91, [class*="QuestionBody-module__questionText"]', wrap) || wrap;
+    return { html: qEl.innerHTML, text: qEl.innerText.trim() };
+  }
+  function extractChoices(){
+    const group = $('[role="radiogroup"]') || document;
+    const blocks = $all('[data-id="question-body-container"]', group);
+    const makeChoice = (container, idx) => {
+      const letterEl = $('[class*="alphaOrdinal"]', container);
+      const textEl = $('[class*="optionText"]', container) || container;
+      const correctImg = $('img[alt="Correct Answer"]', container);
+      const letter = (letterEl ? letterEl.innerText : String.fromCharCode(65 + idx)).replace(/[)\.]/g,'').trim();
+      return { letter, text: (textEl.innerText||'').trim(), isCorrect: !!correctImg };
+    };
+    if (blocks.length) return blocks.map(makeChoice);
+    const labels = $all('label[class*="e1bppr3n2"], label', group);
+    return labels.map(makeChoice);
+  }
+  function extractExplanation(){
+    // Pertahankan label <b>Explanation</b> bila ada
+    const expWrap = $('[id^="question-explanation-"]') || $('section:has(> b), section');
+    if (!expWrap) return { html: '', text: '' , hadLabel:false};
+    const clone = expWrap.cloneNode(true);
+    const hadLabel = !!$('b', clone);
+    return { html: clone.innerHTML.trim(), text: clone.innerText.trim(), hadLabel };
+  }
+  function getNextButton(){ return $('[data-test-id="attempt-review-footer-nextattempt"], button[class*="__nextbtn"]'); }
+  function getNextAriaNumber(){
+    const btn = getNextButton(); if (!btn) return null;
+    const aria = btn.getAttribute('aria-label') || '';
+    const m = aria.match(/Next item question #(\d+)/i);
+    return m ? parseInt(m[1],10) : null;
+  }
+
+  // Ambil total soal dari tabel navigasi review
+  function getTotalQuestionsFromNav(){
+    const table = $('table[data-test-id="exam-review-results"]');
+    if (!table) return null;
+    // Baris soal memiliki data-test-id="exam-review-answer" dan id "exam-review-table-row-N"
+    const rows = $all('tbody tr[data-test-id="exam-review-answer"]', table);
+    if (rows.length > 0) return rows.length;
+    // Fallback: hitung berdasarkan id row-*
+    const rowsById = $all('tbody tr[id^="exam-review-table-row-"]', table);
+    if (rowsById.length > 0) return rowsById.length;
+    // Fallback: ambil angka terbesar yang terlihat pada kolom pertama
+    const nums = $all('tbody tr td:first-child span', table).map(s => parseInt((s.textContent||'').trim(), 10)).filter(n => Number.isFinite(n));
+    if (nums.length) return Math.max(...nums);
+    return null;
+  }
+
+  async function waitForQuestionChange(prevId){
+    await sleep(CONFIG.MIN_WAIT_MS);
+    const changed = await waitFor(() => {
+      const id = getCurrentQuestionId();
+      return id && id !== prevId ? id : null;
+    }, CONFIG.LOAD_TIMEOUT_MS, 120);
+    return changed;
+  }
+
+  function buildRecord(){
+    const wrap = getCurrentQuestionWrapper(); if (!wrap) return null;
+    const qId = getCurrentQuestionId();
+    const qIndex = getQuestionIndexText();
+    const qText = extractQuestionText();
+    const choices = extractChoices();
+    const explanation = extractExplanation();
+    const correct = choices.find(c => c.isCorrect) || null;
+    return {
+      id: qId,
+      indexText: qIndex,
+      questionHTML: qText.html,
+      questionText: qText.text,
+      choices,
+      correct,
+      explanationHTML: explanation.html,
+      explanationText: explanation.text,
+      explanationHasLabel: explanation.hadLabel
+    };
+  }
+
+  /**********************
+   * CAPTURE EVERYTHING *
+   **********************/
+  async function captureAll() {
+    // pastikan satu soal terlihat
+    await waitFor(() => getCurrentQuestionWrapper());
+    let currId = getCurrentQuestionId();
+    if (!currId) throw new Error('Cannot locate current question');
+
+    const totalFromNav = getTotalQuestionsFromNav(); // bisa null kalau tabel tidak ada
+    const records = [];
+    const seen = new Set();
+
+    while (true) {
+      if (!seen.has(currId)) {
+        const rec = buildRecord();
+        if (rec) { records.push(rec); seen.add(currId); }
+      }
+
+      // stop jika sudah di soal terakhir (berdasarkan navigasi)
+      const currNum = getCurrentQuestionNumber();
+      const nextNum = getNextAriaNumber();
+      if (totalFromNav && currNum && currNum >= totalFromNav) break;
+
+      const nextBtn = getNextButton();
+      if (!nextBtn || nextBtn.disabled) break;
+
+      // klik Next hanya kalau menuju soal berikutnya DAN tidak melebihi totalFromNav
+      if (currNum != null && nextNum != null) {
+        if (!(nextNum === currNum + 1)) break;
+        if (totalFromNav && nextNum > totalFromNav) break;
+      }
+
+      nextBtn.click();
+      const newId = await waitForQuestionChange(currId);
+      if (!newId) break; // tidak berubah -> stop
+      currId = newId;
+    }
+
+    return records;
+  }
+
+  /**********************
+   * OPEN TWO CLEAN TABS*
+   **********************/
+  function baseHeadHTML(titleText){
+    return `
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>${esc(titleText)}</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/react-datepicker/4.12.0/react-datepicker.min.css">
+<link href="https://fonts.googleapis.com/css?family=Open+Sans:300,400,600,700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.9.0-alpha1/katex.min.css">
+<style>
+  :root { --qc-maxw: 900px; --qc-pad: 16px; --qc-gray: #f3f4f6; }
+  html, body { background:#fff; }
+  body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding:24px; }
+  .qc-container { margin: 0 auto; max-width: var(--qc-maxw); }
+  .qc-title { font-size:20px; font-weight:700; margin:0 0 12px; }
+  .qc-item { padding:12px 8px; margin-bottom:12px; border-radius:8px; border:1px solid #f0f0f0; background:#fff; break-inside: avoid; page-break-inside: avoid; }
+  .qc-item h3 { margin:0 0 6px; font-size:16px; font-weight:700; }
+  .qc-stem { margin:4px 0 10px; line-height:1.5; }
+  .qc-choices { margin:8px 0 0 0; padding:0; list-style:none; }
+  .qc-choice { margin:6px 0; display:flex; gap:8px; line-height:1.45; }
+  .qc-letter { font-weight:700; min-width:22px; }
+  .qc-correct .qc-text { font-weight:700; }
+  .qc-tick { font-weight:700; margin-left:6px; }
+  .qc-answer-block { border-top:1px dashed #e5e7eb; margin-top:10px; padding:10px; background: var(--qc-gray); border-radius:8px; }
+  @media print {
+    body { padding:0 20px; }
+    .qc-item { page-break-inside: avoid; break-inside: avoid; }
+  }
+</style>`;
+  }
+
+  function openQuestionsTab(records, title){
+    const win = window.open('', '_blank');
+    if (!win){ alert('Popup diblokir. Izinkan pop-up untuk situs ini.'); return; }
+    const doc = win.document;
+    const bodyHTML =
+`<div class="qc-container">
+  <h1 class="qc-title">${esc(title)}</h1>
+  ${records.map((rec, i) =>
+    `<article class="qc-item" data-qid="${esc(rec.id || ('q-'+(i+1)))}">
+      <h3>${esc(rec.indexText || `Question ${i+1}`)}</h3>
+      <div class="qc-stem">${rec.questionHTML || esc(rec.questionText)}</div>
+      <ul class="qc-choices">
+        ${rec.choices.map(ch =>
+          `<li class="qc-choice">
+            <span class="qc-letter">${esc(ch.letter)})</span>
+            <span class="qc-text">${esc(ch.text)}</span>
+          </li>`
+        ).join('')}
+      </ul>
+    </article>`
+  ).join('')}
+</div>`;
+    doc.open();
+    doc.write(`<!doctype html><html><head>${baseHeadHTML(title)}</head><body>${bodyHTML}</body></html>`);
+    doc.close();
+  }
+
+  function openAnswersTab(records, title){
+    const win = window.open('', '_blank');
+    if (!win){ alert('Popup diblokir. Izinkan pop-up untuk situs ini.'); return; }
+    const doc = win.document;
+    const bodyHTML =
+`<div class="qc-container">
+  <h1 class="qc-title">${esc(title)}</h1>
+  ${records.map((rec, i) =>
+    `<article class="qc-item" data-qid="${esc(rec.id || ('q-'+(i+1)))}">
+      <h3>${esc(rec.indexText || `Question ${i+1}`)}</h3>
+      <div class="qc-stem">${rec.questionHTML || esc(rec.questionText)}</div>
+
+      <ul class="qc-choices">
+        ${rec.choices.map(ch =>
+          `<li class="qc-choice ${ch.isCorrect ? 'qc-correct' : ''}">
+            <span class="qc-letter">${esc(ch.letter)})</span>
+            <span class="qc-text">${esc(ch.text)}</span>
+            ${ch.isCorrect ? `<span class="qc-tick">✓</span>` : ``}
+          </li>`
+        ).join('')}
+      </ul>
+
+      <div class="qc-answer-block">
+        ${
+          rec.explanationHTML
+          ? (
+              rec.explanationHasLabel
+              ? `<div class="qc-expl">${rec.explanationHTML}</div>`
+              : `<div class="qc-expl"><b>Explanation:</b> ${rec.explanationHTML}</div>`
+            )
+          : `<div class="qc-expl"><b>Explanation:</b> <em>No explanation found.</em></div>`
+        }
+      </div>
+    </article>`
+  ).join('')}
+</div>`;
+    doc.open();
+    doc.write(`<!doctype html><html><head>${baseHeadHTML(title)}</head><body>${bodyHTML}</body></html>`);
+    doc.close();
+  }
+
+  /**********************
+   * MAIN FLOW
+   **********************/
+  (async () => {
+    const fullTitle = await getFullCourseTitle(); // contoh: "Module 1.1: Interest Rates and Return Measurement Quiz"
+    const shortTitle = toShortModuleTitle(fullTitle); // -> "Module 1.1 Quiz"
+    const records = await captureAll();
+    if (!records || !records.length) { alert('Tidak ada pertanyaan yang tertangkap.'); return; }
+    openQuestionsTab(records, `${shortTitle} - Questions`);
+    openAnswersTab(records,  `${shortTitle} - Answers`);
+  })().catch(err => { console.error(err); alert('Gagal memproses quiz: ' + err.message); });
+})();
