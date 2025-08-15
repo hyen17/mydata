@@ -1,0 +1,211 @@
+(() => {
+  const ID_SAVE = "__saveCourseNodeBtn_link";
+  const ID_OFF  = "__saveCourseNodeBtn_offline";
+
+  // ---------- Utilities ----------
+  const escapeHtml = (s) =>
+    String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;")
+             .replace(/>/g,"&gt;").replace(/"/g,"&quot;")
+             .replace(/'/g,"&#039;");
+
+  const kill = (el) => el && el.parentNode && el.parentNode.removeChild(el);
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  const absolutize = (maybeUrl, base) => {
+    try { return new URL(maybeUrl, base).href; } catch { return maybeUrl; }
+  };
+
+  const blobToDataURL = (blob) =>
+    new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = reject;
+      fr.readAsDataURL(blob);
+    });
+
+  const fetchAsBlob = async (url) => {
+    const res = await fetch(url, { credentials: "omit", mode: "cors" }).catch(() => null);
+    if (!res || !res.ok) throw new Error(`Fetch failed: ${url}`);
+    return res.blob();
+  };
+
+  // Hapus tombol lama jika ada
+  document.getElementById(ID_SAVE)?.remove();
+  document.getElementById(ID_OFF)?.remove();
+
+  // ---------- DOM cleaners ----------
+  const stripPrevNextAndExtras = (root) => {
+    // 1) tombol prev/next
+    const removeSelectors = [
+      'a[rel="next"]','a[rel="prev"]',
+      'button[rel="next"]','button[rel="prev"]',
+      '[aria-label*="next" i]','[aria-label*="previous" i]',
+      '[aria-label*="berikut" i]','[aria-label*="sebelum" i]',
+      '[data-testid*="next" i]','[data-testid*="prev" i]',
+      '.next','.prev','.previous','.pagination-next','.pagination-prev',
+      '.Pagination-module__next','.Pagination-module__prev'
+    ];
+    removeSelectors.forEach(sel => root.querySelectorAll(sel).forEach(kill));
+    root.querySelectorAll('a,button,[role="button"]').forEach(el => {
+      const t = (el.textContent || "").trim().toLowerCase();
+      if (/(^|\b)(next|previous|prev|berikut|sebelumnya)(\b|$)/i.test(t)) kill(el);
+    });
+
+    // 2) tiga + satu class yang diminta
+    [
+      ".css-1j1yph6.ep2axm60",
+      ".CourseFooter-module__container--ODkSx",
+      ".CourseNode-module__toggleProgress--lJqih",
+      ".CourseNodeHeader-module__col--n5QDr"
+    ].forEach(sel => root.querySelectorAll(sel).forEach(kill));
+  };
+
+  // Ubah semua <img> di root menjadi data URI (untuk mode offline)
+  const inlineImagesInDom = async (root) => {
+    const imgs = Array.from(root.querySelectorAll("img"));
+    for (const img of imgs) {
+      // buang srcset/sizes agar browser tidak refetch
+      img.removeAttribute("srcset");
+      img.removeAttribute("sizes");
+      const src = img.getAttribute("src");
+      if (!src || src.startsWith("data:")) continue;
+
+      const abs = absolutize(src, location.href);
+      try {
+        const blob = await fetchAsBlob(abs);
+        const data = await blobToDataURL(blob);
+        img.setAttribute("src", data);
+      } catch {
+        // kalau gagal (CORS/404), biarkan src aslinya sebagai fallback
+      }
+      await sleep(0);
+    }
+  };
+
+  // Ambil elemen target & buat wrapper hasil
+  const buildWrapper = () => {
+    const container = document.querySelector(".CourseNode-module__container--ZjeFP");
+    if (!container) {
+      alert("Elemen .CourseNode-module__container--ZjeFP tidak ditemukan.");
+      return null;
+    }
+    const clone = container.cloneNode(true);
+    stripPrevNextAndExtras(clone);
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "__exportWrapper";
+    wrapper.appendChild(clone);
+    return wrapper;
+  };
+
+  // Kumpulkan HEAD (biarkan semua link/script apa adanya; inline <style> tetap <style>)
+  const gatherHeadMinimal = () => {
+    let headBits = [
+      '<meta charset="utf-8">',
+      '<meta name="viewport" content="width=device-width, initial-scale=1">'
+    ];
+    // Keep existing stylesheets and inline styles
+    document.querySelectorAll('link[rel="stylesheet"]').forEach(l => {
+      if (l.href) headBits.push(`<link rel="stylesheet" href="${l.href}">`);
+    });
+    document.querySelectorAll("style").forEach(s => {
+      headBits.push(`<style>${s.innerHTML}</style>`);
+    });
+    // Keep existing head scripts as external links if src, else keep inline
+    document.querySelectorAll("head script").forEach(scr => {
+      if (scr.src) headBits.push(`<script src="${scr.src}"></script>`);
+      else if (scr.innerHTML.trim()) headBits.push(`<script>${scr.innerHTML}</script>`);
+    });
+    // Sedikit gaya supaya rapi
+    headBits.push(`<style>
+      :root { --font-ui: "Open Sans", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+      html, body { margin:0; padding:0; font-family: var(--font-ui); }
+      .__exportWrapper { padding: 16px; }
+      img { max-width: 100%; height: auto; }
+    </style>`);
+    return headBits.join("\n");
+  };
+
+  const downloadHtml = (fname, headHtml, bodyHtml) => {
+    const doc =
+      "<!DOCTYPE html><html><head>" +
+      `<title>${escapeHtml(fname)}</title>` +
+      headHtml +
+      `</head><body>${bodyHtml}</body></html>`;
+    const blob = new Blob([doc], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${fname}.html`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1200);
+  };
+
+  const getFilename = () => {
+    const titleEl = document.querySelector(".CourseNodeHeader-module__courseTitleHeadingTwo--RL41B");
+    let fname = (titleEl?.textContent || "course-section").trim();
+    fname = fname.replace(/[\\\/:*?"<>|]+/g, "").replace(/\s+/g, " ").slice(0, 120) || "course-section";
+    return fname;
+  };
+
+  // ---------- Buttons ----------
+  const makeBtn = (id, label, rightPx) => {
+    const b = document.createElement("button");
+    b.id = id;
+    b.textContent = label;
+    Object.assign(b.style, {
+      position: "fixed",
+      right: rightPx,
+      bottom: "20px",
+      zIndex: 2147483647,
+      padding: "10px 14px",
+      fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
+      fontSize: "14px",
+      borderRadius: "10px",
+      border: "1px solid #ccc",
+      background: "#fff",
+      cursor: "pointer",
+      boxShadow: "0 4px 14px rgba(0,0,0,.15)",
+      marginLeft: "8px"
+    });
+    return b;
+  };
+
+  const btnSave = makeBtn(ID_SAVE, "Save", "120px");
+  const btnOffline = makeBtn(ID_OFF, "Save Offline", "20px");
+
+  // --- Save (semua link dibiarkan) ---
+  btnSave.onclick = () => {
+    const wrapper = buildWrapper();
+    if (!wrapper) return;
+    const headHtml = gatherHeadMinimal();      // semua link/script tetap link
+    const fname = getFilename();
+    downloadHtml(fname, headHtml, wrapper.outerHTML);
+  };
+
+  // --- Save Offline (gambar jadi data URI; CSS/JS/font tetap link) ---
+  btnOffline.onclick = async () => {
+    try {
+      btnOffline.disabled = true;
+      btnOffline.textContent = "Processing…";
+      const wrapper = buildWrapper();
+      if (!wrapper) return;
+      await inlineImagesInDom(wrapper);        // hanya gambar yang di-inline
+      const headHtml = gatherHeadMinimal();    // link/script tetap link
+      const fname = getFilename();
+      downloadHtml(fname + " (offline-images)", headHtml, wrapper.outerHTML);
+      btnOffline.textContent = "Saved ✓";
+    } catch (e) {
+      console.error(e);
+      alert("Gagal membuat versi offline (gambar). Lihat Console untuk detail.");
+      btnOffline.textContent = "Save Offline";
+    } finally {
+      btnOffline.disabled = false;
+    }
+  };
+
+  document.body.appendChild(btnSave);
+  document.body.appendChild(btnOffline);
+})();
