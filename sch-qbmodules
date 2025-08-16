@@ -2,10 +2,7 @@
   /***********************
    * CONFIG & UTILITIES  *
    ***********************/
-  const CONFIG = {
-    MIN_WAIT_MS: 300,          // jeda minimal setelah klik Next
-    LOAD_TIMEOUT_MS: 10000     // batas tunggu perubahan pertanyaan
-  };
+  const CONFIG = { MIN_WAIT_MS: 300, LOAD_TIMEOUT_MS: 10000 };
   const sleep = (ms) => new Promise(res => setTimeout(res, ms));
   async function waitFor(predicate, timeoutMs = CONFIG.LOAD_TIMEOUT_MS, interval = 120) {
     const start = performance.now();
@@ -13,17 +10,16 @@
       try { const v = await predicate(); if (v) return v; } catch(e) {}
       await sleep(interval);
     }
-    return null; // jangan throw; cukup null agar loop bisa memutus
+    return null;
   }
-  const $ = (sel, root=document) => root.querySelector(sel);
+  const $    = (sel, root=document) => root.querySelector(sel);
   const $all = (sel, root=document) => Array.from(root.querySelectorAll(sel));
-  const esc = (s) => s ? s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])) : '';
+  const esc  = (s) => s ? s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])) : '';
 
   /***********************
-   * TITLE EXTRACTION    *
+   * TITLE (SHORT)       *
    ***********************/
   function pickText(el){ return el ? (el.textContent || el.innerText || '').trim() : ''; }
-
   function getFullCourseTitleImmediate() {
     const el =
       $('h1.CourseNodeHeader-module__courseTitleHeadingTwo--RL41B[data-test-id="course-module-name"]') ||
@@ -31,10 +27,8 @@
       $('h1[class*="courseTitleHeadingTwo"]') ||
       $('[class*="CourseNodeHeader-module__wrapper"] h1') ||
       $('h1');
-    const txt = pickText(el);
-    return txt || 'Quiz';
+    return pickText(el) || 'Quiz';
   }
-
   async function getFullCourseTitle() {
     const now = getFullCourseTitleImmediate();
     if (now !== 'Quiz') return now;
@@ -46,161 +40,178 @@
     , 2000, 120);
     return el ? pickText(el) : 'Quiz';
   }
-
   function toShortModuleTitle(fullTitle) {
-    // Contoh: "Module 1.1: Interest Rates and Return Measurement Quiz"
-    // -> Ambil "Module 1.1" lalu tambahkan " Quiz"
-    // 1) Cari pola Module X[.Y[.Z...]]
     const m = fullTitle.match(/(Module\s+\d+(?:\.\d+)*)(?::|$)/i);
     if (m) return `${m[1]} Quiz`;
-    // 2) Fallback: ambil sebelum ":" + kata "Quiz"
     const beforeColon = fullTitle.split(':')[0].trim();
     if (/Module/i.test(beforeColon)) return `${beforeColon} Quiz`;
-    // 3) Fallback terakhir
     return 'Quiz';
   }
 
-  /*************************
-   * EXTRACT FROM CURRENT  *
-   *************************/
-  function getCurrentQuestionWrapper(){ return $('[data-id="question-content"]'); }
-  function getCurrentQuestionId(){
-    const wrap = getCurrentQuestionWrapper(); if (!wrap) return null;
-    const withId = wrap.closest('[id^="question_"]') || wrap; return withId.id || null;
+  /***********************
+   * HELPERS (NUMBERS)   *
+   ***********************/
+  function parseQNumFromIndexText(s){
+    if (!s) return null;
+    const m = s.match(/Question(?:\s*#)?\s*(\d+)/i); // "Question 3 of 7" | "Question #2-4"
+    return m ? parseInt(m[1],10) : null;
   }
-  function getQuestionIndexText(){
-    const h = $('[data-test-id="attempt-review-question-index"], .ReviewHeader-module__questionIndex--Arxul, h1[data-test-id="attempt-review-question-index"]');
-    return h ? h.innerText.trim() : null; // e.g. "Question 2"
-  }
-  function getCurrentQuestionNumber(){
-    const t = getQuestionIndexText(); if (!t) return null;
-    const m = t.match(/Question\s+(\d+)/i); return m ? parseInt(m[1],10) : null;
-  }
-  function extractQuestionText(){
-    const wrap = getCurrentQuestionWrapper(); if (!wrap) return {html:'',text:''};
-    const qEl = $('.QuestionBody-module__questionText--mVV91, [class*="QuestionBody-module__questionText"]', wrap) || wrap;
-    return { html: qEl.innerHTML, text: qEl.innerText.trim() };
-  }
-  function extractChoices(){
-    const group = $('[role="radiogroup"]') || document;
-    const blocks = $all('[data-id="question-body-container"]', group);
-    const makeChoice = (container, idx) => {
-      const letterEl = $('[class*="alphaOrdinal"]', container);
-      const textEl = $('[class*="optionText"]', container) || container;
-      const correctImg = $('img[alt="Correct Answer"]', container);
-      const letter = (letterEl ? letterEl.innerText : String.fromCharCode(65 + idx)).replace(/[)\.]/g,'').trim();
-      return { letter, text: (textEl.innerText||'').trim(), isCorrect: !!correctImg };
-    };
-    if (blocks.length) return blocks.map(makeChoice);
-    const labels = $all('label[class*="e1bppr3n2"], label', group);
-    return labels.map(makeChoice);
-  }
-  function extractExplanation(){
-    // Pertahankan label <b>Explanation</b> bila ada
-    const expWrap = $('[id^="question-explanation-"]') || $('section:has(> b), section');
-    if (!expWrap) return { html: '', text: '' , hadLabel:false};
-    const clone = expWrap.cloneNode(true);
-    const hadLabel = !!$('b', clone);
-    return { html: clone.innerHTML.trim(), text: clone.innerText.trim(), hadLabel };
-  }
-  function getNextButton(){ return $('[data-test-id="attempt-review-footer-nextattempt"], button[class*="__nextbtn"]'); }
   function getNextAriaNumber(){
-    const btn = getNextButton(); if (!btn) return null;
+    const btn = $('[data-test-id="attempt-review-footer-nextattempt"], button[class*="__nextbtn"]');
+    if (!btn) return null;
     const aria = btn.getAttribute('aria-label') || '';
     const m = aria.match(/Next item question #(\d+)/i);
     return m ? parseInt(m[1],10) : null;
   }
-
-  // Ambil total soal dari tabel navigasi review
   function getTotalQuestionsFromNav(){
     const table = $('table[data-test-id="exam-review-results"]');
     if (!table) return null;
-    // Baris soal memiliki data-test-id="exam-review-answer" dan id "exam-review-table-row-N"
     const rows = $all('tbody tr[data-test-id="exam-review-answer"]', table);
-    if (rows.length > 0) return rows.length;
-    // Fallback: hitung berdasarkan id row-*
+    if (rows.length) return rows.length;
     const rowsById = $all('tbody tr[id^="exam-review-table-row-"]', table);
-    if (rowsById.length > 0) return rowsById.length;
-    // Fallback: ambil angka terbesar yang terlihat pada kolom pertama
-    const nums = $all('tbody tr td:first-child span', table).map(s => parseInt((s.textContent||'').trim(), 10)).filter(n => Number.isFinite(n));
-    if (nums.length) return Math.max(...nums);
-    return null;
+    if (rowsById.length) return rowsById.length;
+    const nums = $all('tbody tr td:first-child span', table)
+      .map(s => parseInt((s.textContent||'').trim(),10)).filter(n => Number.isFinite(n));
+    return nums.length ? Math.max(...nums) : null;
   }
 
-  async function waitForQuestionChange(prevId){
-    await sleep(CONFIG.MIN_WAIT_MS);
-    const changed = await waitFor(() => {
-      const id = getCurrentQuestionId();
-      return id && id !== prevId ? id : null;
-    }, CONFIG.LOAD_TIMEOUT_MS, 120);
-    return changed;
-  }
+  /***********************
+   * SINGLE Q EXTRACT    *
+   ***********************/
+  function extractFromContainer(root, readingHTML) {
+    const content = $('[data-id="question-content"]', root) || root;
+    const idxEl = $('.QuestionBody-module__questionOrder--kNol4,[class*="questionOrder"]', root);
+    const indexText = idxEl ? idxEl.innerText.trim() :
+                     ($('[data-test-id="attempt-review-question-index"]')?.innerText.trim() || null);
 
-  function buildRecord(){
-    const wrap = getCurrentQuestionWrapper(); if (!wrap) return null;
-    const qId = getCurrentQuestionId();
-    const qIndex = getQuestionIndexText();
-    const qText = extractQuestionText();
-    const choices = extractChoices();
-    const explanation = extractExplanation();
+    const qEl = $('.QuestionBody-module__questionText--mVV91,[class*="QuestionBody-module__questionText"]', root) || content;
+    const questionHTML = qEl.innerHTML;
+    const questionText = qEl.innerText.trim();
+
+    const group = $('[role="radiogroup"]', root) || root;
+    const blocks = $all('[data-id="question-body-container"]', group);
+    const makeChoice = (container, idx) => {
+      const letterEl  = $('[class*="alphaOrdinal"]', container);
+      const textEl    = $('[class*="optionText"]', container) || container;
+      const correctImg= $('img[alt="Correct Answer"]', container);
+      const letter = (letterEl ? letterEl.innerText : String.fromCharCode(65 + idx)).replace(/[)\.]/g,'').trim();
+      return { letter, text: (textEl.innerText||'').trim(), isCorrect: !!correctImg };
+    };
+    const choices = blocks.length
+      ? blocks.map(makeChoice)
+      : $all('label[class*="e1bppr3n2"], label', group).map(makeChoice);
+
+    const expWrap = $('[id^="question-explanation-"]', root) || $('section:has(> b), section', root);
+    let explanationHTML = '', explanationText = '', explanationHasLabel = false;
+    if (expWrap) {
+      const clone = expWrap.cloneNode(true);
+      explanationHasLabel = !!$('b', clone);
+      explanationHTML = clone.innerHTML.trim();
+      explanationText = clone.innerText.trim();
+    }
+
+    const idEl = content.closest('[id^="question_"]') || content;
+    const qId = idEl.id || null;
+
     const correct = choices.find(c => c.isCorrect) || null;
+
     return {
       id: qId,
-      indexText: qIndex,
-      questionHTML: qText.html,
-      questionText: qText.text,
+      indexText,
+      questionHTML,
+      questionText,
       choices,
       correct,
-      explanationHTML: explanation.html,
-      explanationText: explanation.text,
-      explanationHasLabel: explanation.hadLabel
+      explanationHTML,
+      explanationText,
+      explanationHasLabel,
+      readingHTML: readingHTML || null
     };
   }
 
+  /*******************************
+   * PAGE EXTRACT (WITH READING) *
+   *******************************/
+  function collectAllQuestionsOnPage(){
+    const results = [];
+    const setContainer = $('.AttemptReview-module__questionSetContainer--k2LgH') ||
+                         $('[data-question-target="overview"]')?.closest('.AttemptReview-module__questionSetContainer--k2LgH');
+
+    if (setContainer) {
+      const readingEl = $('.QuestionSet-module__questionText--e_VDw[data-question-target="overview"]', setContainer);
+      const readingHTML = readingEl ? readingEl.innerHTML : null;
+
+      const qBodies = $all('.QuestionSet-module__questionSetBodyContainer--N7Atb', setContainer)
+        .map(span => $('.QuestionBody-module__questionContainer--wi5XU', span) || span)
+        .filter(Boolean);
+
+      qBodies.forEach(root => { results.push(extractFromContainer(root, readingHTML)); });
+      return { records: results, pageMaxQNum: getMaxQNumFromRecords(results) };
+    }
+
+    const wrap = $('[data-id="question-content"]');
+    if (wrap) {
+      const rec = extractFromContainer(wrap, null);
+      return { records: [rec], pageMaxQNum: parseQNumFromIndexText(rec.indexText) || null };
+    }
+
+    return { records: [], pageMaxQNum: null };
+  }
+
+  function getMaxQNumFromRecords(recs){
+    let max = null;
+    recs.forEach(r => {
+      const n = parseQNumFromIndexText(r.indexText);
+      if (Number.isFinite(n)) max = max == null ? n : Math.max(max, n);
+    });
+    return max;
+  }
+
   /**********************
-   * CAPTURE EVERYTHING *
+   * FLOW: CAPTURE ALL  *
    **********************/
   async function captureAll() {
-    // pastikan satu soal terlihat
-    await waitFor(() => getCurrentQuestionWrapper());
-    let currId = getCurrentQuestionId();
-    if (!currId) throw new Error('Cannot locate current question');
+    await waitFor(() => $('[data-id="question-content"]') || $('.AttemptReview-module__questionSetContainer--k2LgH'));
+    let prevFirstId = ($('[data-id="question-content"]')?.closest('[id^="question_"]') || $('[data-id="question-content"]'))?.id || null;
 
-    const totalFromNav = getTotalQuestionsFromNav(); // bisa null kalau tabel tidak ada
-    const records = [];
+    const totalFromNav = getTotalQuestionsFromNav();
+    const all = [];
     const seen = new Set();
 
     while (true) {
-      if (!seen.has(currId)) {
-        const rec = buildRecord();
-        if (rec) { records.push(rec); seen.add(currId); }
+      const { records: pageRecs, pageMaxQNum } = collectAllQuestionsOnPage();
+
+      for (const rec of pageRecs) {
+        const key = rec.id || (rec.indexText + '|' + rec.questionText.slice(0,40));
+        if (!seen.has(key)) { seen.add(key); all.push(rec); }
       }
 
-      // stop jika sudah di soal terakhir (berdasarkan navigasi)
-      const currNum = getCurrentQuestionNumber();
-      const nextNum = getNextAriaNumber();
-      if (totalFromNav && currNum && currNum >= totalFromNav) break;
+      if (totalFromNav && pageMaxQNum && pageMaxQNum >= totalFromNav) break;
 
-      const nextBtn = getNextButton();
+      const nextBtn = $('[data-test-id="attempt-review-footer-nextattempt"], button[class*="__nextbtn"]');
       if (!nextBtn || nextBtn.disabled) break;
 
-      // klik Next hanya kalau menuju soal berikutnya DAN tidak melebihi totalFromNav
-      if (currNum != null && nextNum != null) {
-        if (!(nextNum === currNum + 1)) break;
+      const nextNum = getNextAriaNumber();
+      if (pageMaxQNum != null && nextNum != null) {
+        if (nextNum !== pageMaxQNum + 1) break;
         if (totalFromNav && nextNum > totalFromNav) break;
       }
 
       nextBtn.click();
-      const newId = await waitForQuestionChange(currId);
-      if (!newId) break; // tidak berubah -> stop
-      currId = newId;
+
+      const changed = await waitFor(() => {
+        const nowId = ($('[data-id="question-content"]')?.closest('[id^="question_"]') || $('[data-id="question-content"]'))?.id || null;
+        return (nowId && nowId !== prevFirstId) ? nowId : null;
+      }, CONFIG.LOAD_TIMEOUT_MS, 120);
+      if (!changed) break;
+      prevFirstId = changed;
     }
 
-    return records;
+    return all;
   }
 
   /**********************
-   * OPEN TWO CLEAN TABS*
+   * RENDER 2 WINDOWS   *
    **********************/
   function baseHeadHTML(titleText){
     return `
@@ -211,11 +222,22 @@
 <link href="https://fonts.googleapis.com/css?family=Open+Sans:300,400,600,700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.9.0-alpha1/katex.min.css">
 <style>
-  :root { --qc-maxw: 900px; --qc-pad: 16px; --qc-gray: #f3f4f6; }
+  :root { --qc-maxw: 900px; --qc-pad: 16px; --qc-gray: #f3f4f6; --qc-reading:#f9fafb; }
   html, body { background:#fff; }
   body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding:24px; }
   .qc-container { margin: 0 auto; max-width: var(--qc-maxw); }
   .qc-title { font-size:20px; font-weight:700; margin:0 0 12px; }
+
+  /* READING: tanpa judul.
+     HANYA .qc-reading.qc-break yang forced page-break (bukan semua reading) */
+  .qc-reading { padding:12px; background: var(--qc-reading); border:1px solid #e5e7eb; border-radius:8px; margin: 16px 0; }
+  .qc-breakMarker { height:0; border:none; margin:0; }
+  @media print {
+    .qc-reading.qc-break { page-break-before: always; break-before: page; }
+    .qc-item { page-break-inside: avoid; break-inside: avoid; }
+    body { padding:0 20px; }
+  }
+
   .qc-item { padding:12px 8px; margin-bottom:12px; border-radius:8px; border:1px solid #f0f0f0; background:#fff; break-inside: avoid; page-break-inside: avoid; }
   .qc-item h3 { margin:0 0 6px; font-size:16px; font-weight:700; }
   .qc-stem { margin:4px 0 10px; line-height:1.5; }
@@ -225,90 +247,76 @@
   .qc-correct .qc-text { font-weight:700; }
   .qc-tick { font-weight:700; margin-left:6px; }
   .qc-answer-block { border-top:1px dashed #e5e7eb; margin-top:10px; padding:10px; background: var(--qc-gray); border-radius:8px; }
-  @media print {
-    body { padding:0 20px; }
-    .qc-item { page-break-inside: avoid; break-inside: avoid; }
-  }
 </style>`;
   }
 
-  function openQuestionsTab(records, title){
-    const win = window.open('', '_blank');
-    if (!win){ alert('Popup diblokir. Izinkan pop-up untuk situs ini.'); return; }
-    const doc = win.document;
-    const bodyHTML =
-`<div class="qc-container">
-  <h1 class="qc-title">${esc(title)}</h1>
-  ${records.map((rec, i) =>
-    `<article class="qc-item" data-qid="${esc(rec.id || ('q-'+(i+1)))}">
-      <h3>${esc(rec.indexText || `Question ${i+1}`)}</h3>
-      <div class="qc-stem">${rec.questionHTML || esc(rec.questionText)}</div>
-      <ul class="qc-choices">
-        ${rec.choices.map(ch =>
-          `<li class="qc-choice">
-            <span class="qc-letter">${esc(ch.letter)})</span>
-            <span class="qc-text">${esc(ch.text)}</span>
-          </li>`
-        ).join('')}
-      </ul>
-    </article>`
-  ).join('')}
-</div>`;
-    doc.open();
-    doc.write(`<!doctype html><html><head>${baseHeadHTML(title)}</head><body>${bodyHTML}</body></html>`);
-    doc.close();
+  function renderListHTML(records, title, mode){
+    // mode: 'Q' => Questions, 'A' => Answers
+    let html = `<div class="qc-container"><h1 class="qc-title">${esc(title)}</h1>`;
+    let lastReadingKey = null;
+    let firstBlock = true; // untuk menghindari break di reading pertama (misal terkait Q1)
+
+    records.forEach((rec, i) => {
+      // tampilkan reading jika berubah; break hanya kalau BUKAN konten pertama
+      if (rec.readingHTML && rec.readingHTML !== lastReadingKey) {
+        const readingClass = firstBlock ? 'qc-reading' : 'qc-reading qc-break';
+        html += `${firstBlock ? '' : '<hr class="qc-breakMarker">'}<section class="${readingClass}">${rec.readingHTML}</section>`;
+        lastReadingKey = rec.readingHTML;
+        firstBlock = false;
+      }
+
+      // question block
+      html += `
+      <article class="qc-item" data-qid="${esc(rec.id || ('q-'+(i+1)))}">
+        <h3>${esc(rec.indexText || `Question ${i+1}`)}</h3>
+        <div class="qc-stem">${rec.questionHTML || esc(rec.questionText)}</div>
+        <ul class="qc-choices">
+          ${rec.choices.map(ch => {
+            const base = `<span class="qc-letter">${esc(ch.letter)})</span><span class="qc-text">${esc(ch.text)}</span>`;
+            if (mode === 'A') {
+              return `<li class="qc-choice ${ch.isCorrect ? 'qc-correct' : ''}">${base}${ch.isCorrect ? `<span class="qc-tick">✓</span>` : ``}</li>`;
+            } else {
+              return `<li class="qc-choice">${base}</li>`;
+            }
+          }).join('')}
+        </ul>
+        ${
+          mode === 'A'
+          ? `<div class="qc-answer-block">${
+              rec.explanationHTML
+              ? (rec.explanationHasLabel ? `<div class="qc-expl">${rec.explanationHTML}</div>`
+                                          : `<div class="qc-expl"><b>Explanation:</b> ${rec.explanationHTML}</div>`)
+              : `<div class="qc-expl"><b>Explanation:</b> <em>No explanation found.</em></div>`
+            }</div>`
+          : ``
+        }
+      </article>`;
+      firstBlock = false;
+    });
+
+    html += `</div>`;
+    return html;
   }
 
-  function openAnswersTab(records, title){
+  function openTabWith(title, bodyHTML){
     const win = window.open('', '_blank');
     if (!win){ alert('Popup diblokir. Izinkan pop-up untuk situs ini.'); return; }
     const doc = win.document;
-    const bodyHTML =
-`<div class="qc-container">
-  <h1 class="qc-title">${esc(title)}</h1>
-  ${records.map((rec, i) =>
-    `<article class="qc-item" data-qid="${esc(rec.id || ('q-'+(i+1)))}">
-      <h3>${esc(rec.indexText || `Question ${i+1}`)}</h3>
-      <div class="qc-stem">${rec.questionHTML || esc(rec.questionText)}</div>
-
-      <ul class="qc-choices">
-        ${rec.choices.map(ch =>
-          `<li class="qc-choice ${ch.isCorrect ? 'qc-correct' : ''}">
-            <span class="qc-letter">${esc(ch.letter)})</span>
-            <span class="qc-text">${esc(ch.text)}</span>
-            ${ch.isCorrect ? `<span class="qc-tick">✓</span>` : ``}
-          </li>`
-        ).join('')}
-      </ul>
-
-      <div class="qc-answer-block">
-        ${
-          rec.explanationHTML
-          ? (
-              rec.explanationHasLabel
-              ? `<div class="qc-expl">${rec.explanationHTML}</div>`
-              : `<div class="qc-expl"><b>Explanation:</b> ${rec.explanationHTML}</div>`
-            )
-          : `<div class="qc-expl"><b>Explanation:</b> <em>No explanation found.</em></div>`
-        }
-      </div>
-    </article>`
-  ).join('')}
-</div>`;
     doc.open();
     doc.write(`<!doctype html><html><head>${baseHeadHTML(title)}</head><body>${bodyHTML}</body></html>`);
     doc.close();
   }
 
   /**********************
-   * MAIN FLOW
+   * MAIN
    **********************/
   (async () => {
-    const fullTitle = await getFullCourseTitle(); // contoh: "Module 1.1: Interest Rates and Return Measurement Quiz"
-    const shortTitle = toShortModuleTitle(fullTitle); // -> "Module 1.1 Quiz"
+    const fullTitle  = await getFullCourseTitle();
+    const shortTitle = toShortModuleTitle(fullTitle); // "Module X.Y Quiz"
     const records = await captureAll();
     if (!records || !records.length) { alert('Tidak ada pertanyaan yang tertangkap.'); return; }
-    openQuestionsTab(records, `${shortTitle} - Questions`);
-    openAnswersTab(records,  `${shortTitle} - Answers`);
+
+    openTabWith(`${shortTitle} - Questions`, renderListHTML(records, `${shortTitle} - Questions`, 'Q'));
+    openTabWith(`${shortTitle} - Answers`,  renderListHTML(records, `${shortTitle} - Answers`,  'A'));
   })().catch(err => { console.error(err); alert('Gagal memproses quiz: ' + err.message); });
 })();
