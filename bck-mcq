@@ -10,15 +10,30 @@
 
   window.fetch = async (url, options) => {
     const response = await originalFetch(url, options);
-    if (url.toString().endsWith('?details=content')) {
+    
+    // **PERBAIKAN**: Deteksi kedua endpoint
+    const urlString = url.toString();
+    const isContentDetails = urlString.includes('?details=content') && !urlString.includes('status');
+    const isContentStatusDetails = urlString.includes('?details=content%2Cstatus');
+    
+    if (isContentDetails || isContentStatusDetails) {
       if (!responsesToSave.has(url)) {
         const responseClone = response.clone();
         const responseBody = await responseClone.json().catch(() => {});
-        responsesToSave.set(url, { url, response: responseBody });
-        console.log('✅ Response captured for question:', responsesToSave.size);
+        
+        // Tambahkan info tipe endpoint
+        const endpointType = isContentStatusDetails ? 'content+status' : 'content';
+        responsesToSave.set(url, { 
+          url, 
+          response: responseBody, 
+          endpoint_type: endpointType,
+          captured_at: new Date().toISOString()
+        });
+        
+        console.log(`✅ Response captured (${endpointType}):`, responsesToSave.size);
         updateDownloadButton();
         
-        // **PERBAIKAN**: Restart automasi jika ada quiz baru dan automasi tidak sedang berjalan
+        // Restart automasi jika ada quiz baru dan automasi tidak sedang berjalan
         if (!automationRunning && !automationStopped) {
           console.log('🔄 New quiz detected, restarting automation...');
           restartAutomation();
@@ -31,6 +46,7 @@
   };
 
   console.log('🚀 Automated quiz capture started!');
+  console.log('🎯 Monitoring endpoints: ?details=content and ?details=content%2Cstatus');
 
   async function clickNext() {
     let nextButton = null;
@@ -97,7 +113,15 @@
       alert('No responses captured yet!');
       return;
     }
+    
     const responsesArray = Array.from(responsesToSave.values());
+    
+    // **FITUR TAMBAHAN**: Tampilkan summary tipe endpoint
+    const contentOnly = responsesArray.filter(r => r.endpoint_type === 'content').length;
+    const contentStatus = responsesArray.filter(r => r.endpoint_type === 'content+status').length;
+    
+    console.log(`📊 Summary: ${contentOnly} content-only, ${contentStatus} content+status responses`);
+    
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(responsesArray, null, 2));
     const downloadAnchorNode = document.createElement('a');
     downloadAnchorNode.setAttribute("href", dataStr);
@@ -105,14 +129,14 @@
     document.body.appendChild(downloadAnchorNode);
     downloadAnchorNode.click();
     downloadAnchorNode.remove();
+    
     console.log('💾 All quiz responses downloaded!');
     console.log('📊 Total questions captured:', responsesToSave.size);
-    alert(`Downloaded ${responsesToSave.size} responses!`);
+    alert(`Downloaded ${responsesToSave.size} responses!\n${contentOnly} content-only, ${contentStatus} content+status`);
     
-    // **PERBAIKAN**: Reset untuk quiz berikutnya
     responsesToSave.clear();
     updateDownloadButton();
-    automationStopped = false; // Reset flag agar bisa restart otomatis
+    automationStopped = false;
   }
 
   function createDownloadButton() {
@@ -167,9 +191,8 @@
     }
   }
 
-  // **PERBAIKAN**: Function untuk restart automasi
   async function restartAutomation() {
-    if (automationRunning) return; // Cegah multiple instances
+    if (automationRunning) return;
     
     automationRunning = true;
     console.log('🔄 Automation restarted!');
@@ -206,7 +229,6 @@
     automationRunning = false;
   }
 
-  // **PERBAIHAN**: Function initial untuk pertama kali
   async function runAutomation() {
     console.log('⏳ Waiting for first question to load...');
     createDownloadButton();
@@ -219,10 +241,8 @@
     restartAutomation();
   }
 
-  // Jalankan automasi pertama kali
   runAutomation();
 
-  // **PERBAIKAN**: Manual functions yang diperbaiki
   window.downloadResponses = downloadAllResponses;
   window.stopAutomation = () => {
     automationStopped = true;
@@ -230,7 +250,6 @@
     console.log('💾 Download responses manually using the button');
   };
   
-  // **FITUR BARU**: Manual restart
   window.restartAutomation = () => {
     automationStopped = false;
     if (!automationRunning) {
@@ -241,6 +260,18 @@
     }
   };
 
+  // **FITUR TAMBAHAN**: Debug function untuk melihat apa yang tertangkap
+  window.showCapturedResponses = () => {
+    const responses = Array.from(responsesToSave.values());
+    console.table(responses.map(r => ({
+      endpoint_type: r.endpoint_type,
+      url: r.url,
+      captured_at: r.captured_at
+    })));
+    return responses;
+  };
+
   console.log('💡 Download button available at bottom-right corner!');
   console.log('💡 Functions: window.downloadResponses(), window.stopAutomation(), window.restartAutomation()');
+  console.log('💡 Debug: window.showCapturedResponses()');
 })();
