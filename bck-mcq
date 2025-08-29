@@ -1,0 +1,212 @@
+(async () => {
+  const originalFetch = window.fetch;
+  let responsesToSave = new Map();
+
+  function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  window.fetch = async (url, options) => {
+    const response = await originalFetch(url, options);
+    if (url.toString().endsWith('?details=content')) {
+      if (!responsesToSave.has(url)) {
+        const responseClone = response.clone();
+        const responseBody = await responseClone.json().catch(() => {});
+        responsesToSave.set(url, { url, response: responseBody });
+        console.log('✅ Response captured for question:', responsesToSave.size);
+        updateDownloadButton(); // Update counter di button
+      } else {
+        console.log('Duplicate URL detected, skipping:', url);
+      }
+    }
+    return response;
+  };
+
+  console.log('🚀 Automated quiz capture started!');
+
+  // Function untuk mencari dan klik next button
+  async function clickNext() {
+    let nextButton = null;
+    
+    nextButton = document.querySelector('button[data-qa-label*="next"]');
+    
+    if (!nextButton) {
+      nextButton = Array.from(document.querySelectorAll('button')).find(btn => 
+        btn.textContent.trim().toLowerCase().includes('next')
+      );
+    }
+    
+    if (!nextButton) {
+      nextButton = Array.from(document.querySelectorAll('button[aria-label]')).find(btn => 
+        btn.getAttribute('aria-label').toLowerCase().includes('next')
+      );
+    }
+    
+    if (!nextButton) {
+      nextButton = document.querySelector('button[class*="next"]');
+    }
+    
+    if (!nextButton) {
+      nextButton = document.querySelector('button[id*="next"]');
+    }
+    
+    if (!nextButton) {
+      const allButtons = Array.from(document.querySelectorAll('button'));
+      const navigationButtons = allButtons.filter(btn => {
+        const text = btn.textContent.toLowerCase();
+        const ariaLabel = btn.getAttribute('aria-label')?.toLowerCase() || '';
+        return text.includes('next') || ariaLabel.includes('next') || 
+               text === '>' || text === '→' || text === 'lanjut';
+      });
+      
+      if (navigationButtons.length > 0) {
+        nextButton = navigationButtons[navigationButtons.length - 1];
+      }
+    }
+    
+    if (!nextButton) {
+      const navContainer = document.querySelector('.navigation, .quiz-navigation, .buttons, .controls');
+      if (navContainer) {
+        const buttons = navContainer.querySelectorAll('button');
+        if (buttons.length > 1) {
+          nextButton = buttons[buttons.length - 1];
+        }
+      }
+    }
+    
+    if (nextButton && !nextButton.disabled && nextButton.offsetParent !== null) {
+      console.log('🖱️ Next button found and clicked:', nextButton.textContent || nextButton.getAttribute('aria-label'));
+      nextButton.click();
+      return true;
+    } else {
+      console.log('❌ No valid next button found. Please navigate manually and use download button.');
+      return false;
+    }
+  }
+
+  function downloadAllResponses() {
+    if (responsesToSave.size === 0) {
+      console.warn('❌ No responses captured yet.');
+      alert('No responses captured yet!');
+      return;
+    }
+    const responsesArray = Array.from(responsesToSave.values());
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(responsesArray, null, 2));
+    const downloadAnchorNode = document.createElement('a');
+    downloadAnchorNode.setAttribute("href", dataStr);
+    downloadAnchorNode.setAttribute("download", "quiz_responses.json");
+    document.body.appendChild(downloadAnchorNode);
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
+    console.log('💾 All quiz responses downloaded!');
+    console.log('📊 Total questions captured:', responsesToSave.size);
+    alert(`Downloaded ${responsesToSave.size} responses!`);
+    responsesToSave.clear();
+    updateDownloadButton();
+  }
+
+  // Buat tombol download yang selalu terlihat
+  function createDownloadButton() {
+    if (document.getElementById('downloadResponsesButton')) return; // Cegah duplikat
+    
+    const btn = document.createElement('button');
+    btn.id = 'downloadResponsesButton';
+    btn.textContent = 'Download Responses (0)';
+    btn.style.position = 'fixed';
+    btn.style.bottom = '20px';
+    btn.style.right = '20px';
+    btn.style.zIndex = '10000';
+    btn.style.padding = '12px 16px';
+    btn.style.backgroundColor = '#4CAF50';
+    btn.style.color = 'white';
+    btn.style.border = 'none';
+    btn.style.borderRadius = '8px';
+    btn.style.cursor = 'pointer';
+    btn.style.boxShadow = '0 4px 8px rgba(0,0,0,0.3)';
+    btn.style.fontSize = '14px';
+    btn.style.fontWeight = 'bold';
+    btn.style.transition = 'all 0.3s ease';
+
+    // Hover effect
+    btn.onmouseenter = () => {
+      btn.style.backgroundColor = '#45a049';
+      btn.style.transform = 'scale(1.05)';
+    };
+    
+    btn.onmouseleave = () => {
+      btn.style.backgroundColor = '#4CAF50';
+      btn.style.transform = 'scale(1)';
+    };
+
+    btn.onclick = () => {
+      downloadAllResponses();
+    };
+    
+    document.body.appendChild(btn);
+    console.log('📥 Download button created at bottom-right corner');
+  }
+
+  // Update counter di button
+  function updateDownloadButton() {
+    const btn = document.getElementById('downloadResponsesButton');
+    if (btn) {
+      btn.textContent = `Download Responses (${responsesToSave.size})`;
+      
+      // Ubah warna berdasarkan jumlah response
+      if (responsesToSave.size > 0) {
+        btn.style.backgroundColor = '#4CAF50';
+      } else {
+        btn.style.backgroundColor = '#9E9E9E';
+      }
+    }
+  }
+
+  async function runAutomation() {
+    console.log('⏳ Waiting for first question to load...');
+    
+    // Buat button download sejak awal
+    createDownloadButton();
+    
+    while (responsesToSave.size === 0) {
+      await delay(1000);
+    }
+    
+    console.log('✅ First question detected, starting automation...');
+    
+    while (true) {
+      await delay(1000);
+      
+      const hasNext = await clickNext();
+      
+      if (!hasNext) {
+        console.log('⚠️ Next button not found - automation paused');
+        console.log('👆 Use the green download button or navigate manually');
+        break; // Keluar dari loop automation, tapi tetap capture
+      }
+      
+      const currentSize = responsesToSave.size;
+      let waitCount = 0;
+      
+      while (responsesToSave.size <= currentSize && waitCount < 20) {
+        await delay(250);
+        waitCount++;
+      }
+      
+      if (waitCount >= 20) {
+        console.log('⚠️ Timeout waiting for new question, continuing...');
+      }
+    }
+  }
+
+  runAutomation();
+
+  // Manual functions
+  window.downloadResponses = downloadAllResponses;
+  window.stopAutomation = () => {
+    console.log('🛑 Automation stopped by user');
+    console.log('💾 Download responses manually using the button or window.downloadResponses()');
+  };
+
+  console.log('💡 Download button available at bottom-right corner!');
+  console.log('💡 Manual functions: window.downloadResponses() or window.stopAutomation()');
+})();
