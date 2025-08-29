@@ -1,6 +1,8 @@
 (async () => {
   const originalFetch = window.fetch;
   let responsesToSave = new Map();
+  let automationRunning = false;
+  let automationStopped = false;
 
   function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -14,7 +16,13 @@
         const responseBody = await responseClone.json().catch(() => {});
         responsesToSave.set(url, { url, response: responseBody });
         console.log('✅ Response captured for question:', responsesToSave.size);
-        updateDownloadButton(); // Update counter di button
+        updateDownloadButton();
+        
+        // **PERBAIKAN**: Restart automasi jika ada quiz baru dan automasi tidak sedang berjalan
+        if (!automationRunning && !automationStopped) {
+          console.log('🔄 New quiz detected, restarting automation...');
+          restartAutomation();
+        }
       } else {
         console.log('Duplicate URL detected, skipping:', url);
       }
@@ -24,7 +32,6 @@
 
   console.log('🚀 Automated quiz capture started!');
 
-  // Function untuk mencari dan klik next button
   async function clickNext() {
     let nextButton = null;
     
@@ -79,7 +86,7 @@
       nextButton.click();
       return true;
     } else {
-      console.log('❌ No valid next button found. Please navigate manually and use download button.');
+      console.log('❌ No valid next button found.');
       return false;
     }
   }
@@ -101,13 +108,15 @@
     console.log('💾 All quiz responses downloaded!');
     console.log('📊 Total questions captured:', responsesToSave.size);
     alert(`Downloaded ${responsesToSave.size} responses!`);
+    
+    // **PERBAIKAN**: Reset untuk quiz berikutnya
     responsesToSave.clear();
     updateDownloadButton();
+    automationStopped = false; // Reset flag agar bisa restart otomatis
   }
 
-  // Buat tombol download yang selalu terlihat
   function createDownloadButton() {
-    if (document.getElementById('downloadResponsesButton')) return; // Cegah duplikat
+    if (document.getElementById('downloadResponsesButton')) return;
     
     const btn = document.createElement('button');
     btn.id = 'downloadResponsesButton';
@@ -126,8 +135,7 @@
     btn.style.fontSize = '14px';
     btn.style.fontWeight = 'bold';
     btn.style.transition = 'all 0.3s ease';
-
-    // Hover effect
+    
     btn.onmouseenter = () => {
       btn.style.backgroundColor = '#45a049';
       btn.style.transform = 'scale(1.05)';
@@ -137,7 +145,7 @@
       btn.style.backgroundColor = '#4CAF50';
       btn.style.transform = 'scale(1)';
     };
-
+    
     btn.onclick = () => {
       downloadAllResponses();
     };
@@ -146,13 +154,11 @@
     console.log('📥 Download button created at bottom-right corner');
   }
 
-  // Update counter di button
   function updateDownloadButton() {
     const btn = document.getElementById('downloadResponsesButton');
     if (btn) {
       btn.textContent = `Download Responses (${responsesToSave.size})`;
       
-      // Ubah warna berdasarkan jumlah response
       if (responsesToSave.size > 0) {
         btn.style.backgroundColor = '#4CAF50';
       } else {
@@ -161,27 +167,27 @@
     }
   }
 
-  async function runAutomation() {
-    console.log('⏳ Waiting for first question to load...');
+  // **PERBAIKAN**: Function untuk restart automasi
+  async function restartAutomation() {
+    if (automationRunning) return; // Cegah multiple instances
     
-    // Buat button download sejak awal
-    createDownloadButton();
-    
-    while (responsesToSave.size === 0) {
-      await delay(1000);
-    }
-    
-    console.log('✅ First question detected, starting automation...');
+    automationRunning = true;
+    console.log('🔄 Automation restarted!');
     
     while (true) {
       await delay(1000);
+      
+      if (automationStopped) {
+        console.log('🛑 Automation stopped by user');
+        break;
+      }
       
       const hasNext = await clickNext();
       
       if (!hasNext) {
         console.log('⚠️ Next button not found - automation paused');
-        console.log('👆 Use the green download button or navigate manually');
-        break; // Keluar dari loop automation, tapi tetap capture
+        console.log('👆 Use the green download button or start a new quiz');
+        break;
       }
       
       const currentSize = responsesToSave.size;
@@ -196,17 +202,45 @@
         console.log('⚠️ Timeout waiting for new question, continuing...');
       }
     }
+    
+    automationRunning = false;
   }
 
+  // **PERBAIHAN**: Function initial untuk pertama kali
+  async function runAutomation() {
+    console.log('⏳ Waiting for first question to load...');
+    createDownloadButton();
+    
+    while (responsesToSave.size === 0) {
+      await delay(1000);
+    }
+    
+    console.log('✅ First question detected, starting automation...');
+    restartAutomation();
+  }
+
+  // Jalankan automasi pertama kali
   runAutomation();
 
-  // Manual functions
+  // **PERBAIKAN**: Manual functions yang diperbaiki
   window.downloadResponses = downloadAllResponses;
   window.stopAutomation = () => {
+    automationStopped = true;
     console.log('🛑 Automation stopped by user');
-    console.log('💾 Download responses manually using the button or window.downloadResponses()');
+    console.log('💾 Download responses manually using the button');
+  };
+  
+  // **FITUR BARU**: Manual restart
+  window.restartAutomation = () => {
+    automationStopped = false;
+    if (!automationRunning) {
+      console.log('🔄 Manually restarting automation...');
+      restartAutomation();
+    } else {
+      console.log('⚠️ Automation already running');
+    }
   };
 
   console.log('💡 Download button available at bottom-right corner!');
-  console.log('💡 Manual functions: window.downloadResponses() or window.stopAutomation()');
+  console.log('💡 Functions: window.downloadResponses(), window.stopAutomation(), window.restartAutomation()');
 })();
