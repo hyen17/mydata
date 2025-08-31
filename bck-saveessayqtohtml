@@ -1,0 +1,95 @@
+// Script untuk mengekstrak konten dari iframe dengan tombol save permanen
+(function() {
+    // Cek apakah button sudah ada
+    if (document.getElementById('saveIframeButton')) {
+        return; // Jika sudah ada, keluar dari fungsi
+    }
+    
+    // Fungsi untuk mengekstrak konten iframe
+    function extractIframeContent() {
+        // Cari iframe yang berisi konten simulasi
+        const iframe = document.querySelector('iframe[srcdoc]');
+        
+        if (!iframe) {
+            alert('Iframe dengan konten tidak ditemukan');
+            return;
+        }
+        
+        // Ambil srcdoc content
+        let iframeContent = iframe.getAttribute('srcdoc');
+        
+        if (!iframeContent) {
+            alert('Konten iframe kosong');
+            return;
+        }
+        
+        // Decode HTML entities jika perlu
+        iframeContent = iframeContent
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&amp;/g, '&');
+        
+        // Buat blob dari konten HTML
+        const blob = new Blob([iframeContent], { type: 'text/html;charset=utf-8' });
+        
+        // Buat URL untuk blob
+        const url = URL.createObjectURL(blob);
+        
+        // Buat elemen anchor untuk download
+        const downloadLink = document.createElement('a');
+        downloadLink.href = url;
+        
+        // Generate nama file dengan timestamp
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+        downloadLink.download = `iframe-content-${timestamp}.html`;
+        
+        // Tambahkan ke DOM, klik, lalu hapus
+        document.body.appendChild(downloadLink);
+        downloadLink.click();
+        document.body.removeChild(downloadLink);
+        
+        // Bersihkan URL blob
+        URL.revokeObjectURL(url);
+        
+        console.log('Konten iframe telah disimpan sebagai file HTML');
+    }
+    
+    // Buat button save
+    const saveButton = document.createElement('button');
+    saveButton.id = 'saveIframeButton';
+    saveButton.innerHTML = '💾 Save HTML';
+    saveButton.onclick = extractIframeContent;
+    
+    // Style untuk button
+    saveButton.style.cssText = `
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        z-index: 9999;
+        padding: 10px 15px;
+        background-color: #4CAF50;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: bold;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        transition: background-color 0.3s;
+    `;
+    
+    // Hover effect
+    saveButton.addEventListener('mouseenter', function() {
+        this.style.backgroundColor = '#45a049';
+    });
+    
+    saveButton.addEventListener('mouseleave', function() {
+        this.style.backgroundColor = '#4CAF50';
+    });
+    
+    // Tambahkan button ke halaman
+    document.body.appendChild(saveButton);
+    
+    console.log('Button Save HTML telah ditambahkan ke halaman');
+})();
