@@ -1,0 +1,245 @@
+(async () => {
+  const INJECT_MARK = 'rfmt-v2';
+
+  /* ========== 1) Gaya pratinjau ringan + sembunyikan header/footer ========== */
+  const style = document.createElement('style');
+  style.id = 'rfmt-style';
+  style.setAttribute('data-injected-by', INJECT_MARK);
+  style.textContent = `
+    /* gambar responsif */
+    img { max-width: 100% !important; height: auto !important; display: block; margin: 12px auto; object-fit: contain; }
+    @media print { img { break-inside: avoid; } }
+
+    /* layout teks */
+    body { max-width: 900px; margin: 24px auto; padding: 0 16px 48px;
+           font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; }
+
+    /* sembunyikan bagian header/footer umum saat pratinjau */
+    header, footer,
+    [role="banner"], [role="contentinfo"],
+    #wpadminbar, .site-header, .site-footer, .page-header, .page-footer,
+    .topbar, .navbar, .global-nav, .breadcrumbs, [aria-label*="breadcrumb" i],
+    .sidebar, .widget-area, .cookie-banner, .announcement, .ads, .advert { display: none !important; }
+  `;
+  document.head.appendChild(style);
+
+  /* ========== 2) Util path file:///D:/.. -> ["D:", "Folder", ...] ========== */
+  function partsFromFileURL(u) {
+    try {
+      const url = new URL(u);
+      if (url.protocol !== 'file:') return null;
+      const clean = decodeURIComponent(url.pathname.replace(/^\/+/, ''));
+      return clean.split('/').filter(Boolean);
+    } catch { return null; }
+  }
+
+  // Deteksi drive halaman (contoh: "D:")
+  const pageParts = partsFromFileURL(location.href);
+  if (!pageParts || !/^[A-Za-z]:$/.test(pageParts[0])) {
+    console.warn('Tips: buka dokumen dari file:///Drive:/... (Windows) agar izin FS API pas.');
+  }
+
+  /* ========== 3) Peta drive -> DirectoryHandle root ========== */
+  const roots = new Map();
+  async function pickRootForDrive(driveLetter) {
+    alert(`Pilih ROOT untuk drive ${driveLetter}\n\nSaran: pilih direktori paling atas (mis. D:\\).`);
+    const handle = await window.showDirectoryPicker();
+    roots.set(driveLetter.toUpperCase(), handle);
+    return handle;
+  }
+  async function ensureRoot(driveLetter) {
+    const key = (driveLetter || '').toUpperCase();
+    if (!roots.has(key)) return await pickRootForDrive(driveLetter);
+    return roots.get(key);
+  }
+
+  /* ========== 4) Telusuri path di bawah root tanpa '..' ========== */
+  async function getFileUnderRoot(rootHandle, partsUnderDrive) {
+    let dir = rootHandle;
+    for (let i = 0; i < partsUnderDrive.length; i++) {
+      const name = partsUnderDrive[i];
+      const isLast = i === partsUnderDrive.length - 1;
+      if (!name || name === '.') continue;
+      if (name === '..') throw new Error("Path berisi '..'. Pilih root yang menaungi semuanya (mis. D:\\).");
+      if (isLast) {
+        return await dir.getFileHandle(name);
+      } else {
+        dir = await dir.getDirectoryHandle(name);
+      }
+    }
+    throw new Error('Path kosong.');
+  }
+
+  /* ========== 5) File -> dataURL ========== */
+  const fileToDataURL = (file) => new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result);
+    fr.onerror = rej;
+    fr.readAsDataURL(file);
+  });
+
+  /* ========== 6) Inline semua <img> file:/// menjadi data: ========== */
+  const imgs = Array.from(document.images || []);
+  let ok = 0, skip = 0, fail = 0;
+
+  for (let i = 0; i < imgs.length; i++) {
+    const el = imgs[i];
+    try {
+      const src = el.currentSrc || el.src || '';
+      if (!src || src.startsWith('data:')) { skip++; continue; }
+
+      // cegah pergantian resolusi
+      el.srcset = '';
+
+      const parts = partsFromFileURL(src);
+      if (!parts) { // http(s)/blob: lewati
+        console.warn(`Lewati IMG #${i+1}: bukan file:// — ${src}`);
+        skip++; continue;
+      }
+
+      const drive = parts[0]; // "D:"
+      if (!/^[A-Za-z]:$/.test(drive)) { console.warn(`Lewati IMG #${i+1}: drive tidak valid`); skip++; continue; }
+
+      const root = await ensureRoot(drive);
+      const underDrive = parts.slice(1);
+      const fh = await getFileUnderRoot(root, underDrive);
+      const file = await fh.getFile();
+      const dataURL = await fileToDataURL(file);
+
+      el.src = dataURL;
+      el.style.maxWidth = '100%';
+      el.style.height = 'auto';
+      ok++;
+      console.log(`IMG #${i+1} ✅ inline`);
+    } catch (e) {
+      console.warn(`IMG #${i+1} ❌`, e.message || e);
+      fail++;
+    }
+  }
+  console.log(`Selesai inline IMG. Berhasil: ${ok}, Lewati: ${skip}, Gagal: ${fail}.`);
+
+  /* ========== 7) Tombol Download (tidak ikut tersimpan) ========== */
+  (function addDownloadButton_noExport() {
+    // buat tombol
+    const btn = document.createElement('button');
+    btn.id = 'inlineDlBtn';
+    btn.setAttribute('data-injected-by', INJECT_MARK);
+    btn.textContent = 'Download HTML (inline)';
+    Object.assign(btn.style, {
+      position: 'fixed', right: '16px', bottom: '16px', zIndex: 999999,
+      padding: '10px 14px', borderRadius: '10px', border: '1px solid #ccc',
+      background: '#fff', cursor: 'pointer', boxShadow: '0 2px 10px rgba(0,0,0,.08)'
+    });
+
+    // util: pilih kandidat konten utama (opsional, untuk bersihkan header/footer lebih agresif)
+    function pickMainCandidate(doc) {
+      const sels = [
+        'main', 'article', '#content', '.entry-content', '.post-content',
+        '.content', '.wpc-lesson-body', 'div[role="main"]'
+      ];
+      let best = null, bestScore = 0;
+      for (const sel of sels) {
+        const nodes = doc.querySelectorAll(sel);
+        for (const n of nodes) {
+          const textLen = (n.innerText || '').length;
+          const imgCount = n.querySelectorAll('img').length;
+          const pCount = n.querySelectorAll('p,li,table,pre,code,section').length;
+          const score = textLen + imgCount * 200 + pCount * 50;
+          if (score > bestScore) { best = n; bestScore = score; }
+        }
+      }
+      return best;
+    }
+
+    // bersihkan header/footer/nav/sidebar dll di dokumen kloning
+    function scrubHeaderFooter(doc) {
+      const killSelectors = [
+        'header','footer','nav','aside',
+        '#header','#site-header','#masthead','#footer','#site-footer',
+        '.header','.site-header','.page-header','.topbar','.navbar','.nav',
+        '.footer','.site-footer','.page-footer','.colophon','.copyright',
+        '.breadcrumbs','[aria-label*="breadcrumb" i]',
+        '.sidebar','.widget-area',
+        '.cookie-banner','.announcement','.ads','.advert',
+        '#wpadminbar','script','noscript'
+      ];
+      killSelectors.forEach(sel => doc.querySelectorAll(sel).forEach(n => n.remove()));
+
+      // opsional: jika ada kandidat utama, simpan itu saja
+      const main = pickMainCandidate(doc);
+      if (main && main !== doc.body) {
+        const keep = main.cloneNode(true);
+        const newBody = doc.createElement('body');
+        newBody.appendChild(keep);
+        doc.body.replaceWith(newBody);
+      }
+
+      // buang elemen yang kita injeksikan di halaman asli (tombol & sejenisnya)
+      const injected = doc.querySelectorAll(`[data-injected-by="${INJECT_MARK}"], #inlineDlBtn`);
+      injected.forEach(n => n.remove());
+    }
+
+    btn.onclick = () => {
+      // 1) Kloning seluruh dokumen agar tombol dll. bisa dihapus dari hasil
+      const cloned = document.documentElement.cloneNode(true);
+
+      // 2) Pastikan style injeksi ikut ada (sudah ada di klon). Tambahan pembersihan header/footer:
+      scrubHeaderFooter(cloned.ownerDocument || (new DOMParser()).parseFromString(cloned.outerHTML, 'text/html'));
+
+      // NOTE: DOMParser di atas mengembalikan dokumen baru. Supaya aman, kita lakukan pembersihan langsung pada klon:
+      (function scrubOnClone(rootEl){
+        const doc = rootEl.ownerDocument || document;
+        // hapus tombol download & injeksi dengan data-injected-by
+        rootEl.querySelectorAll(`#inlineDlBtn, [data-injected-by="${INJECT_MARK}"]:not(style#rfmt-style)`).forEach(n => n.remove());
+        // hapus header/footer/nav/sidebar di klon
+        ['header','footer','nav','aside','#wpadminbar'].forEach(sel => rootEl.querySelectorAll(sel).forEach(n=>n.remove()));
+        // hapus element umum header/footer by class/id
+        const extra = [
+          '#header','#site-header','#masthead','#footer','#site-footer',
+          '.header','.site-header','.page-header','.topbar','.navbar','.nav',
+          '.footer','.site-footer','.page-footer','.colophon','.copyright',
+          '.breadcrumbs','[aria-label*="breadcrumb" i]','.sidebar','.widget-area',
+          '.cookie-banner','.announcement','.ads','.advert','script','noscript'
+        ];
+        extra.forEach(sel => rootEl.querySelectorAll(sel).forEach(n=>n.remove()));
+
+        // coba ekstrak main candidate (jika ada), mengganti <body> dengan isinya
+        const candSel = ['main','article','#content','.entry-content','.post-content','.content','.wpc-lesson-body','div[role="main"]'];
+        let best=null, bestScore=0;
+        candSel.forEach(sel=>{
+          rootEl.querySelectorAll(sel).forEach(n=>{
+            const score = (n.innerText||'').length + n.querySelectorAll('img').length*200 + n.querySelectorAll('p,li,table,pre,code,section').length*50;
+            if(score>bestScore){best=n;bestScore=score;}
+          });
+        });
+        if(best){
+          const keep = best.cloneNode(true);
+          const newBody = doc.createElement('body');
+          newBody.appendChild(keep);
+          // pertahankan style injeksi agar desain tetap ada
+          const head = rootEl.querySelector('head') || doc.createElement('head');
+          // pastikan style injeksi tetap di head
+          const style = rootEl.querySelector('style#rfmt-style');
+          if(style){ head.appendChild(style); }
+          // ganti body lama
+          const oldBody = rootEl.querySelector('body');
+          if(oldBody && oldBody.parentNode){ oldBody.parentNode.replaceChild(newBody, oldBody); }
+        }
+      })(cloned);
+
+      // 3) Serialize & unduh (tombol tidak ikut, header/footer bersih)
+      const html = '<!DOCTYPE html>\n' + cloned.outerHTML;
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const safeTitle = (document.title || 'inline').replace(/[\\/:*?"<>|]/g, '_');
+      a.href = url; a.download = `${safeTitle}.html`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    };
+
+    document.body.appendChild(btn);
+  })();
+})();
