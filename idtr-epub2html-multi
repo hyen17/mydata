@@ -1,0 +1,246 @@
+(async () => {
+    // =================================================================================
+    // BAGIAN 1: FUNGSI-FUNGSI INTI (SAMA PERSIS DENGAN SEBELUMNYA)
+    // =================================================================================
+
+    const INJECT_MARK = 'rfmt-v2-batch-corrected';
+    const roots = new Map();
+
+    function partsFromFileURL(u) {
+        try {
+            const url = new URL(u);
+            if (url.protocol !== 'file:') return null;
+            const clean = decodeURIComponent(url.pathname.replace(/^\/+/, ''));
+            return clean.split('/').filter(Boolean);
+        } catch { return null; }
+    }
+
+    async function pickRootForDrive(driveLetter) {
+        alert(`Untuk memproses gambar, pilih ROOT untuk drive ${driveLetter}\n\nSaran: pilih direktori paling atas (mis. D:\\). Izin hanya diminta sekali per drive.`);
+        const handle = await window.showDirectoryPicker();
+        roots.set(driveLetter.toUpperCase(), handle);
+        return handle;
+    }
+
+    async function ensureRoot(driveLetter) {
+        const key = (driveLetter || '').toUpperCase();
+        if (!roots.has(key)) return await pickRootForDrive(driveLetter);
+        return roots.get(key);
+    }
+
+    async function getFileUnderRoot(rootHandle, partsUnderDrive) {
+        let dir = rootHandle;
+        for (let i = 0; i < partsUnderDrive.length; i++) {
+            const name = partsUnderDrive[i];
+            const isLast = i === partsUnderDrive.length - 1;
+            if (!name || name === '.') continue;
+            if (name === '..') throw new Error("Path berisi '..', tidak didukung.");
+            if (isLast) { return await dir.getFileHandle(name); } 
+            else { dir = await dir.getDirectoryHandle(name); }
+        }
+        throw new Error('Path file kosong atau tidak valid.');
+    }
+
+    const fileToDataURL = (file) => new Promise((res, rej) => {
+        const fr = new FileReader();
+        fr.onload = () => res(fr.result);
+        fr.onerror = rej;
+        fr.readAsDataURL(file);
+    });
+
+    async function processImagesInDoc(doc) {
+        const imgs = Array.from(doc.images || []);
+        for (const el of imgs) {
+            try {
+                const src = el.src || '';
+                if (!src || src.startsWith('data:')) continue;
+                el.srcset = '';
+
+                const parts = partsFromFileURL(src);
+                if (!parts) continue;
+
+                const drive = parts[0];
+                if (!/^[A-Za-z]:$/.test(drive)) continue;
+
+                const root = await ensureRoot(drive);
+                const underDrive = parts.slice(1);
+                const fh = await getFileUnderRoot(root, underDrive);
+                const file = await fh.getFile();
+                const dataURL = await fileToDataURL(file);
+                el.src = dataURL;
+            } catch (e) {
+                console.warn(`Gagal proses gambar: ${el.src}`, e);
+            }
+        }
+    }
+
+    function finalScrubAndProcess(doc) {
+        const style = doc.createElement('style');
+        style.id = 'rfmt-style';
+        style.setAttribute('data-injected-by', INJECT_MARK);
+        style.textContent = `
+            img { max-width: 100% !important; height: auto !important; display: block; margin: 12px auto; object-fit: contain; }
+            @media print { img { break-inside: avoid; } }
+            body { max-width: 900px; margin: 24px auto; padding: 0 16px 48px; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; }
+        `;
+        doc.head.appendChild(style);
+
+        const killSelectors = [
+            'header','footer','nav','aside','script','noscript',
+            '[role="banner"]', '[role="contentinfo"]', '#wpadminbar', '.site-header', 
+            '.site-footer', '.page-header', '.page-footer', '.topbar', '.navbar', 
+            '.global-nav', '.breadcrumbs', '[aria-label*="breadcrumb" i]', '.sidebar', 
+            '.widget-area', '.cookie-banner', '.announcement', '.ads', '.advert'
+        ];
+        killSelectors.forEach(sel => doc.querySelectorAll(sel).forEach(n => n.remove()));
+
+        function pickMainCandidate(docNode) {
+            const sels = [
+                'main', 'article', '#content', '.entry-content', '.post-content',
+                '.content', '.wpc-lesson-body', 'div[role="main"]'
+            ];
+            let best = null, bestScore = 0;
+            for (const sel of sels) {
+                for (const n of docNode.querySelectorAll(sel)) {
+                    const textLen = (n.innerText || '').length;
+                    const imgCount = n.querySelectorAll('img').length;
+                    const pCount = n.querySelectorAll('p,li,table,pre,code,section').length;
+                    const score = textLen + imgCount * 200 + pCount * 50;
+                    if (score > bestScore) { best = n; bestScore = score; }
+                }
+            }
+            return best;
+        }
+
+        const mainContent = pickMainCandidate(doc);
+        if (mainContent) {
+            const newBody = doc.createElement('body');
+            newBody.appendChild(mainContent.cloneNode(true));
+            doc.body.replaceWith(newBody);
+        }
+    }
+
+
+    // =================================================================================
+    // BAGIAN 2: LOGIKA BATCH
+    // =================================================================================
+    
+    function parseHtmlWithIframe(htmlString) {
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        document.body.appendChild(iframe);
+        const doc = iframe.contentDocument || iframe.contentWindow.document;
+        doc.open();
+        doc.write(htmlString);
+        doc.close();
+        const virtualDoc = doc;
+        document.body.removeChild(iframe);
+        return virtualDoc;
+    }
+
+    async function startBatchProcess() {
+        alert("Pilih FOLDER SUMBER yang berisi file .xhtml");
+        const sourceDirHandle = await window.showDirectoryPicker().catch(e => null);
+        if (!sourceDirHandle) { console.log("Proses dibatalkan."); return; }
+
+        alert("Pilih FOLDER TUJUAN untuk menyimpan hasil .html");
+        const destDirHandle = await window.showDirectoryPicker().catch(e => null);
+        if (!destDirHandle) { console.log("Proses dibatalkan."); return; }
+
+        const statusUI = createStatusUI();
+        document.body.appendChild(statusUI.element);
+
+        const xhtmlFiles = [];
+        for await (const entry of sourceDirHandle.values()) {
+            if (entry.kind === 'file' && entry.name.toLowerCase().endsWith('.xhtml')) {
+                xhtmlFiles.push(entry);
+            }
+        }
+
+        if (xhtmlFiles.length === 0) {
+            statusUI.update("Tidak ditemukan file .xhtml di folder sumber.");
+            return;
+        }
+        
+        let filesProcessed = 0;
+        for (const fileHandle of xhtmlFiles) {
+            const i = filesProcessed + 1;
+            statusUI.update(`Memproses ${i} dari ${xhtmlFiles.length}: ${fileHandle.name}`);
+
+            try {
+                const file = await fileHandle.getFile();
+                const textContent = await file.text();
+                const doc = parseHtmlWithIframe(textContent);
+
+                await processImagesInDoc(doc);
+                finalScrubAndProcess(doc);
+
+                // ========================================================================
+                // --- PERUBAHAN HANYA DI BLOK INI ---
+                // ========================================================================
+                let newFileName;
+                const h1 = doc.querySelector('h1');
+
+                if (h1 && h1.textContent.trim()) {
+                    const title = h1.textContent.trim();
+                    // Ubah ke format "Title Case"
+                    const titleCase = title.toLowerCase().replace(/\b\w/g, l => l.toUpperCase());
+                    // Hapus karakter yang tidak valid untuk nama file
+                    const safeTitle = titleCase.replace(/[\\/:*?"<>|]/g, '_');
+                    newFileName = `${safeTitle}.html`;
+                } else {
+                    // Jika tidak ada h1, gunakan nama file asli sebagai cadangan
+                    newFileName = fileHandle.name.replace(/\.xhtml$/i, '.html');
+                    console.warn(`File "${fileHandle.name}" tidak memiliki <h1>. Menggunakan nama file asli.`);
+                }
+                // ========================================================================
+                // --- AKHIR DARI PERUBAHAN ---
+                // ========================================================================
+
+                const finalHtml = '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
+                
+                const newFileHandle = await destDirHandle.getFileHandle(newFileName, { create: true });
+                const writable = await newFileHandle.createWritable();
+                await writable.write(finalHtml);
+                await writable.close();
+                
+            } catch (e) {
+                console.error(`Gagal memproses file ${fileHandle.name}:`, e);
+                statusUI.update(`GAGAL pada file ${i}: ${fileHandle.name}.`);
+            }
+            filesProcessed++;
+        }
+        statusUI.update(`Selesai! ${filesProcessed} file diproses.`);
+    }
+    
+    function createStatusUI() {
+        let el = document.getElementById('batch-status-ui');
+        if (el) el.remove();
+        el = document.createElement('div');
+        el.id = 'batch-status-ui';
+        Object.assign(el.style, {
+            position: 'fixed', left: '16px', top: '16px', zIndex: 999999,
+            padding: '12px 16px', borderRadius: '8px', background: 'rgba(0,0,0,0.8)',
+            color: '#fff', fontFamily: 'sans-serif', fontSize: '14px',
+            boxShadow: '0 4px 12px rgba(0,0,0,.2)'
+        });
+        el.textContent = 'Menunggu proses...';
+        return { element: el, update: (message) => { el.textContent = message; } };
+    }
+
+    (function addBatchButton() {
+        let btn = document.getElementById('batchStartBtn');
+        if (btn) return;
+        btn = document.createElement('button');
+        btn.id = 'batchStartBtn';
+        btn.textContent = 'Mulai Proses Batch Folder';
+        Object.assign(btn.style, {
+            position: 'fixed', right: '16px', bottom: '16px', zIndex: 999999,
+            padding: '10px 14px', borderRadius: '10px', border: '1px solid #999',
+            background: '#2c5282', color: 'white', cursor: 'pointer',
+            boxShadow: '0 2px 10px rgba(0,0,0,.15)', fontWeight: 'bold'
+        });
+        btn.onclick = startBatchProcess;
+        document.body.appendChild(btn);
+    })();
+})();
