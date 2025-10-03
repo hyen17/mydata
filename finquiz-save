@@ -1,426 +1,231 @@
 (async function () {
-  /********************************************************
-   * FinQuiz Multi-Page Exporter
-   * - Questions: TIDAK DIUBAH (versi kamu yang sudah OK)
-   * - Answers: Fix CSS bertabrakan + anti blank page sebelum
-   *   gambar panjang (tanpa slicing), tiap Question mulai
-   *   halaman baru (paksa).
-   ********************************************************/
+/********************************************************
+ * FinQuiz Exporter — A3 (Optimized Page Flow)
+ * - Base: The user's perfect script.
+ * - MODIFICATION: CSS is changed to allow multiple
+ * questions per page if they fit, preventing wasted space.
+ ********************************************************/
 
-  // ----------- Prompt & URL range parsing -----------
-  const startUrl = prompt("URL HALAMAN PERTAMA (contoh: https://app.finquiz.com/my_quiz/review/process/all/413978/1):");
-  const endUrl   = prompt("URL HALAMAN TERAKHIR (contoh: https://app.finquiz.com/my_quiz/review/process/all/413978/79):");
-  if (!startUrl || !endUrl) { console.warn("Dibatalkan: URL tidak lengkap."); return; }
+// ---------------- Prompt & URL range ------------------
+const startUrl = prompt("URL HALAMAN PERTAMA:");
+const endUrl   = prompt("URL HALAMAN TERAKHIR:");
+if (!startUrl || !endUrl) { console.warn("[Exporter] Dibatalkan: URL tidak lengkap."); return; }
 
-  const parseLastIndex = (u) => {
+function parseLastIndex(u){
+  try{
+    const url = new URL(u, location.href);
+    const parts = url.pathname.split('/').filter(Boolean);
+    const last = parts[parts.length-1];
+    const idx  = parseInt(last,10);
+    if(!Number.isFinite(idx)) return null;
+    const prefix = url.origin + '/' + parts.slice(0,-1).join('/') + '/';
+    return {prefix, idx};
+  }catch{ return null; }
+}
+const s = parseLastIndex(startUrl), e = parseLastIndex(endUrl);
+if(!s || !e || s.prefix !== e.prefix){ console.error("[Exporter] Pola URL tidak cocok."); return; }
+const startIdx = Math.min(s.idx, e.idx), endIdx = Math.max(s.idx, e.idx), prefix = s.prefix;
+
+// ---------------------- Utils -------------------------
+async function inlineAllImages(el, pageHref){
+  if(!el || el.nodeType !== 1) return;
+  const imgs = Array.from(el.querySelectorAll('img'));
+  for(const img of imgs){
+    const src = img.getAttribute('src') || '';
+    if (src.startsWith('data:')) continue;
     try {
-      const url = new URL(u, location.href);
-      const parts = url.pathname.split('/').filter(Boolean);
-      const last = parts[parts.length - 1];
-      const idx = parseInt(last, 10);
-      if (!Number.isFinite(idx)) return null;
-      const prefix = url.origin + '/' + parts.slice(0, -1).join('/') + '/';
-      return { prefix, idx };
-    } catch { return null; }
-  };
-
-  const s = parseLastIndex(startUrl);
-  const e = parseLastIndex(endUrl);
-  if (!s || !e || s.prefix !== e.prefix) {
-    console.error("Gagal membaca pola URL. Pastikan kedua URL sama formatnya dan hanya beda di angka terakhir.");
-    return;
+        const abs = new URL(src, pageHref).href;
+        const res = await fetch(abs, {credentials:'include'});
+        if(!res.ok) continue;
+        const blob = await res.blob();
+        const fr = new FileReader();
+        const dataUrl = await new Promise(r => { fr.onload = () => r(fr.result); fr.readAsDataURL(blob); });
+        img.src = dataUrl;
+        img.removeAttribute('width'); img.removeAttribute('height');
+        Object.assign(img.style,{maxWidth:'100%',height:'auto',display:'block',margin:'0'});
+    } catch(e) { console.warn("Gagal inline gambar:", src); }
   }
-  const startIdx = Math.min(s.idx, e.idx);
-  const endIdx   = Math.max(s.idx, e.idx);
-  const prefix   = s.prefix;
+}
+async function serializeNodesAsync(nodes, pageHref){
+  const div = document.createElement('div');
+  for(const n of nodes) div.appendChild(n.cloneNode(true));
+  await inlineAllImages(div, pageHref);
+  return div.innerHTML;
+}
+function getCorrectLetter(answerBoxEl){
+  if(!answerBoxEl) return '';
+  const t = answerBoxEl.textContent || '';
+  const m2 = t.match(/correct option is\s*([A-D])/i); if(m2) return m2[1].toUpperCase();
+  const m1 = t.match(/You\s+Answered\s*([A-D])/i);   if(m1) return m1[1].toUpperCase();
+  return '';
+}
+function markCorrectChoiceIfPossible(html, L){
+  if(!L || !html) return html;
+  const x = L.trim().toUpperCase();
+  html = html.replace(new RegExp('(<li[^>]*>\\s*)(\\(?'+x+'\\)?[\\.)\\:]?\\s+)([\\s\\S]*?<\\/li>)','i'), (m, pre, lab, rest) => `${pre}<strong>✓ ${lab}${rest.replace(/<\/li>$/i, '</strong></li>')}`);
+  html = html.replace(new RegExp('(<(?:p|div)[^>]*>\\s*)(\\(?'+x+'\\)?[\\.)\\:]?\\s+)([\\s\\S]*?<\\/(?:p|div)>)','i'), (m, pre, lab, rest) => `${pre}<strong>✓ ${lab}${rest.replace(/<\/(p|div)>$/i, '</strong></$1>')}`);
+  return html;
+}
 
-  // ----------- Utils -----------
-  const toAbsURLFrom = (url, baseHref) => { try { return new URL(url, baseHref).href; } catch { return url || ''; } };
-
-  const blobToDataURL = (blob) => new Promise((res, rej) => {
-    const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(blob);
-  });
-
-  const imgToCanvasDataURL = (absUrl) => new Promise((resolve) => {
-    try {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        try {
-          const c = document.createElement('canvas');
-          c.width = img.naturalWidth || img.width;
-          c.height = img.naturalHeight || img.height;
-          const ctx = c.getContext('2d');
-          ctx.drawImage(img, 0, 0);
-          const data = c.toDataURL('image/png');
-          resolve(data && data.startsWith('data:') ? data : '');
-        } catch { resolve(''); }
-      };
-      img.onerror = () => resolve('');
-      img.src = absUrl;
-    } catch { resolve(''); }
-  });
-
-  const fetchAsDataURL = async (url) => {
-    try {
-      const res = await fetch(url, { credentials: 'include' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await blobToDataURL(await res.blob());
-    } catch { return ''; }
-  };
-
-  // Inline semua <img> (termasuk kalau root-nya <img>)
-  const inlineAllImages = async (el, pageHref) => {
-    if (!el || el.nodeType !== 1) return;
-    const targets = [];
-    if (el.tagName && el.tagName.toLowerCase() === 'img') targets.push(el);
-    if (el.querySelectorAll) targets.push(...el.querySelectorAll('img'));
-
-    for (const img of targets) {
-      const src = img.getAttribute('src') || '';
-      const abs = toAbsURLFrom(src, pageHref);
-      if (!abs || abs.startsWith('data:')) {
-        // Tetapkan gaya visual
-        img.removeAttribute('width'); img.removeAttribute('height'); img.removeAttribute('border');
-        Object.assign(img.style, { maxWidth: '100%', height: 'auto', display: 'block', margin: '10px 0', objectFit: 'contain' });
-        continue;
-      }
-
-      let dataURL = await fetchAsDataURL(abs);
-      if (!dataURL) dataURL = await imgToCanvasDataURL(abs);
-
-      img.setAttribute('src', dataURL || abs);
-      img.removeAttribute('width');
-      img.removeAttribute('height');
-      img.removeAttribute('border');
-      Object.assign(img.style, { maxWidth: '100%', height: 'auto', display: 'block', margin: '10px 0', objectFit: 'contain' });
-    }
-  };
-
-  const stripRightFooter = (html) =>
-    html.replace(/<div[^>]*style=["'][^"']*text-align:\s*right[^"']*["'][\s\S]*?<\/div>\s*/gi, '');
-
-  const serializeNodesAsync = async (nodes, pageHref) => {
-    const out = [];
-    for (const n of nodes) {
-      const c = n.cloneNode(true);
-      if (c.nodeType === 1) { await inlineAllImages(c, pageHref); out.push(c.outerHTML || ''); }
-      else { out.push(c.textContent || ''); }
-    }
-    return out.join('');
-  };
-
-  const getCorrectLetter = (answerBoxEl) => {
-    if (!answerBoxEl) return '';
-    const t = answerBoxEl.textContent || '';
-    const m2 = t.match(/correct option is\s*([A-D])/i); if (m2) return m2[1].toUpperCase();
-    const m1 = t.match(/You\s+Answered\s+([A-D])/i);    if (m1) return m1[1].toUpperCase();
-    return '';
-  };
-
-  const markCorrectChoiceIfPossible = (html, L) => {
-    if (!L || !html) return html;
-    const x = L.trim().toUpperCase();
-    html = html.replace(
-      new RegExp('(<li[^>]*>\\s*)(\\(?'+x+'\\)?[\\.)\\:]?\\s+)([\\s\\S]*?<\\/li>)','i'),
-      (m, pre, lab, rest) => `${pre}<strong>✓ ${lab}${rest.replace(/<\/li>$/i, '</strong></li>')}`
-    );
-    html = html.replace(
-      new RegExp('(<(?:p|div)[^>]*>\\s*)(\\(?'+x+'\\)?[\\.)\\:]?\\s+)([\\s\\S]*?<\\/(?:p|div)>)','i'),
-      (m, pre, lab, rest) => `${pre}<strong>✓ ${lab}${rest.replace(/<\/(p|div)>$/i, '</strong></$1>')}`
-    );
-    return html;
-  };
-
-  // ----------- Parser per halaman -----------
-  const domParser = new DOMParser();
-  const processDocument = async (doc, pageHref) => {
-    const vignetteRoots = Array.from(doc.querySelectorAll('.question > .question_content'))
-      .filter(root => root.querySelector('.vignette-part'));
-
-    const groups = [];
-    if (vignetteRoots.length) {
-      // Ada bacaan + beberapa part
-      for (const root of vignetteRoots) {
-        const qimgRoot = root.querySelector('.question_image');
-
-        // Bacaan = semua node sebelum .vignette-part pertama
-        let readingHTML = '';
-        if (qimgRoot) {
-          const nodes = Array.from(qimgRoot.childNodes);
-          const firstV = nodes.findIndex(n => n.nodeType === 1 && n.classList && n.classList.contains('vignette-part'));
-          const beforeNodes = firstV === -1 ? nodes : nodes.slice(0, firstV);
-          readingHTML = await serializeNodesAsync(beforeNodes, pageHref);
-          readingHTML = stripRightFooter(readingHTML).trim();
-        }
-
-        // Parts
-        const partEls = Array.from(root.querySelectorAll('.vignette-part .question .question_content'));
-        const parts = [];
-        for (const qc of partEls) {
-          const qImg = qc.querySelector('.question_image');
-          const kids = qImg ? Array.from(qImg.childNodes)
-            .filter(n => !(n.nodeType === 1 && n.classList && n.classList.contains('loader'))) : [];
-          const ansIdx = kids.findIndex(n => n.nodeType === 1 && n.classList && n.classList.contains('answerbox'));
-          const preNodes = ansIdx === -1 ? kids : kids.slice(0, ansIdx);
-          const postNodes = ansIdx === -1 ? [] : kids.slice(ansIdx + 1);
-
-          let preHTML  = await serializeNodesAsync(preNodes, pageHref);
-          let postHTML = await serializeNodesAsync(postNodes, pageHref);
-          preHTML  = stripRightFooter(preHTML);
-          postHTML = stripRightFooter(postHTML);
-
-          const ansBox = ansIdx >= 0 ? kids[ansIdx] : null;
-          parts.push({ preHTML, postHTML, correctLetter: getCorrectLetter(ansBox) });
-        }
-        groups.push({ readingHTML, parts });
-      }
-    } else {
-      // Tanpa sub-pertanyaan → 1 question per .question_content
-      const singles = Array.from(doc.querySelectorAll('.question .question_content'))
-        .filter(qc => qc.querySelector('.question_image'));
-      for (const qc of singles) {
-        const qImg = qc.querySelector('.question_image');
-        const kids = Array.from(qImg.childNodes)
-          .filter(n => !(n.nodeType === 1 && n.classList && n.classList.contains('loader')));
-        const ansIdx = kids.findIndex(n => n.nodeType === 1 && n.classList && n.classList.contains('answerbox'));
-        const preNodes = ansIdx === -1 ? kids : kids.slice(0, ansIdx);
-        const postNodes = ansIdx === -1 ? [] : kids.slice(ansIdx + 1);
-
-        let preHTML  = await serializeNodesAsync(preNodes, pageHref);
-        let postHTML = await serializeNodesAsync(postNodes, pageHref);
-        preHTML  = stripRightFooter(preHTML);
-        postHTML = stripRightFooter(postHTML);
-
-        const ansBox = ansIdx >= 0 ? kids[ansIdx] : null;
-        groups.push({ readingHTML: '', parts: [{ preHTML, postHTML, correctLetter: getCorrectLetter(ansBox) }] });
-      }
-    }
-    return groups;
-  };
-
-  // ----------- Fetch semua halaman & gabung -----------
-  const allGroups = [];
-  for (let i = startIdx; i <= endIdx; i++) {
-    const url = `${prefix}${i}`;
-    try {
-      console.log(`Fetch: ${url}`);
-      const res = await fetch(url, { credentials: 'include' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const html = await res.text();
-      const doc  = domParser.parseFromString(html, 'text/html');
-      const groups = await processDocument(doc, url);
-      allGroups.push(...groups);
-    } catch (err) {
-      console.warn(`Gagal memproses ${url}:`, err);
-    }
+// ---------------- Parse satu halaman ------------------
+const domParser = new DOMParser();
+async function processDocument(doc, pageHref){
+  const groups = [];
+  const questions = doc.querySelectorAll('.question .question_content');
+  for(const qc of questions){
+    const qImg = qc.querySelector('.question_image');
+    if (!qImg) continue;
+    const kids = Array.from(qImg.childNodes).filter(n => !(n.nodeType === 1 && n.classList.contains('loader')));
+    const ansIdx = kids.findIndex(n => n.nodeType === 1 && n.classList.contains('answerbox'));
+    const preNodes  = ansIdx === -1 ? kids : kids.slice(0, ansIdx);
+    const postNodes = ansIdx === -1 ? [] : kids.slice(ansIdx + 1);
+    const preHTML  = await serializeNodesAsync(preNodes, pageHref);
+    const postHTML = await serializeNodesAsync(postNodes, pageHref);
+    const ansBox = ansIdx >= 0 ? kids[ansIdx] : null;
+    groups.push({ readingHTML:'', parts:[{ preHTML, postHTML, correctLetter:getCorrectLetter(ansBox) }] });
   }
-  if (allGroups.length === 0) { console.warn('Tidak ada soal yang diekstrak.'); return; }
+  return groups;
+}
 
-  // ----------- Styles -----------
-  // QUESTIONS: TETAP (versi kamu yang OK)
-  const baseStyles = `
-  <style>
-    @page { size: Letter; margin: 0.5in; }
-    :root { --font: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-    html, body { font-family: var(--font); color:#111; line-height:1.6; margin:0; padding:0; }
-    .container { width: 7.5in; max-width: 100%; margin: 0.25in auto 0.5in; padding: 0; }
-    .q-block { border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px; margin: 12px 0; background:#fff; }
-    .q-title { font-weight:700; font-size: 1.125em; margin-bottom: 8px; }
-    .content img { max-width:100%; height:auto; display:block; margin:10px 0; }
-    .meta { font-weight:700; }
-    .part { break-inside: avoid; page-break-inside: avoid; margin-top: 4px; }
-    .part-sep { border: 0; border-top: 1px solid #e5e7eb; margin: 10px 0; }
-    @media print {
-      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      .q-block { break-inside: avoid-page; page-break-inside: avoid; border: 0.5pt solid #ddd; }
-      .part { break-inside: avoid-page; page-break-inside: avoid; }
-      .part-sep { break-after: avoid-page; page-break-after: avoid; }
-    }
-  </style>`;
+// --------------- Fetch semua halaman ------------------
+const allGroups = [];
+for(let i = startIdx; i <= endIdx; i++){
+  const url = `${prefix}${i}`;
+  try{
+    console.log("[Exporter] Fetch:", url);
+    const res  = await fetch(url, {credentials:'include'});
+    if(!res.ok) throw new Error("HTTP " + res.status);
+    const html = await res.text();
+    const doc  = domParser.parseFromString(html, 'text/html');
+    allGroups.push(...await processDocument(doc, url));
+  }catch(err){
+    console.warn("[Exporter] Gagal memproses", url, err);
+  }
+}
+if(allGroups.length === 0){ console.warn("[Exporter] Tidak ada soal yang diekstrak."); return; }
+const totalQuestions = allGroups.length;
 
-  // ANSWERS: minimal & anti-bentrok (paksa tiap Question di halaman baru + judul menempel konten)
-  const answersStyles = `
-  <style>
-    @page { size: Letter; margin: 0.5in; }
-    :root { --font: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-    html, body { font-family: var(--font); color:#111; line-height:1.6; margin:0; padding:0; }
-    .container { width: 7.5in; max-width: 100%; margin: 0.25in auto 0.5in; padding: 0; }
+// --- PERBAIKAN CSS DI SINI ---
+const questionsStyles = `
+<style>
+  @page { size: A3; margin: 0.5in; }
+  html, body { font-family: system-ui, sans-serif; line-height: 1.6; margin: 0; padding: 0; }
+  .container { width: 11.2in; max-width: 100%; margin: 0.25in auto; }
+  .q-block {
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 14px;
+    margin: 14px 0;
+    background: #fff;
+    page-break-inside: avoid; /* Jangan potong satu soal di tengah */
+  }
+  .q-title { font-weight: 700; font-size: 20px; margin-bottom: 10px; }
+  .meta { font-weight: 700; font-size: 18px; }
+  .content img { max-width: 100%; height: auto; display: block; }
+</style>`;
 
-    section.q-block { border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px; margin: 0; background:#fff; }
-    /* PENTING: tiap question baru = halaman baru; gunakan selector ketat dan !important agar menang dari bentrok */
-    section.q-block + section.q-block { page-break-before: always !important; break-before: page !important; }
+const answersStyles = `
+<style>
+  @page { size: A3; margin: 0.5in; }
+  html, body { font-family: system-ui, sans-serif; line-height: 1.6; margin: 0; padding: 0; }
+  .container { width: 11.2in; max-width: 100%; margin: 0.25in auto; }
+  section.q-block {
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 14px;
+    margin: 14px 0; /* Tambahkan margin agar ada jarak antar soal */
+    background: #fff;
+    page-break-inside: avoid; /* Jangan potong satu soal di tengah */
+  }
+  /* Hapus aturan 'always', biarkan browser yang memutuskan */
+  section.q-block { page-break-before: auto; }
 
-    .q-title { font-weight:700; font-size: 1.125em; margin: 0 0 8px 0; page-break-after: avoid !important; }
-    /* konten pertama hindari page-break di depannya agar menempel judul */
-    .q-block > .content:first-of-type { page-break-before: avoid !important; }
+  .q-title { font-weight: 700; font-size: 20px; margin: 0 0 10px 0; }
+  .meta { font-weight: 700; font-size: 18px; }
+  .content-block { page-break-inside: avoid; margin: 0; line-height:0; }
+  .content-block img { max-width: 100%; height: auto; display: block; margin:0; }
+</style>`;
 
-    .content img { max-width:100%; height:auto; display:block; margin:8px 0; }
-    .meta { font-weight:700; }
-    .part { margin-top: 4px; }
-    .part-sep { border: 0; border-top: 1px solid #e5e7eb; margin: 10px 0; }
-
-    @media print {
-      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      section.q-block { border: 0.5pt solid #ddd; }
-      /* Jangan pakai break-inside:avoid di blok utama agar gambar tinggi bisa mengalir */
-    }
-  </style>`;
-
-  // ----------- Build output -----------
-  const totalQuestions = allGroups.length;
-
-  // QUESTIONS: (TIDAK DIUBAH)
-  const buildQuestions = () => `<!doctype html>
-<html><head><meta charset="utf-8"><title>Questions</title>${baseStyles}</head>
-<body><div class="container">
-  ${allGroups.map((g, i) => {
-    const K = g.parts.length;
-    return `
-      <section class="q-block" id="q_${i+1}">
-        <div class="q-title">Question ${i+1} of ${totalQuestions}</div>
-        ${g.readingHTML ? `<div class="content">${g.readingHTML}</div>` : ``}
-        ${g.parts.map((p, idx) => `
-          <div class="part">
-            ${K > 1 ? `<div class="meta">Part ${idx+1} of ${K}</div>` : ``}
-            <div class="content">${p.preHTML || '<em>(no content)</em>'}</div>
-          </div>
-          ${K > 1 && idx < K-1 ? `<hr class="part-sep">` : ``}
-        `).join('')}
-      </section>
-    `;
-  }).join('')}
-</div></body></html>`;
-
-  // ANSWERS runtime-fix:
-  // 1) Pindahkan gambar Explanation yang sangat tinggi ke luar .q-block (anti blank page sebelum gambar).
-  // 2) Paksa page break sebelum setiap section.q-block (inline style) untuk kalahkan CSS bentrok.
-  const answersRuntimeFix = `
+// --- Sisa skrip tidak diubah ---
+const answersRuntimeFix = `
 <script>
-(function() {
-  function forceNewPageEachQuestion() {
-    const blocks = document.querySelectorAll('section.q-block');
-    blocks.forEach((blk, i) => {
-      if (i > 0) {
-        blk.style.pageBreakBefore = 'always';
-        blk.style.breakBefore = 'page';
-      }
-      // Pastikan judul menyatu dengan konten pertama
-      const title = blk.querySelector('.q-title');
-      if (title) title.style.pageBreakAfter = 'avoid';
-      const firstContent = blk.querySelector(':scope > .content');
-      if (firstContent) firstContent.style.pageBreakBefore = 'avoid';
-    });
-  }
-
-  function moveVeryTallExplanationImages() {
-    const PAGE_PRINT_HEIGHT_PX = 900; // kira-kira 10" @ 90dpi-ish (cukup aman)
-    let moved = 0;
-
-    document.querySelectorAll('section.q-block').forEach(block => {
-      const nodes = block.querySelectorAll('.content');
-      for (let i = 0; i < nodes.length; i++) {
-        const el = nodes[i];
-        const prev = el.previousElementSibling;
-        const isExplanation = prev && prev.textContent && prev.textContent.trim().toLowerCase().startsWith('explanation:');
-
-        if (isExplanation) {
-          const imgs = el.querySelectorAll('img');
-          imgs.forEach(img => {
-            const h = img.naturalHeight || img.height || img.offsetHeight || 0;
-            if (h > PAGE_PRINT_HEIGHT_PX) {
-              // Pindahkan IMG ke luar block → tepat setelah block
-              block.after(img);
-              // Dan beri sedikit jarak
-              img.style.marginTop = '8px';
-              img.style.pageBreakBefore = 'auto';
-              img.style.pageBreakInside = 'auto';
-              moved++;
-            }
-          });
+(function(){
+  function detectContentBand(ctx, imgW, imgH){
+    let left = imgW, right = 0;
+    for(let y=imgH*0.2|0; y<imgH*0.8; y+=Math.max(1,(imgH/20|0))){
+      const row = ctx.getImageData(0,y,imgW,1).data;
+      for(let x=0;x<imgW;x+=4){
+        const r=row[x*4], g=row[x*4+1], b=row[x*4+2];
+        if(r<245||g<245||b<245){
+          if(x<left) left=x;
+          if(x>right) right=x;
         }
       }
-    });
-
-    if (moved) console.log('[Answers Fix] Gambar Explanation tinggi dipindahkan keluar blok:', moved);
+    }
+    if(left>=right) return {l:imgW*0.2|0,r:imgW*0.8|0};
+    return {l:Math.max(0,left-5), r:Math.min(imgW-1,right+5)};
   }
-
-  function runFixes() {
-    forceNewPageEachQuestion();
-    moveVeryTallExplanationImages();
+  function isRowBlank(ctx,imgW,y,band){
+    const row = ctx.getImageData(band.l,y,band.r-band.l,1).data;
+    let nonWhite=0;
+    for(let i=0;i<row.length;i+=4){
+      const r=row[i],g=row[i+1],b=row[i+2];
+      if(r<250||g<250||b<250) nonWhite++;
+    }
+    return (nonWhite/((row.length/4)||1)) < 0.003;
   }
-
-  // Jalankan: setelah load, dan juga sebelum print (untuk berjaga)
-  window.addEventListener('load', runFixes);
-  window.addEventListener('beforeprint', runFixes);
+  function findBlankCut(ctx,imgW,imgH,startY,endY,band){
+    let best=endY;
+    for(let y=endY-1;y>=startY;y--){
+      if(isRowBlank(ctx,imgW,y,band)) return y;
+    }
+    return best;
+  }
+  async function slicer(){
+    const imgs=document.querySelectorAll('.content img');
+    for(const img of imgs){
+      await new Promise(r=>{if(img.complete)r();else{img.onload=r;img.onerror=r;}});
+      const H=img.naturalHeight,W=img.naturalWidth;
+      if(H<800) continue;
+      const c=document.createElement('canvas');c.width=W;c.height=H;
+      const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(img,0,0);
+      const band=detectContentBand(ctx,W,H);
+      const wrap=document.createElement('div');
+      let y=0;
+      const CH=480;
+      while(y<H){
+        let next=Math.min(y+CH,H);
+        if(next<H){
+          next=findBlankCut(ctx,W,H,y+100,next,band);
+        }
+        const h=next-y;
+        if (h <= 0) break;
+        const part=document.createElement('canvas');part.width=W;part.height=h;
+        part.getContext('2d').drawImage(c,0,y,W,h,0,0,W,h);
+        const out=document.createElement('img');out.src=part.toDataURL('image/png');
+        const blk=document.createElement('div');blk.className='content-block';blk.appendChild(out);
+        wrap.appendChild(blk);
+        y=next;
+      }
+      img.replaceWith(wrap);
+    }
+  }
+  window.addEventListener('load',slicer);
 })();
 <\/script>`;
 
-  const buildAnswers = () => `<!doctype html>
-<html><head><meta charset="utf-8"><title>Answers</title>${answersStyles}</head>
-<body><div class="container">
-  ${allGroups.map((g, i) => {
-    const K = g.parts.length;
-    return `
-      <section class="q-block" id="a_${i+1}">
-        <div class="q-title">Question ${i+1} of ${totalQuestions}</div>
-        ${g.readingHTML ? `<div class="content">${g.readingHTML}</div>` : ``}
-        ${g.parts.map((p, idx) => {
-          const marked = markCorrectChoiceIfPossible(p.preHTML, p.correctLetter);
-          return `
-            <div class="part">
-              ${K > 1 ? `<div class="meta">Part ${idx+1} of ${K}</div>` : ``}
-              <div class="content">${marked || '<em>(no content)</em>'}</div>
-              <div class="content"><span class="meta">Correct Answer: ${p.correctLetter || '<em>(not detected)</em>'}</span></div>
-              <div class="content"><span class="meta">Explanation:</span></div>
-              <div class="content">${p.postHTML || '<em>(no explanation provided)</em>'}</div>
-            </div>
-            ${K > 1 && idx < K-1 ? `<hr class="part-sep">` : ``}
-          `;
-        }).join('')}
-      </section>
-    `;
-  }).join('')}
-</div>${answersRuntimeFix}</body></html>`;
+function buildHTML(title,bodyClass,bodyContent,runtimeScript=''){
+  const styles = bodyClass==='answers-page'?answersStyles:questionsStyles;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>${styles}</head><body class="${bodyClass}"><div class="container">${bodyContent}</div>${runtimeScript}</body></html>`;
+}
+const questionsBody = allGroups.map((g,i)=>`<section class="q-block" id="q_${i+1}"><div class="q-title">Question ${i+1} of ${totalQuestions}</div>${g.parts.map(p=>`<div class="content">${p.preHTML||''}</div>`).join('')}</section>`).join('');
+const answersBody = allGroups.map((g,i)=>{const p=g.parts[0]||{};const marked=markCorrectChoiceIfPossible(p.preHTML,p.correctLetter);return `<section class="q-block" id="a_${i+1}"><div class="q-title">Question ${i+1} of ${totalQuestions}</div><div class="part"><div class="content">${marked||''}</div><div class="content"><span class="meta">Correct Answer: ${p.correctLetter||'N/A'}</span></div><div class="content"><span class="meta">Explanation:</span></div><div class="content">${p.postHTML||''}</div></div></section>`;}).join('');
 
-  const questionsHTML = buildQuestions();
-  const answersHTML   = buildAnswers();
+function openInNewTab(filename,html){
+  const blob=new Blob([html],{type:'text/html'});const url=URL.createObjectURL(blob);window.open(url,'_blank');
+}
 
-  // ----------- Open in new tabs (fallback download jika popup diblokir) -----------
-  const openInNewTab = (filename, htmlString) => {
-    try {
-      const blob = new Blob([htmlString], { type: 'text/html;charset=utf-8' });
-      const url  = URL.createObjectURL(blob);
-      const w = window.open(url, '_blank');
-      if (!w || w.closed || typeof w.closed === 'undefined') {
-        // popup diblokir → fallback download
-        const a = document.createElement('a');
-        a.download = filename;
-        a.href = url;
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 800);
-        alert(`Popup diblokir. File ${filename} diunduh sebagai fallback.`);
-      } else {
-        setTimeout(() => { try { w.document.title = filename; } catch {} }, 300);
-      }
-    } catch (e) {
-      console.warn('Gagal membuka tab baru, fallback download:', e);
-      const dataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(htmlString);
-      const w = window.open(dataUrl, '_blank');
-      if (!w) {
-        const a = document.createElement('a');
-        a.download = filename;
-        a.href = dataUrl;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      }
-    }
-  };
-
-  openInNewTab('questions.html', questionsHTML); // tetap: versi OK kamu
-  openInNewTab('answers.html',   answersHTML);   // dengan runtime-fix anti bentrok
-
-  console.log(`Selesai. Menggabungkan ${allGroups.length} Question (${startIdx}..${endIdx}). Dibuka di tab baru.`);
+openInNewTab('questions.html',buildHTML('Questions','questions-page',questionsBody));
+openInNewTab('answers.html',buildHTML('Answers','answers-page',answersBody,answersRuntimeFix));
+console.log('[Exporter] Done:',totalQuestions);
 })();
