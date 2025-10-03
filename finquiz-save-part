@@ -1,0 +1,243 @@
+(async function () {
+/********************************************************
+ * FinQuiz Exporter — A3 (Perfect Merge)
+ * - Layout optimized (multiple Q/page if fit)
+ * - Supports vignette multi-part questions
+ * - Smart slicing for large images
+ ********************************************************/
+
+// ---------------- Prompt & URL range ------------------
+const startUrl = prompt("URL HALAMAN PERTAMA:");
+const endUrl   = prompt("URL HALAMAN TERAKHIR:");
+if (!startUrl || !endUrl) { console.warn("[Exporter] Dibatalkan: URL tidak lengkap."); return; }
+
+function parseLastIndex(u){
+  try{
+    const url = new URL(u, location.href);
+    const parts = url.pathname.split('/').filter(Boolean);
+    const last = parts[parts.length-1];
+    const idx  = parseInt(last,10);
+    if(!Number.isFinite(idx)) return null;
+    const prefix = url.origin + '/' + parts.slice(0,-1).join('/') + '/';
+    return {prefix, idx};
+  }catch{ return null; }
+}
+const s = parseLastIndex(startUrl), e = parseLastIndex(endUrl);
+if(!s || !e || s.prefix !== e.prefix){ console.error("[Exporter] Pola URL tidak cocok."); return; }
+const startIdx = Math.min(s.idx, e.idx), endIdx = Math.max(s.idx, e.idx), prefix = s.prefix;
+
+// ---------------------- Utils -------------------------
+async function inlineAllImages(el, pageHref){
+  if(!el || el.nodeType !== 1) return;
+  const imgs = Array.from(el.querySelectorAll('img'));
+  for(const img of imgs){
+    const src = img.getAttribute('src') || '';
+    if (src.startsWith('data:')) continue;
+    try {
+        const abs = new URL(src, pageHref).href;
+        const res = await fetch(abs, {credentials:'include'});
+        if(!res.ok) continue;
+        const blob = await res.blob();
+        const fr = new FileReader();
+        const dataUrl = await new Promise(r => { fr.onload = () => r(fr.result); fr.readAsDataURL(blob); });
+        img.src = dataUrl;
+        img.removeAttribute('width'); img.removeAttribute('height');
+        Object.assign(img.style,{maxWidth:'100%',height:'auto',display:'block',margin:'0'});
+    } catch(e) { console.warn("Gagal inline gambar:", src); }
+  }
+}
+async function serializeNodesAsync(nodes, pageHref){
+  const div = document.createElement('div');
+  for(const n of nodes) div.appendChild(n.cloneNode(true));
+  await inlineAllImages(div, pageHref);
+  return div.innerHTML;
+}
+function getCorrectLetter(answerBoxEl){
+  if(!answerBoxEl) return '';
+  const t = answerBoxEl.textContent || '';
+  const m2 = t.match(/correct option is\s*([A-D])/i); if(m2) return m2[1].toUpperCase();
+  const m1 = t.match(/You\s+Answered\s*([A-D])/i);   if(m1) return m1[1].toUpperCase();
+  return '';
+}
+function markCorrectChoiceIfPossible(html, L){
+  if(!L || !html) return html;
+  const x = L.trim().toUpperCase();
+  html = html.replace(new RegExp('(<li[^>]*>\\s*)(\\(?'+x+'\\)?[\\.)\\:]?\\s+)([\\s\\S]*?<\\/li>)','i'), (m, pre, lab, rest) => `${pre}<strong>✓ ${lab}${rest.replace(/<\/li>$/i, '</strong></li>')}`);
+  html = html.replace(new RegExp('(<(?:p|div)[^>]*>\\s*)(\\(?'+x+'\\)?[\\.)\\:]?\\s+)([\\s\\S]*?<\\/(?:p|div)>)','i'), (m, pre, lab, rest) => `${pre}<strong>✓ ${lab}${rest.replace(/<\/(p|div)>$/i, '</strong></$1>')}`);
+  return html;
+}
+
+// ---------------- Parse satu halaman ------------------
+const domParser = new DOMParser();
+async function processDocument(doc, pageHref){
+  const groups = [];
+  // cek ada vignette
+  const vignetteRoots = Array.from(doc.querySelectorAll('.question > .question_content')).filter(r=>r.querySelector('.vignette-part'));
+  if(vignetteRoots.length){
+    for(const root of vignetteRoots){
+      const qimgRoot = root.querySelector('.question_image');
+      let readingHTML = '';
+      if(qimgRoot){
+        const nodes = Array.from(qimgRoot.childNodes);
+        const firstV = nodes.findIndex(n=>n.nodeType===1 && n.classList && n.classList.contains('vignette-part'));
+        const beforeNodes = firstV === -1 ? nodes : nodes.slice(0, firstV);
+        readingHTML = await serializeNodesAsync(beforeNodes, pageHref);
+      }
+      const partEls = Array.from(root.querySelectorAll('.vignette-part .question .question_content'));
+      const parts = [];
+      for(const qc of partEls){
+        const qImg = qc.querySelector('.question_image');
+        const kids = qImg ? Array.from(qImg.childNodes).filter(n=>!(n.nodeType===1 && n.classList.contains('loader'))) : [];
+        const ansIdx = kids.findIndex(n=>n.nodeType===1 && n.classList.contains('answerbox'));
+        const preNodes = ansIdx === -1 ? kids : kids.slice(0, ansIdx);
+        const postNodes= ansIdx === -1 ? []  : kids.slice(ansIdx+1);
+        const preHTML  = await serializeNodesAsync(preNodes,pageHref);
+        const postHTML = await serializeNodesAsync(postNodes,pageHref);
+        const ansBox   = ansIdx>=0? kids[ansIdx]:null;
+        parts.push({preHTML,postHTML,correctLetter:getCorrectLetter(ansBox)});
+      }
+      groups.push({readingHTML, parts});
+    }
+  }else{
+    // single question
+    const singles = Array.from(doc.querySelectorAll('.question .question_content')).filter(qc=>qc.querySelector('.question_image'));
+    for(const qc of singles){
+      const qImg = qc.querySelector('.question_image');
+      const kids = Array.from(qImg.childNodes).filter(n=>!(n.nodeType===1 && n.classList.contains('loader')));
+      const ansIdx = kids.findIndex(n=>n.nodeType===1 && n.classList.contains('answerbox'));
+      const preNodes = ansIdx===-1?kids:kids.slice(0,ansIdx);
+      const postNodes=ansIdx===-1?[]:kids.slice(ansIdx+1);
+      const preHTML  = await serializeNodesAsync(preNodes,pageHref);
+      const postHTML = await serializeNodesAsync(postNodes,pageHref);
+      const ansBox = ansIdx>=0? kids[ansIdx]:null;
+      groups.push({readingHTML:'', parts:[{preHTML,postHTML,correctLetter:getCorrectLetter(ansBox)}]});
+    }
+  }
+  return groups;
+}
+
+// --------------- Fetch semua halaman ------------------
+const allGroups=[];
+for(let i=startIdx;i<=endIdx;i++){
+  const url=`${prefix}${i}`;
+  try{
+    console.log("[Exporter] Fetch:",url);
+    const res=await fetch(url,{credentials:'include'});
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    const html=await res.text();
+    const doc=domParser.parseFromString(html,'text/html');
+    allGroups.push(...await processDocument(doc,url));
+  }catch(err){ console.warn("Gagal:",url,err);}
+}
+if(allGroups.length===0){ console.warn("Tidak ada soal."); return;}
+const totalQuestions=allGroups.length;
+
+// -------------------- Styles --------------------------
+const baseStyles = `
+  @page { size: A3; margin: 0.5in; }
+  html, body { font-family: system-ui, sans-serif; line-height: 1.6; margin: 0; padding: 0; }
+  .container { width: 11.2in; max-width: 100%; margin: 0.25in auto; }
+  .q-block { border:1px solid #e5e7eb; border-radius:12px; padding:14px; margin:14px 0; background:#fff; page-break-inside:avoid; }
+  .q-title { font-weight:700; font-size:20px; margin:0 0 10px 0; }
+  .meta { font-weight:700; font-size:18px; margin:6px 0; }
+  .content img { max-width:100%; height:auto; display:block; margin:8px 0; }
+  .part { break-inside:avoid; page-break-inside:avoid; margin-top:4px; }
+  hr.part-sep { border:0; border-top:1px solid #ddd; margin:8px 0; }
+`;
+
+// ---------------- Smart slicing runtime ---------------
+const answersRuntimeFix = `
+<script>
+(function(){
+  function isRowBlank(ctx,imgW,y,band){
+    const row=ctx.getImageData(band.l,y,band.r-band.l,1).data;
+    let nonWhite=0;
+    for(let i=0;i<row.length;i+=4){const r=row[i],g=row[i+1],b=row[i+2];if(r<250||g<250||b<250)nonWhite++;}
+    return nonWhite/((row.length/4)||1)<0.003;
+  }
+  function detectBand(ctx,w,h){
+    let l=w,r=0;
+    for(let y=h*0.2|0;y<h*0.8;y+=Math.max(1,(h/20|0))){
+      const row=ctx.getImageData(0,y,w,1).data;
+      for(let x=0;x<w;x+=4){
+        const R=row[x],G=row[x+1],B=row[x+2];
+        if(R<245||G<245||B<245){if(x<l)l=x;if(x>r)r=x;}
+      }
+    }
+    if(l>=r) return {l:w*0.2|0,r:w*0.8|0};
+    return {l:Math.max(0,l-5),r:Math.min(w-1,r+5)};
+  }
+  async function slicer(){
+    const imgs=document.querySelectorAll('.content img');
+    for(const img of imgs){
+      await new Promise(r=>{if(img.complete)r();else{img.onload=r;img.onerror=r;}});
+      const H=img.naturalHeight,W=img.naturalWidth;
+      if(H<800) continue;
+      const c=document.createElement('canvas');c.width=W;c.height=H;
+      const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(img,0,0);
+      const band=detectBand(ctx,W,H);
+      const wrap=document.createElement('div');
+      let y=0,CH=480;
+      while(y<H){
+        let next=Math.min(y+CH,H);
+        if(next<H){
+          for(let yy=next-1;yy>=y+100;yy--){if(isRowBlank(ctx,W,yy,band)){next=yy;break;}}
+        }
+        const h=next-y; if(h<=0) break;
+        const part=document.createElement('canvas');part.width=W;part.height=h;
+        part.getContext('2d').drawImage(c,0,y,W,h,0,0,W,h);
+        const out=document.createElement('img');out.src=part.toDataURL('image/png');wrap.appendChild(out);
+        y=next;
+      }
+      img.replaceWith(wrap);
+    }
+  }
+  window.addEventListener('load',slicer);
+})();
+<\/script>`;
+
+// ---------------- Build HTML --------------------------
+function buildQuestions(){
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Questions</title><style>${baseStyles}</style></head><body><div class="container">`+
+    allGroups.map((g,i)=>{
+      const K=g.parts.length;
+      return `<section class="q-block"><div class="q-title">Question ${i+1} of ${totalQuestions}</div>`+
+      (g.readingHTML?`<div class="content">${g.readingHTML}</div>`:'')+
+      g.parts.map((p,idx)=>`
+        <div class="part">
+          ${K>1?`<div class="meta">Part ${idx+1} of ${K}</div>`:''}
+          <div class="content">${p.preHTML||''}</div>
+        </div>
+        ${K>1&&idx<K-1?'<hr class="part-sep">':''}
+      `).join('')+`</section>`;
+    }).join('')+`</div></body></html>`;
+}
+
+function buildAnswers(){
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Answers</title><style>${baseStyles}</style></head><body><div class="container">`+
+    allGroups.map((g,i)=>{
+      const K=g.parts.length;
+      return `<section class="q-block"><div class="q-title">Question ${i+1} of ${totalQuestions}</div>`+
+      (g.readingHTML?`<div class="content">${g.readingHTML}</div>`:'')+
+      g.parts.map((p,idx)=>{
+        const marked=markCorrectChoiceIfPossible(p.preHTML,p.correctLetter);
+        return `<div class="part">
+          ${K>1?`<div class="meta">Part ${idx+1} of ${K}</div>`:''}
+          <div class="content">${marked||''}</div>
+          <div class="content"><span class="meta">Correct Answer: ${p.correctLetter||'N/A'}</span></div>
+          <div class="content"><span class="meta">Explanation:</span></div>
+          <div class="content">${p.postHTML||''}</div>
+        </div>${K>1&&idx<K-1?'<hr class="part-sep">':''}`;
+      }).join('')+`</section>`;
+    }).join('')+`</div>${answersRuntimeFix}</body></html>`;
+}
+
+// ---------------- Open in New Tabs --------------------
+function openInNewTab(filename,html){
+  const blob=new Blob([html],{type:'text/html'});const url=URL.createObjectURL(blob);window.open(url,'_blank');
+}
+openInNewTab('questions.html',buildQuestions());
+openInNewTab('answers.html',buildAnswers());
+
+console.log("[Exporter] Done:",totalQuestions);
+})();
