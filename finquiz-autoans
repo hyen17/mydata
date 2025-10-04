@@ -1,0 +1,55 @@
+// ==UserScript==
+// @name         Quiz Auto-Filler
+// @namespace    http://tampermonkey.net/
+// @version      0.1
+// @description  Fills in quiz answers randomly.
+// @author       You
+// @match        https://app.finquiz.com/my_quiz/test/answersheet/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    /**
+     * Skrip untuk Mengisi Kuis Secara Otomatis
+     *
+     * Penafian: Skrip ini disediakan untuk tujuan pendidikan dan demonstrasi
+     * cara kerja manipulasi DOM dengan JavaScript. Menggunakan skrip ini untuk
+     * berbuat curang dalam ujian atau kuis dapat melanggar Ketentuan Layanan
+     * situs web. Gunakan dengan bijak dan bertanggung jawab.
+     */
+    function autoFillQuiz() {
+      // Temukan semua elemen yang berisi pilihan jawaban untuk setiap pertanyaan.
+      const questionOptionContainers = document.querySelectorAll('td.score-question-options');
+
+      if (questionOptionContainers.length === 0) {
+        console.log('Tidak ada pertanyaan yang ditemukan di halaman ini. Pastikan selector sudah benar.');
+        return;
+      }
+
+      console.log(`Menemukan ${questionOptionContainers.length} pertanyaan. Memilih jawaban secara acak...`);
+
+      // Iterasi melalui setiap kontainer pilihan jawaban.
+      questionOptionContainers.forEach((container, index) => {
+        // Di dalam setiap kontainer, temukan semua input radio (pilihan A, B, C, dst.).
+        const options = container.querySelectorAll('input[type="radio"]');
+
+        if (options.length > 0) {
+          // Pilih indeks acak dari 0 hingga jumlah pilihan yang ada.
+          const randomIndex = Math.floor(Math.random() * options.length);
+
+          // Beri centang pada tombol radio di indeks yang dipilih secara acak.
+          options[randomIndex].checked = true;
+        } else {
+            console.log(`Tidak ada pilihan jawaban yang ditemukan untuk pertanyaan #${index + 1}`);
+        }
+      });
+
+      console.log('Selesai! Semua pertanyaan telah diisi dengan jawaban acak.');
+      alert('Semua jawaban telah terisi secara otomatis dengan pilihan acak!');
+    }
+
+    // Menjalankan fungsi utama untuk mengisi kuis.
+    autoFillQuiz();
+})();
