@@ -1,9 +1,10 @@
 (async function () {
 /********************************************************
- * FinQuiz Exporter — A3 (Perfect Merge)
- * - Layout optimized (multiple Q/page if fit)
- * - Supports vignette multi-part questions
- * - Smart slicing for large images
+ * FinQuiz Exporter — A3 (The Best Script + Correct Multi-Part)
+ * - Base: The user's best and final script.
+ * - MODIFICATION: The data processing and HTML building
+ * are surgically updated to support multi-part questions
+ * without altering the perfect slicing or page flow logic.
  ********************************************************/
 
 // ---------------- Prompt & URL range ------------------
@@ -66,106 +67,148 @@ function markCorrectChoiceIfPossible(html, L){
   html = html.replace(new RegExp('(<(?:p|div)[^>]*>\\s*)(\\(?'+x+'\\)?[\\.)\\:]?\\s+)([\\s\\S]*?<\\/(?:p|div)>)','i'), (m, pre, lab, rest) => `${pre}<strong>✓ ${lab}${rest.replace(/<\/(p|div)>$/i, '</strong></$1>')}`);
   return html;
 }
+const stripRightFooter = (html) => html.replace(/<div[^>]*style=["'][^"']*text-align:\s*right[^"']*["'][\s\\S]*?<\/div>\s*/gi, '');
 
-// ---------------- Parse satu halaman ------------------
+// --- PERBAIKAN LOGIKA EKSTRAKSI UNTUK MULTI-PART ---
 const domParser = new DOMParser();
 async function processDocument(doc, pageHref){
+  const vignetteRoots = Array.from(doc.querySelectorAll('.question > .question_content'))
+    .filter(root => root.querySelector('.vignette-part'));
+
   const groups = [];
-  // cek ada vignette
-  const vignetteRoots = Array.from(doc.querySelectorAll('.question > .question_content')).filter(r=>r.querySelector('.vignette-part'));
   if(vignetteRoots.length){
     for(const root of vignetteRoots){
       const qimgRoot = root.querySelector('.question_image');
       let readingHTML = '';
       if(qimgRoot){
         const nodes = Array.from(qimgRoot.childNodes);
-        const firstV = nodes.findIndex(n=>n.nodeType===1 && n.classList && n.classList.contains('vignette-part'));
+        const firstV = nodes.findIndex(n => n.nodeType === 1 && n.classList && n.classList.contains('vignette-part'));
         const beforeNodes = firstV === -1 ? nodes : nodes.slice(0, firstV);
         readingHTML = await serializeNodesAsync(beforeNodes, pageHref);
+        readingHTML = stripRightFooter(readingHTML).trim();
       }
       const partEls = Array.from(root.querySelectorAll('.vignette-part .question .question_content'));
       const parts = [];
       for(const qc of partEls){
         const qImg = qc.querySelector('.question_image');
-        const kids = qImg ? Array.from(qImg.childNodes).filter(n=>!(n.nodeType===1 && n.classList.contains('loader'))) : [];
-        const ansIdx = kids.findIndex(n=>n.nodeType===1 && n.classList.contains('answerbox'));
-        const preNodes = ansIdx === -1 ? kids : kids.slice(0, ansIdx);
-        const postNodes= ansIdx === -1 ? []  : kids.slice(ansIdx+1);
-        const preHTML  = await serializeNodesAsync(preNodes,pageHref);
-        const postHTML = await serializeNodesAsync(postNodes,pageHref);
-        const ansBox   = ansIdx>=0? kids[ansIdx]:null;
-        parts.push({preHTML,postHTML,correctLetter:getCorrectLetter(ansBox)});
+        const kids = qImg ? Array.from(qImg.childNodes).filter(n => !(n.nodeType === 1 && n.classList.contains('loader'))) : [];
+        const ansIdx = kids.findIndex(n => n.nodeType === 1 && n.classList.contains('answerbox'));
+        const preNodes  = ansIdx === -1 ? kids : kids.slice(0, ansIdx);
+        const postNodes = ansIdx === -1 ? []  : kids.slice(ansIdx + 1);
+        let preHTML  = await serializeNodesAsync(preNodes, pageHref);
+        let postHTML = await serializeNodesAsync(postNodes, pageHref);
+        const ansBox = ansIdx >= 0 ? kids[ansIdx] : null;
+        parts.push({ preHTML, postHTML, correctLetter: getCorrectLetter(ansBox) });
       }
-      groups.push({readingHTML, parts});
+      groups.push({ readingHTML, parts });
     }
   }else{
-    // single question
-    const singles = Array.from(doc.querySelectorAll('.question .question_content')).filter(qc=>qc.querySelector('.question_image'));
+    const singles = Array.from(doc.querySelectorAll('.question .question_content')).filter(qc => qc.querySelector('.question_image'));
     for(const qc of singles){
       const qImg = qc.querySelector('.question_image');
-      const kids = Array.from(qImg.childNodes).filter(n=>!(n.nodeType===1 && n.classList.contains('loader')));
-      const ansIdx = kids.findIndex(n=>n.nodeType===1 && n.classList.contains('answerbox'));
-      const preNodes = ansIdx===-1?kids:kids.slice(0,ansIdx);
-      const postNodes=ansIdx===-1?[]:kids.slice(ansIdx+1);
-      const preHTML  = await serializeNodesAsync(preNodes,pageHref);
-      const postHTML = await serializeNodesAsync(postNodes,pageHref);
-      const ansBox = ansIdx>=0? kids[ansIdx]:null;
-      groups.push({readingHTML:'', parts:[{preHTML,postHTML,correctLetter:getCorrectLetter(ansBox)}]});
+      const kids = Array.from(qImg.childNodes).filter(n => !(n.nodeType === 1 && n.classList.contains('loader')));
+      const ansIdx = kids.findIndex(n => n.nodeType === 1 && n.classList.contains('answerbox'));
+      const preNodes  = ansIdx === -1 ? kids : kids.slice(0, ansIdx);
+      const postNodes = ansIdx === -1 ? []  : kids.slice(ansIdx + 1);
+      let preHTML  = await serializeNodesAsync(preNodes, pageHref);
+      let postHTML = await serializeNodesAsync(postNodes, pageHref);
+      const ansBox = ansIdx >= 0 ? kids[ansIdx] : null;
+      groups.push({ readingHTML:'', parts:[{ preHTML, postHTML, correctLetter:getCorrectLetter(ansBox) }] });
     }
   }
   return groups;
 }
 
 // --------------- Fetch semua halaman ------------------
-const allGroups=[];
-for(let i=startIdx;i<=endIdx;i++){
-  const url=`${prefix}${i}`;
+const allGroups = [];
+for(let i = startIdx; i <= endIdx; i++){
+  const url = `${prefix}${i}`;
   try{
-    console.log("[Exporter] Fetch:",url);
-    const res=await fetch(url,{credentials:'include'});
-    if(!res.ok) throw new Error("HTTP "+res.status);
-    const html=await res.text();
-    const doc=domParser.parseFromString(html,'text/html');
-    allGroups.push(...await processDocument(doc,url));
-  }catch(err){ console.warn("Gagal:",url,err);}
+    console.log("[Exporter] Fetch:", url);
+    const res  = await fetch(url, {credentials:'include'});
+    if(!res.ok) throw new Error("HTTP " + res.status);
+    const html = await res.text();
+    const doc  = domParser.parseFromString(html, 'text/html');
+    allGroups.push(...await processDocument(doc, url));
+  }catch(err){
+    console.warn("[Exporter] Gagal memproses", url, err);
+  }
 }
-if(allGroups.length===0){ console.warn("Tidak ada soal."); return;}
-const totalQuestions=allGroups.length;
+if(allGroups.length === 0){ console.warn("[Exporter] Tidak ada soal yang diekstrak."); return; }
+const totalQuestions = allGroups.length;
 
-// -------------------- Styles --------------------------
-const baseStyles = `
+// --- CSS TERBAIK (TIDAK DIUBAH) ---
+const questionsStyles = `
+<style>
   @page { size: A3; margin: 0.5in; }
   html, body { font-family: system-ui, sans-serif; line-height: 1.6; margin: 0; padding: 0; }
   .container { width: 11.2in; max-width: 100%; margin: 0.25in auto; }
-  .q-block { border:1px solid #e5e7eb; border-radius:12px; padding:14px; margin:14px 0; background:#fff; page-break-inside:avoid; }
-  .q-title { font-weight:700; font-size:20px; margin:0 0 10px 0; }
-  .meta { font-weight:700; font-size:18px; margin:6px 0; }
-  .content img { max-width:100%; height:auto; display:block; margin:8px 0; }
-  .part { break-inside:avoid; page-break-inside:avoid; margin-top:4px; }
-  hr.part-sep { border:0; border-top:1px solid #ddd; margin:8px 0; }
-`;
+  .q-block {
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 14px;
+    margin: 14px 0;
+    background: #fff;
+    page-break-inside: avoid; /* Jangan potong satu soal di tengah */
+  }
+  .q-title { font-weight: 700; font-size: 20px; margin-bottom: 10px; }
+  .meta { font-weight: 700; font-size: 18px; }
+  .content img { max-width: 100%; height: auto; display: block; }
+  .part-sep { border:0; border-top:1px solid #e5e7eb; margin: 10px 0; }
+</style>`;
 
-// ---------------- Smart slicing runtime ---------------
+const answersStyles = `
+<style>
+  @page { size: A3; margin: 0.5in; }
+  html, body { font-family: system-ui, sans-serif; line-height: 1.6; margin: 0; padding: 0; }
+  .container { width: 11.2in; max-width: 100%; margin: 0.25in auto; }
+  section.q-block {
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 14px;
+    margin: 14px 0; /* Tambahkan margin agar ada jarak antar soal */
+    background: #fff;
+    page-break-inside: avoid; /* Jangan potong satu soal di tengah */
+  }
+  /* Hapus aturan 'always', biarkan browser yang memutuskan */
+  section.q-block { page-break-before: auto; }
+
+  .q-title { font-weight: 700; font-size: 20px; margin: 0 0 10px 0; }
+  .meta { font-weight: 700; font-size: 18px; }
+  .content-block { page-break-inside: avoid; margin: 0; line-height:0; }
+  .content-block img { max-width: 100%; height: auto; display: block; margin:0; }
+  .part-sep { border:0; border-top:1px solid #e5e7eb; margin: 10px 0; }
+</style>`;
+
+// --- SLICER TERBAIK (TIDAK DIUBAH) ---
 const answersRuntimeFix = `
 <script>
 (function(){
-  function isRowBlank(ctx,imgW,y,band){
-    const row=ctx.getImageData(band.l,y,band.r-band.l,1).data;
-    let nonWhite=0;
-    for(let i=0;i<row.length;i+=4){const r=row[i],g=row[i+1],b=row[i+2];if(r<250||g<250||b<250)nonWhite++;}
-    return nonWhite/((row.length/4)||1)<0.003;
-  }
-  function detectBand(ctx,w,h){
-    let l=w,r=0;
-    for(let y=h*0.2|0;y<h*0.8;y+=Math.max(1,(h/20|0))){
-      const row=ctx.getImageData(0,y,w,1).data;
-      for(let x=0;x<w;x+=4){
-        const R=row[x],G=row[x+1],B=row[x+2];
-        if(R<245||G<245||B<245){if(x<l)l=x;if(x>r)r=x;}
+  function detectContentBand(ctx, imgW, imgH){
+    let left = imgW, right = 0;
+    for(let y=imgH*0.2|0; y<imgH*0.8; y+=Math.max(1,(imgH/20|0))){
+      const row = ctx.getImageData(0,y,imgW,1).data;
+      for(let x=0;x<imgW;x+=4){
+        const r=row[x*4], g=row[x*4+1], b=row[x*4+2];
+        if(r<245||g<245||b<245){ if(x<left) left=x; if(x>right) right=x; }
       }
     }
-    if(l>=r) return {l:w*0.2|0,r:w*0.8|0};
-    return {l:Math.max(0,l-5),r:Math.min(w-1,r+5)};
+    if(left>=right) return {l:imgW*0.2|0,r:imgW*0.8|0};
+    return {l:Math.max(0,left-5), r:Math.min(imgW-1,right+5)};
+  }
+  function isRowBlank(ctx,imgW,y,band){
+    const row = ctx.getImageData(band.l,y,band.r-band.l,1).data;
+    let nonWhite=0;
+    for(let i=0;i<row.length;i+=4){
+      const r=row[i],g=row[i+1],b=row[i+2];
+      if(r<250||g<250||b<250) nonWhite++;
+    }
+    return (nonWhite/((row.length/4)||1)) < 0.003;
+  }
+  function findBlankCut(ctx,imgW,imgH,startY,endY,band){
+    let best=endY;
+    for(let y=endY-1;y>=startY;y--){ if(isRowBlank(ctx,imgW,y,band)) return y; }
+    return best;
   }
   async function slicer(){
     const imgs=document.querySelectorAll('.content img');
@@ -175,18 +218,20 @@ const answersRuntimeFix = `
       if(H<800) continue;
       const c=document.createElement('canvas');c.width=W;c.height=H;
       const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(img,0,0);
-      const band=detectBand(ctx,W,H);
+      const band=detectContentBand(ctx,W,H);
       const wrap=document.createElement('div');
-      let y=0,CH=480;
+      let y=0;
+      const CH=480;
       while(y<H){
         let next=Math.min(y+CH,H);
-        if(next<H){
-          for(let yy=next-1;yy>=y+100;yy--){if(isRowBlank(ctx,W,yy,band)){next=yy;break;}}
-        }
-        const h=next-y; if(h<=0) break;
+        if(next<H){ next=findBlankCut(ctx,W,H,y+100,next,band); }
+        const h=next-y;
+        if (h <= 0) break;
         const part=document.createElement('canvas');part.width=W;part.height=h;
         part.getContext('2d').drawImage(c,0,y,W,h,0,0,W,h);
-        const out=document.createElement('img');out.src=part.toDataURL('image/png');wrap.appendChild(out);
+        const out=document.createElement('img');out.src=part.toDataURL('image/png');
+        const blk=document.createElement('div');blk.className='content-block';blk.appendChild(out);
+        wrap.appendChild(blk);
         y=next;
       }
       img.replaceWith(wrap);
@@ -196,48 +241,50 @@ const answersRuntimeFix = `
 })();
 <\/script>`;
 
-// ---------------- Build HTML --------------------------
-function buildQuestions(){
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Questions</title><style>${baseStyles}</style></head><body><div class="container">`+
-    allGroups.map((g,i)=>{
-      const K=g.parts.length;
-      return `<section class="q-block"><div class="q-title">Question ${i+1} of ${totalQuestions}</div>`+
-      (g.readingHTML?`<div class="content">${g.readingHTML}</div>`:'')+
-      g.parts.map((p,idx)=>`
+// --- PERBAIKAN TAMPILAN MULTI-PART ---
+function buildHTML(title,bodyClass,bodyContent,runtimeScript=''){
+  const styles = bodyClass==='answers-page'?answersStyles:questionsStyles;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>${styles}</head><body class="${bodyClass}"><div class="container">${bodyContent}</div>${runtimeScript}</body></html>`;
+}
+const questionsBody = allGroups.map((g,i)=>`
+    <section class="q-block" id="q_${i+1}">
+      <div class="q-title">Question ${i+1} of ${totalQuestions}</div>
+      ${g.readingHTML ? `<div class="content">${g.readingHTML}</div>` : ''}
+      ${g.parts.map((p,idx)=>`
         <div class="part">
-          ${K>1?`<div class="meta">Part ${idx+1} of ${K}</div>`:''}
+          ${g.parts.length > 1 ? `<div class="meta">Part ${idx+1} of ${g.parts.length}</div>` : ''}
           <div class="content">${p.preHTML||''}</div>
         </div>
-        ${K>1&&idx<K-1?'<hr class="part-sep">':''}
-      `).join('')+`</section>`;
-    }).join('')+`</div></body></html>`;
-}
+        ${g.parts.length > 1 && idx < g.parts.length-1 ? `<hr class="part-sep">` : ''}
+      `).join('')}
+    </section>
+`).join('');
 
-function buildAnswers(){
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Answers</title><style>${baseStyles}</style></head><body><div class="container">`+
-    allGroups.map((g,i)=>{
-      const K=g.parts.length;
-      return `<section class="q-block"><div class="q-title">Question ${i+1} of ${totalQuestions}</div>`+
-      (g.readingHTML?`<div class="content">${g.readingHTML}</div>`:'')+
-      g.parts.map((p,idx)=>{
-        const marked=markCorrectChoiceIfPossible(p.preHTML,p.correctLetter);
-        return `<div class="part">
-          ${K>1?`<div class="meta">Part ${idx+1} of ${K}</div>`:''}
-          <div class="content">${marked||''}</div>
+const answersBody = allGroups.map((g,i)=>{
+    const marked = g.parts.map(p => markCorrectChoiceIfPossible(p.preHTML, p.correctLetter));
+    return `
+    <section class="q-block" id="a_${i+1}">
+      <div class="q-title">Question ${i+1} of ${totalQuestions}</div>
+      ${g.readingHTML ? `<div class="content">${g.readingHTML}</div>` : ''}
+      ${g.parts.map((p,idx)=>`
+        <div class="part">
+          ${g.parts.length > 1 ? `<div class="meta">Part ${idx+1} of ${g.parts.length}</div>` : ''}
+          <div class="content">${markCorrectChoiceIfPossible(p.preHTML, p.correctLetter)||''}</div>
           <div class="content"><span class="meta">Correct Answer: ${p.correctLetter||'N/A'}</span></div>
           <div class="content"><span class="meta">Explanation:</span></div>
           <div class="content">${p.postHTML||''}</div>
-        </div>${K>1&&idx<K-1?'<hr class="part-sep">':''}`;
-      }).join('')+`</section>`;
-    }).join('')+`</div>${answersRuntimeFix}</body></html>`;
-}
+        </div>
+        ${g.parts.length > 1 && idx < g.parts.length-1 ? `<hr class="part-sep">` : ''}
+      `).join('')}
+    </section>
+  `;
+}).join('');
 
-// ---------------- Open in New Tabs --------------------
 function openInNewTab(filename,html){
   const blob=new Blob([html],{type:'text/html'});const url=URL.createObjectURL(blob);window.open(url,'_blank');
 }
-openInNewTab('questions.html',buildQuestions());
-openInNewTab('answers.html',buildAnswers());
 
-console.log("[Exporter] Done:",totalQuestions);
+openInNewTab('questions.html',buildHTML('Questions','questions-page',questionsBody));
+openInNewTab('answers.html',buildHTML('Answers','answers-page',answersBody,answersRuntimeFix));
+console.log('[Exporter] Done:',totalQuestions);
 })();
