@@ -1,0 +1,50 @@
+(function() {
+    // Buat elemen <style> baru
+    const style = document.createElement('style');
+    style.id = 'custom-print-style-v2'; // ID baru untuk versi ini
+
+    // Aturan CSS khusus untuk mencetak
+    const cssRules = `
+        @media print {
+            /* 1. Tetap sembunyikan elemen lain agar tidak ikut tercetak */
+            body * {
+                visibility: hidden;
+            }
+
+            /* 2. Tampilkan hanya container kuis dan semua isinya */
+            .PrintQuiz-module__questionsContainer--jjfv_, .PrintQuiz-module__questionsContainer--jjfv_ * {
+                visibility: visible;
+            }
+
+            /*
+             * BAGIAN YANG MENGUBAH MARGIN SUDAH DIHAPUS DARI SINI.
+             * Sekarang, container kuis akan mengikuti tata letak aslinya.
+             */
+
+            /* 3. Mencegah pertanyaan terpotong di antara halaman */
+            .QuestionItem-module__container--OivH7 {
+                page-break-inside: avoid;
+            }
+
+            /* 4. Memaksa elemen ini untuk selalu mulai di halaman baru */
+            .PrintQuiz-module__questionText--dgDVs {
+                page-break-before: always;
+            }
+        }
+    `;
+
+    // Masukkan aturan CSS ke dalam elemen <style>
+    style.innerHTML = cssRules;
+
+    // Hapus style lama jika ada untuk menghindari konflik
+    const oldStyle = document.querySelector('[id^="custom-print-style"]');
+    if (oldStyle) {
+        oldStyle.remove();
+    }
+
+    // Tambahkan elemen <style> yang baru ke dalam <head>
+    document.head.appendChild(style);
+
+    // Memicu dialog cetak
+    window.print();
+})();
