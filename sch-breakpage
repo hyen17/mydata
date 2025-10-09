@@ -1,0 +1,98 @@
+(function() {
+  // Mencegah panel dibuat berkali-kali jika skrip dijalankan ulang
+  if (document.getElementById('print-control-panel')) {
+    alert("Panel Kontrol Cetak sudah aktif.");
+    return;
+  }
+
+  // --- 1. MEMBUAT TAMPILAN PANEL KONTROL DAN STYLENYA ---
+  const panel = document.createElement('div');
+  panel.id = 'print-control-panel';
+  panel.innerHTML = `
+    <div style="font-weight: bold; margin-bottom: 8px; text-align: center;">Panel Kontrol Cetak</div>
+    <button id="activate-cut-mode" style="width: 100%; margin-bottom: 5px; padding: 5px;">Aktifkan Mode Potong</button>
+    <button id="print-page-button" style="width: 100%; padding: 5px;">Cetak Halaman</button>
+  `;
+  document.body.appendChild(panel);
+
+  const style = document.createElement('style');
+  style.id = 'print-tool-style';
+  style.innerHTML = `
+    @media screen {
+      #print-control-panel {
+        position: fixed; top: 20px; right: 20px; z-index: 10000;
+        background: white; border: 1px solid #ccc; border-radius: 8px;
+        padding: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.2); font-family: sans-serif; font-size: 13px;
+      }
+      .page-break-inserter {
+        font-size: 11px; color: #007bff; cursor: pointer; margin-left: 10px;
+        text-decoration: underline; opacity: 0.7; font-weight: normal; display: inline-block;
+      }
+      .page-break-inserter:hover { opacity: 1; color: #dc3545; }
+      .page-break-inserter.activated { color: #28a745; text-decoration: none; cursor: default; }
+      .page-break-marker {
+        width: 100%; height: 1px; margin: 10px 0;
+        background: repeating-linear-gradient(45deg, #dc3545, #dc3545 5px, transparent 5px, transparent 10px);
+      }
+    }
+    @media print {
+      #print-control-panel, .page-break-inserter, .page-break-marker {
+        display: none !important;
+      }
+    }
+  `;
+  document.head.appendChild(style);
+
+  // --- 2. FUNGSI UNTUK TOMBOL-TOMBOL ---
+  const activateButton = document.getElementById('activate-cut-mode');
+  const printButton = document.getElementById('print-page-button');
+
+  activateButton.onclick = function() {
+    const semuaSoal = document.querySelectorAll('[data-test-id="quiz-print-question"]');
+    if (semuaSoal.length === 0) {
+      alert("Gagal menemukan soal di halaman ini.");
+      return;
+    }
+
+    semuaSoal.forEach(soalContainer => {
+      const targetElements = soalContainer.querySelectorAll('p, div[id], table');
+      targetElements.forEach(el => {
+        if (el.querySelector('.page-break-inserter')) return;
+
+        const inserter = document.createElement('span');
+        inserter.className = 'page-break-inserter';
+        inserter.innerText = '✂️ Potong di sini';
+        
+        inserter.onclick = function(event) {
+          event.stopPropagation();
+          
+          // === BAGIAN YANG DIPERBAIKI ===
+          // Logika yang menghapus page break lama sudah DIHAPUS.
+          // Sekarang skrip hanya akan MENAMBAHKAN page break baru.
+
+          const pageBreaker = document.createElement('div');
+          pageBreaker.style.pageBreakBefore = 'always';
+          
+          const marker = document.createElement('div');
+          marker.className = 'page-break-marker';
+          pageBreaker.appendChild(marker);
+
+          el.parentNode.insertBefore(pageBreaker, el.nextSibling);
+
+          // Beri umpan balik visual bahwa aksi berhasil
+          inserter.innerText = "✓ Page Break Disisipkan";
+          inserter.className = "page-break-inserter activated";
+          inserter.onclick = null; // Nonaktifkan tautan setelah diklik
+        };
+        el.appendChild(inserter);
+      });
+    });
+
+    activateButton.innerText = "Mode Potong Aktif";
+    activateButton.disabled = true;
+  };
+
+  printButton.onclick = function() {
+    window.print();
+  };
+})();
