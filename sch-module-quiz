@@ -1,7 +1,6 @@
 (() => {
     // =================================================================================
-    // BAGIAN 1: SEMUA FUNGSI HELPER DAN LOGIKA EKSTRAKSI ANDA
-    // Bagian ini tidak diubah, hanya dibungkus dalam sebuah fungsi besar.
+    // BAGIAN 1: SEMUA FUNGSI HELPER DAN LOGIKA EKSTRAKSI ANDA (inti tidak diubah)
     // =================================================================================
 
     async function jalankanProsesEkstraksi() {
@@ -29,56 +28,364 @@
             const $ = (sel, root = document) => root.querySelector(sel);
             const $all = (sel, root = document) => Array.from(root.querySelectorAll(sel));
             const esc = (s) => s ? s.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])) : '';
-            function sanitizeHTML(html) { if (!html) return ''; const tpl = document.createElement('template'); tpl.innerHTML = html; const walker = document.createTreeWalker(tpl.content, NodeFilter.SHOW_ELEMENT, null); const toRemove = []; while (walker.nextNode()) { const el = walker.currentNode; const tag = el.tagName ? el.tagName.toLowerCase() : ''; if (tag === 'script') { toRemove.push(el); continue; } [...el.attributes].forEach(attr => { const name = attr.name.toLowerCase(); const val = (attr.value || '').trim(); if (name.startsWith('on')) el.removeAttribute(attr.name); if ((name === 'href' || name === 'src') && /^javascript:/i.test(val)) el.removeAttribute(attr.name); }); } toRemove.forEach(n => n.remove()); return tpl.innerHTML; }
+            function sanitizeHTML(html) {
+                if (!html) return '';
+                const tpl = document.createElement('template');
+                tpl.innerHTML = html;
+                const walker = document.createTreeWalker(tpl.content, NodeFilter.SHOW_ELEMENT, null);
+                const toRemove = [];
+                while (walker.nextNode()) {
+                    const el = walker.currentNode;
+                    const tag = el.tagName ? el.tagName.toLowerCase() : '';
+                    if (tag === 'script') { toRemove.push(el); continue; }
+                    [...el.attributes].forEach(attr => {
+                        const name = attr.name.toLowerCase();
+                        const val = (attr.value || '').trim();
+                        if (name.startsWith('on')) el.removeAttribute(attr.name);
+                        if ((name === 'href' || name === 'src') && /^javascript:/i.test(val)) el.removeAttribute(attr.name);
+                    });
+                }
+                toRemove.forEach(n => n.remove());
+                return tpl.innerHTML;
+            }
 
             /***********************
              * TITLE (SHORT)       *
              ***********************/
             function pickText(el) { return el ? (el.textContent || el.innerText || '').trim() : ''; }
-            function getFullCourseTitleImmediate() { const el = $('h1.CourseNodeHeader-module__courseTitleHeadingTwo--RL41B[data-test-id="course-module-name"]') || $('h1[data-test-id="course-module-name"]') || $('h1[class*="courseTitleHeadingTwo"]') || $('[class*="CourseNodeHeader-module__wrapper"] h1') || $('h1'); return pickText(el) || 'Quiz'; }
-            async function getFullCourseTitle() { const now = getFullCourseTitleImmediate(); if (now !== 'Quiz') return now; const el = await waitFor(() => $('h1[data-test-id="course-module-name"]') || $('h1[class*="courseTitleHeadingTwo"]') || $('[class*="CourseNodeHeader-module__wrapper"] h1') || null, 2000, 120); return el ? pickText(el) : 'Quiz'; }
-            function toShortModuleTitle(fullTitle) { const m = fullTitle.match(/(Module\s+\d+(?:\.\d+)*)(?::|$)/i); if (m) return `${m[1]} Quiz`; const beforeColon = fullTitle.split(':')[0].trim(); if (/Module/i.test(beforeColon)) return `${beforeColon} Quiz`; return 'Quiz'; }
+            function getFullCourseTitleImmediate() {
+                const el =
+                    $('h1.CourseNodeHeader-module__courseTitleHeadingTwo--RL41B[data-test-id="course-module-name"]')
+                    || $('h1[data-test-id="course-module-name"]')
+                    || $('h1[class*="courseTitleHeadingTwo"]')
+                    || $('[class*="CourseNodeHeader-module__wrapper"] h1')
+                    || $('h1');
+                return pickText(el) || 'Quiz';
+            }
+            async function getFullCourseTitle() {
+                const now = getFullCourseTitleImmediate();
+                if (now !== 'Quiz') return now;
+                const el = await waitFor(() =>
+                    $('h1[data-test-id="course-module-name"]')
+                    || $('h1[class*="courseTitleHeadingTwo"]')
+                    || $('[class*="CourseNodeHeader-module__wrapper"] h1')
+                    || null, 2000, 120);
+                return el ? pickText(el) : 'Quiz';
+            }
+            function toShortModuleTitle(fullTitle) {
+                const m = fullTitle.match(/(Module\s+\d+(?:\.\d+)*)(?::|$)/i);
+                if (m) return `${m[1]} Quiz`;
+                const beforeColon = fullTitle.split(':')[0].trim();
+                if (/Module/i.test(beforeColon)) return `${beforeColon} Quiz`;
+                return 'Quiz';
+            }
 
             /***********************
              * HELPERS (NUMBERS)   *
              ***********************/
-            function parseQNumFromIndexText(s) { if (!s) return null; const m = s.match(/Question(?:\s*#)?\s*(\d+)/i); return m ? parseInt(m[1], 10) : null; }
-            function getNextAriaNumber() { const btn = $('[data-test-id="attempt-review-footer-nextattempt"], button[class*="__nextbtn"]'); if (!btn) return null; const aria = btn.getAttribute('aria-label') || ''; const m = aria.match(/Next item question #(\d+)/i); return m ? parseInt(m[1], 10) : null; }
-            function getTotalQuestionsFromNav() { const table = $('table[data-test-id="exam-review-results"]'); if (!table) return null; const rows = $all('tbody tr[data-test-id="exam-review-answer"]', table); if (rows.length) return rows.length; const rowsById = $all('tbody tr[id^="exam-review-table-row-"]', table); if (rowsById.length) return rowsById.length; const nums = $all('tbody tr td:first-child span', table).map(s => parseInt((s.textContent || '').trim(), 10)).filter(n => Number.isFinite(n)); return nums.length ? Math.max(...nums) : null; }
+            function parseQNumFromIndexText(s) {
+                if (!s) return null;
+                const m = s.match(/Question(?:\s*#)?\s*(\d+)/i);
+                return m ? parseInt(m[1], 10) : null;
+            }
+            function getNextAriaNumber() {
+                const btn = $('[data-test-id="attempt-review-footer-nextattempt"], button[class*="__nextbtn"]');
+                if (!btn) return null;
+                const aria = btn.getAttribute('aria-label') || '';
+                const m = aria.match(/Next item question #(\d+)/i);
+                return m ? parseInt(m[1], 10) : null;
+            }
+            function getTotalQuestionsFromNav() {
+                const table = $('table[data-test-id="exam-review-results"]');
+                if (!table) return null;
+                const rows = $all('tbody tr[data-test-id="exam-review-answer"]', table);
+                if (rows.length) return rows.length;
+                const rowsById = $all('tbody tr[id^="exam-review-table-row-"]', table);
+                if (rowsById.length) return rowsById.length;
+                const nums = $all('tbody tr td:first-child span', table)
+                    .map(s => parseInt((s.textContent || '').trim(), 10))
+                    .filter(n => Number.isFinite(n));
+                return nums.length ? Math.max(...nums) : null;
+            }
 
             /***********************
              * SINGLE Q EXTRACT    *
              ***********************/
-            function extractFromContainer(root, readingHTML) { const content = $('[data-id="question-content"]', root) || root; const idxEl = $('.QuestionBody-module__questionOrder--kNol4,[class*="questionOrder"]', root); const indexText = idxEl ? idxEl.innerText.trim() : ($('[data-test-id="attempt-review-question-index"]') ?.innerText.trim() || null); const qEl = $('.QuestionBody-module__questionText--mVV91,[class*="QuestionBody-module__questionText"]', root) || content; const questionHTML = qEl.innerHTML; const questionText = qEl.innerText.trim(); const group = $('[role="radiogroup"]', root) || root; const blocks = $all('[data-id="question-body-container"]', group); const makeChoice = (container, idx) => { const letterEl = $('[class*="alphaOrdinal"]', container); const textEl = $('[class*="optionText"]', container) || container; const correctImg = $('img[alt="Correct Answer"]', container); const letter = (letterEl ? letterEl.innerText : String.fromCharCode(65 + idx)).replace(/[)\.]/g, '').trim(); const choiceHTML = (textEl.innerHTML || '').trim(); const choiceText = (textEl.innerText || '').trim(); return { letter, text: choiceText, html: choiceHTML, isCorrect: !!correctImg }; }; const choices = blocks.length ? blocks.map(makeChoice) : $all('label[class*="e1bppr3n2"], label', group).map(makeChoice); const expWrap = $('[id^="question-explanation-"]', root) || $('section:has(> b), section', root); let explanationHTML = '', explanationText = '', explanationHasLabel = false; if (expWrap) { const clone = expWrap.cloneNode(true); explanationHasLabel = !!$('b', clone); explanationHTML = clone.innerHTML.trim(); explanationText = clone.innerText.trim(); } const idEl = content.closest('[id^="question_"]') || content; const qId = idEl.id || null; const correct = choices.find(c => c.isCorrect) || null; return { id: qId, indexText, questionHTML, questionText, choices, correct, explanationHTML, explanationText, explanationHasLabel, readingHTML: readingHTML || null }; }
+            function extractFromContainer(root, readingHTML) {
+                const content = $('[data-id="question-content"]', root) || root;
+                const idxEl = $('.QuestionBody-module__questionOrder--kNol4,[class*="questionOrder"]', root);
+                const indexText = idxEl
+                    ? idxEl.innerText.trim()
+                    : ($('[data-test-id="attempt-review-question-index"]')?.innerText?.trim() || null);
+
+                const qEl = $('.QuestionBody-module__questionText--mVV91,[class*="QuestionBody-module__questionText"]', root) || content;
+                const questionHTML = qEl.innerHTML;
+                const questionText = qEl.innerText.trim();
+
+                const group = $('[role="radiogroup"]', root) || root;
+                const blocks = $all('[data-id="question-body-container"]', group);
+
+                const makeChoice = (container, idx) => {
+                    const letterEl = $('[class*="alphaOrdinal"]', container);
+                    const textEl = $('[class*="optionText"]', container) || container;
+                    const correctImg = $('img[alt="Correct Answer"]', container);
+                    const letter = (letterEl ? letterEl.innerText : String.fromCharCode(65 + idx)).replace(/[)\.]/g, '').trim();
+                    const choiceHTML = (textEl.innerHTML || '').trim();
+                    const choiceText = (textEl.innerText || '').trim();
+                    return { letter, text: choiceText, html: choiceHTML, isCorrect: !!correctImg };
+                };
+
+                const choices = blocks.length
+                    ? blocks.map(makeChoice)
+                    : $all('label[class*="e1bppr3n2"], label', group).map(makeChoice);
+
+                // Fallback tanpa :has(> b)
+                let expWrap = $('[id^="question-explanation-"]', root);
+                if (!expWrap) {
+                    const secs = $all('section', root);
+                    expWrap = secs.find(s => s.querySelector('b')) || secs[0] || null;
+                }
+                let explanationHTML = '', explanationText = '', explanationHasLabel = false;
+                if (expWrap) {
+                    const clone = expWrap.cloneNode(true);
+                    explanationHasLabel = !!$('b', clone);
+                    explanationHTML = clone.innerHTML.trim();
+                    explanationText = clone.innerText.trim();
+                }
+
+                const idEl = content.closest('[id^="question_"]') || content;
+                const qId = idEl.id || null;
+                const correct = choices.find(c => c.isCorrect) || null;
+
+                return {
+                    id: qId,
+                    indexText,
+                    questionHTML,
+                    questionText,
+                    choices,
+                    correct,
+                    explanationHTML,
+                    explanationText,
+                    explanationHasLabel,
+                    readingHTML: readingHTML || null
+                };
+            }
 
             /*******************************
              * PAGE EXTRACT (WITH READING) *
              *******************************/
-            function collectAllQuestionsOnPage() { const results = []; const setContainer = $('.AttemptReview-module__questionSetContainer--k2LgH') || $('[data-question-target="overview"]') ?.closest('.AttemptReview-module__questionSetContainer--k2LgH'); if (setContainer) { const readingEl = $('.QuestionSet-module__questionText--e_VDw[data-question-target="overview"]', setContainer); const readingHTML = readingEl ? readingEl.innerHTML : null; const qBodies = $all('.QuestionSet-module__questionSetBodyContainer--N7Atb', setContainer).map(span => $('.QuestionBody-module__questionContainer--wi5XU', span) || span).filter(Boolean); qBodies.forEach(root => { results.push(extractFromContainer(root, readingHTML)); }); return { records: results, pageMaxQNum: getMaxQNumFromRecords(results) }; } const wrap = $('[data-id="question-content"]'); if (wrap) { const rec = extractFromContainer(wrap, null); return { records: [rec], pageMaxQNum: parseQNumFromIndexText(rec.indexText) || null }; } return { records: [], pageMaxQNum: null }; }
-            function getMaxQNumFromRecords(recs) { let max = null; recs.forEach(r => { const n = parseQNumFromIndexText(r.indexText); if (Number.isFinite(n)) max = max == null ? n : Math.max(max, n); }); return max; }
+            function collectAllQuestionsOnPage() {
+                const results = [];
+
+                const setContainer = $('.AttemptReview-module__questionSetContainer--k2LgH')
+                    || $('[data-question-target="overview"]')?.closest('.AttemptReview-module__questionSetContainer--k2LgH');
+
+                if (setContainer) {
+                    const readingEl = $('.QuestionSet-module__questionText--e_VDw[data-question-target="overview"]', setContainer);
+                    const readingHTML = readingEl ? readingEl.innerHTML : null;
+
+                    const qBodies = $all('.QuestionSet-module__questionSetBodyContainer--N7Atb', setContainer)
+                        .map(span => $('.QuestionBody-module__questionContainer--wi5XU', span) || span)
+                        .filter(Boolean);
+
+                    qBodies.forEach(root => { results.push(extractFromContainer(root, readingHTML)); });
+                    return { records: results, pageMaxQNum: getMaxQNumFromRecords(results) };
+                }
+
+                const wrap = $('[data-id="question-content"]');
+                if (wrap) {
+                    const rec = extractFromContainer(wrap, null);
+                    return { records: [rec], pageMaxQNum: parseQNumFromIndexText(rec.indexText) || null };
+                }
+
+                return { records: [], pageMaxQNum: null };
+            }
+
+            function getMaxQNumFromRecords(recs) {
+                let max = null;
+                recs.forEach(r => {
+                    const n = parseQNumFromIndexText(r.indexText);
+                    if (Number.isFinite(n)) max = max == null ? n : Math.max(max, n);
+                });
+                return max;
+            }
 
             /**********************
              * FLOW: CAPTURE ALL  *
              **********************/
-            async function captureAll() { await waitFor(() => $('[data-id="question-content"]') || $('.AttemptReview-module__questionSetContainer--k2LgH')); let prevFirstId = ($('[data-id="question-content"]') ?.closest('[id^="question_"]') || $('[data-id="question-content"]')) ?.id || null; const totalFromNav = getTotalQuestionsFromNav(); const all = []; const seen = new Set(); while (true) { const { records: pageRecs, pageMaxQNum } = collectAllQuestionsOnPage(); for (const rec of pageRecs) { const key = rec.id || (rec.indexText + '|' + rec.questionText.slice(0, 40)); if (!seen.has(key)) { seen.add(key); all.push(rec); } } if (totalFromNav && pageMaxQNum && pageMaxQNum >= totalFromNav) break; const nextBtn = $('[data-test-id="attempt-review-footer-nextattempt"], button[class*="__nextbtn"]'); if (!nextBtn || nextBtn.disabled) break; const nextNum = getNextAriaNumber(); if (pageMaxQNum != null && nextNum != null && nextNum <= pageMaxQNum) break; if (totalFromNav && nextNum > totalFromNav) break; nextBtn.click(); const changed = await waitFor(() => { const nowId = ($('[data-id="question-content"]') ?.closest('[id^="question_"]') || $('[data-id="question-content"]')) ?.id || null; return (nowId && nowId !== prevFirstId) ? nowId : null; }, CONFIG.LOAD_TIMEOUT_MS, 120); if (!changed) break; prevFirstId = changed; } return all; }
+            async function captureAll() {
+                await waitFor(() => $('[data-id="question-content"]') || $('.AttemptReview-module__questionSetContainer--k2LgH'));
+
+                let prevFirstId = ($('[data-id="question-content"]')?.closest('[id^="question_"]') || $('[data-id="question-content"]'))?.id || null;
+                const totalFromNav = getTotalQuestionsFromNav();
+
+                const all = [];
+                const seen = new Set();
+
+                while (true) {
+                    const { records: pageRecs, pageMaxQNum } = collectAllQuestionsOnPage();
+
+                    for (const rec of pageRecs) {
+                        const key = rec.id || (rec.indexText + '|' + rec.questionText.slice(0, 40));
+                        if (!seen.has(key)) {
+                            seen.add(key);
+                            all.push(rec);
+                        }
+                    }
+
+                    if (totalFromNav && pageMaxQNum && pageMaxQNum >= totalFromNav) break;
+
+                    const nextBtn = $('[data-test-id="attempt-review-footer-nextattempt"], button[class*="__nextbtn"]');
+                    if (!nextBtn || nextBtn.disabled) break;
+
+                    const nextNum = getNextAriaNumber();
+                    if (pageMaxQNum != null && nextNum != null && nextNum <= pageMaxQNum) break;
+                    if (totalFromNav && nextNum > totalFromNav) break;
+
+                    nextBtn.click();
+
+                    const changed = await waitFor(() => {
+                        const nowId = ($('[data-id="question-content"]')?.closest('[id^="question_"]') || $('[data-id="question-content"]'))?.id || null;
+                        return (nowId && nowId !== prevFirstId) ? nowId : null;
+                    }, CONFIG.LOAD_TIMEOUT_MS, 120);
+
+                    if (!changed) break;
+                    prevFirstId = changed;
+                }
+                return all;
+            }
 
             /**********************
              * RENDER 2 WINDOWS   *
              **********************/
-            function gatherOriginalHead() { let headBits = ['<meta charset="utf-8">', '<meta name="viewport" content="width=device-width, initial-scale=1">']; document.querySelectorAll('link[rel="stylesheet"], style, head script').forEach(el => { headBits.push(el.outerHTML); }); return headBits.join("\n"); }
-            function getPageTemplate(title, originalHeadHTML, bodyHTML) { const quizStyles = `<style>:root { --qc-maxw: 900px; --qc-pad: 16px; --qc-gray: #f3f4f6; --qc-reading:#f9fafb; } html, body { background:#fff; } body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding:24px; } .qc-container { margin: 0 auto; max-width: var(--qc-maxw); } .qc-title { font-size:20px; font-weight:700; margin:0 0 12px; } .qc-reading { padding:12px; background: var(--qc-reading); border:1px solid #e5e7eb; border-radius:8px; margin: 16px 0; } .qc-breakMarker { height:0; border:none; margin:0; } @media print { .qc-reading.qc-break { page-break-before: always; break-before: page; } .qc-item { page-break-inside: avoid; break-inside: avoid; } body { padding:0 20px; } } .qc-item { padding:12px 8px; margin-bottom:12px; border-radius:8px; border:1px solid #f0f0f0; background:#fff; break-inside: avoid; page-break-inside: avoid; } .qc-item h3 { margin:0 0 6px; font-size:16px; font-weight:700; } .qc-stem { margin:4px 0 10px; line-height:1.5; } .qc-choices { margin:8px 0 0 0; padding:0; list-style:none; } .qc-choice { margin:6px 0; display:flex; gap:8px; line-height:1.45; } .qc-letter { font-weight:700; min-width:22px; } .qc-correct .qc-text { font-weight:700; } .qc-tick { font-weight:700; margin-left:6px; } .qc-answer-block { border-top:1px dashed #e5e7eb; margin-top:10px; padding:10px; background: var(--qc-gray); border-radius:8px; } .qc-choice mjx-container[display="true"] { display:block; } </style>`; return '<!doctype html><html><head><title>' + esc(title) + '</title>' + originalHeadHTML + quizStyles + '</head><body>' + bodyHTML + '</body></html>'; }
-            function renderListHTML(records, title, mode) { let html = '<div class="qc-container"><h1 class="qc-title">' + esc(title) + '</h1>'; let lastReadingKey = null; let firstBlock = true; records.forEach((rec, i) => { if (rec.readingHTML && rec.readingHTML !== lastReadingKey) { const readingClass = firstBlock ? 'qc-reading' : 'qc-reading qc-break'; html += (firstBlock ? '' : '<hr class="qc-breakMarker">') + '<section class="' + readingClass + '">' + rec.readingHTML + '</section>'; lastReadingKey = rec.readingHTML; firstBlock = false; } const idxText = rec.indexText || ('Question ' + (i + 1)); const choiceLis = rec.choices.map(ch => { const core = (ch.html && ch.html.length) ? ch.html : esc(ch.text); const tick = (mode === 'A' && ch.isCorrect) ? '<span class="qc-tick">✓</span>' : ''; const base = '<span class="qc-letter">' + esc(ch.letter) + ')</span>' + '<span class="qc-text">' + core + tick + '</span>'; return '<li class="qc-choice ' + ((mode === 'A' && ch.isCorrect) ? 'qc-correct' : '') + '">' + base + '</li>'; }).join(''); html += '' + '<article class="qc-item" data-qid="' + esc(rec.id || ('q-' + (i + 1))) + '">' + '<h3>' + esc(idxText) + '</h3>' + '<div class="qc-stem">' + (rec.questionHTML || esc(rec.questionText)) + '</div>' + '<ul class="qc-choices">' + choiceLis + '</ul>' + (mode === 'A' ? ('<div class="qc-answer-block">' + (rec.explanationHTML ? (rec.explanationHasLabel ? '<div class="qc-expl">' + rec.explanationHTML + '</div>' : '<div class="qc-expl"><b>Explanation:</b> ' + rec.explanationHTML + '</div>') : '<div class="qc-expl"><b>Explanation:</b> <em>No explanation found.</em></div>') + '</div>') : '') + '</article>'; firstBlock = false; }); html += '</div>'; return html; }
-            function openTabWith(docHTML) { const win = window.open('', '_blank'); if (!win) { alert('Popup diblokir. Izinkan pop-up untuk situs ini.'); return; } const doc = win.document; doc.open(); doc.write(docHTML); doc.close(); try { if (win.MathJax && win.MathJax.typesetPromise) { win.MathJax.typesetPromise(); } } catch (_) {} }
+            function gatherOriginalHead() {
+                let headBits = ['<meta charset="utf-8">', '<meta name="viewport" content="width=device-width, initial-scale=1">'];
+                document.querySelectorAll('link[rel="stylesheet"], style, head script').forEach(el => {
+                    headBits.push(el.outerHTML);
+                });
+                return headBits.join("\n");
+            }
+
+            function getPageTemplate(title, originalHeadHTML, bodyHTML) {
+                // Konfigurasi MathJax disisipkan lebih dulu agar dibaca sebelum script MathJax yang tersalin.
+                const mjxCfg = `
+  <script>
+    window.MathJax = window.MathJax || {};
+    MathJax.chtml = Object.assign({ scale: 1, matchFontHeight: false }, MathJax.chtml || {});
+  </script>`;
+
+                // Samakan base font dengan halaman asal agar ukuran CHTML tetap konsisten
+                const baseFont = getComputedStyle(document.documentElement).fontSize || '16px';
+                const normalizeMath = `
+  <style>
+    html { font-size: ${baseFont}; }
+    mjx-container { font-size: 1em !important; line-height: 1.2; }
+    /* pastikan display/inline rapi di stem & choices */
+    .qc-stem mjx-container[display="false"],
+    .qc-choice mjx-container[display="false"] { display:inline-block; vertical-align: baseline; }
+    .qc-choice mjx-container[display="true"] { display:block; }
+  </style>`;
+
+                const quizStyles = `<style>
+:root { --qc-maxw: 900px; --qc-pad: 16px; --qc-gray: #f3f4f6; --qc-reading:#f9fafb; }
+html, body { background:#fff; }
+body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding:24px; }
+.qc-container { margin: 0 auto; max-width: var(--qc-maxw); }
+.qc-title { font-size:20px; font-weight:700; margin:0 0 12px; }
+.qc-reading { padding:12px; background: var(--qc-reading); border:1px solid #e5e7eb; border-radius:8px; margin: 16px 0; }
+.qc-breakMarker { height:0; border:none; margin:0; }
+@media print {
+  .qc-reading.qc-break { page-break-before: always; break-before: page; }
+  .qc-item { page-break-inside: avoid; break-inside: avoid; }
+  body { padding:0 20px; }
+}
+.qc-item { padding:12px 8px; margin-bottom:12px; border-radius:8px; border:1px solid #f0f0f0; background:#fff;
+  break-inside: avoid; page-break-inside: avoid; }
+.qc-item h3 { margin:0 0 6px; font-size:16px; font-weight:700; }
+.qc-stem { margin:4px 0 10px; line-height:1.5; }
+.qc-choices { margin:8px 0 0 0; padding:0; list-style:none; }
+.qc-choice { margin:6px 0; display:flex; gap:8px; line-height:1.45; }
+.qc-letter { font-weight:700; min-width:22px; }
+.qc-correct .qc-text { font-weight:700; }
+.qc-tick { font-weight:700; margin-left:6px; }
+.qc-answer-block { border-top:1px dashed #e5e7eb; margin-top:10px; padding:10px; background: var(--qc-gray); border-radius:8px; }
+</style>`;
+
+                return '<!doctype html><html><head><title>' + esc(title) + '</title>'
+                    + mjxCfg + originalHeadHTML + quizStyles + normalizeMath
+                    + '</head><body>' + bodyHTML + '</body></html>';
+            }
+
+            function renderListHTML(records, title, mode) {
+                let html = '<div class="qc-container"><h1 class="qc-title">' + esc(title) + '</h1>';
+                let lastReadingKey = null;
+                let firstBlock = true;
+
+                records.forEach((rec, i) => {
+                    if (rec.readingHTML && rec.readingHTML !== lastReadingKey) {
+                        const readingClass = firstBlock ? 'qc-reading' : 'qc-reading qc-break';
+                        html += (firstBlock ? '' : '<hr class="qc-breakMarker">')
+                            + '<section class="' + readingClass + '">' + rec.readingHTML + '</section>';
+                        lastReadingKey = rec.readingHTML;
+                        firstBlock = false;
+                    }
+
+                    const idxText = rec.indexText || ('Question ' + (i + 1));
+                    const choiceLis = rec.choices.map(ch => {
+                        const core = (ch.html && ch.html.length) ? ch.html : esc(ch.text);
+                        const tick = (mode === 'A' && ch.isCorrect) ? '<span class="qc-tick">✓</span>' : '';
+                        const base = '<span class="qc-letter">' + esc(ch.letter) + ')</span>'
+                            + '<span class="qc-text">' + core + tick + '</span>';
+                        return '<li class="qc-choice ' + ((mode === 'A' && ch.isCorrect) ? 'qc-correct' : '') + '">' + base + '</li>';
+                    }).join('');
+
+                    html += ''
+                        + '<article class="qc-item" data-qid="' + esc(rec.id || ('q-' + (i + 1))) + '">'
+                        + '<h3>' + esc(idxText) + '</h3>'
+                        + '<div class="qc-stem">' + (rec.questionHTML || esc(rec.questionText)) + '</div>'
+                        + '<ul class="qc-choices">' + choiceLis + '</ul>'
+                        + (mode === 'A'
+                            ? ('<div class="qc-answer-block">'
+                                + (rec.explanationHTML
+                                    ? (rec.explanationHasLabel
+                                        ? '<div class="qc-expl">' + rec.explanationHTML + '</div>'
+                                        : '<div class="qc-expl"><b>Explanation:</b> ' + rec.explanationHTML + '</div>')
+                                    : '<div class="qc-expl"><b>Explanation:</b> <em>No explanation found.</em></div>')
+                                + '</div>')
+                            : '')
+                        + '</article>';
+                    firstBlock = false;
+                });
+
+                html += '</div>';
+                return html;
+            }
+
+            function openTabWith(docHTML) {
+                const win = window.open('', '_blank');
+                if (!win) { alert('Popup diblokir. Izinkan pop-up untuk situs ini.'); return; }
+                const doc = win.document;
+                doc.open();
+                doc.write(docHTML);
+                doc.close();
+                try {
+                    if (win.MathJax && win.MathJax.typesetPromise) {
+                        win.MathJax.typesetPromise();
+                    }
+                } catch (_) {}
+            }
 
             /**********************
              * MAIN
              **********************/
             const fullTitle = await getFullCourseTitle();
             const shortTitle = toShortModuleTitle(fullTitle);
+
             const records = await captureAll();
             if (!records || !records.length) { alert('Tidak ada pertanyaan yang tertangkap.'); return; }
 
             const originalHead = gatherOriginalHead();
+
             const questionsTitle = shortTitle + ' - Questions';
             const questionsBody = renderListHTML(records, questionsTitle, 'Q');
             const questionsPage = getPageTemplate(questionsTitle, originalHead, questionsBody);
@@ -96,6 +403,7 @@
             alert('Gagal memproses quiz: ' + err.message);
         } finally {
             // BARIS BARU: Kembalikan tombol ke keadaan semula setelah selesai/gagal
+            const btn = document.getElementById('quiz-extractor-btn');
             if (btn) {
                 btn.textContent = '🖨️ Ekstrak Quiz';
                 btn.disabled = false;
@@ -114,7 +422,7 @@
         }
 
         // BARIS BARU: Buat elemen tombol
-        const a = 1;
+        const a = 1; // (biarkan apa adanya seperti di script asli kamu)
         const button = document.createElement('button');
         button.id = 'quiz-extractor-btn';
         button.innerHTML = '🖨️ Ekstrak Quiz';
@@ -138,7 +446,7 @@
             cursor: 'pointer',
             boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
         });
-        
+
         // BARIS BARU: Tambahkan tombol ke halaman
         document.body.appendChild(button);
     }
