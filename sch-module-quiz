@@ -1,15 +1,11 @@
 (() => {
     // =================================================================================
-    // BAGIAN 1: SEMUA FUNGSI HELPER DAN LOGIKA EKSTRAKSI ANDA (inti tidak diubah)
+    // BAGIAN 1: SEMUA FUNGSI HELPER DAN LOGIKA EKSTRAKSI (inti kamu + perbaikan)
     // =================================================================================
 
     async function jalankanProsesEkstraksi() {
         const btn = document.getElementById('quiz-extractor-btn');
-        // BARIS BARU: Beri feedback visual ke user dan cegah klik ganda
-        if (btn) {
-            btn.textContent = '⏳ Memproses...';
-            btn.disabled = true;
-        }
+        if (btn) { btn.textContent = '⏳ Memproses...'; btn.disabled = true; }
 
         try {
             /***********************
@@ -139,19 +135,26 @@
                     ? blocks.map(makeChoice)
                     : $all('label[class*="e1bppr3n2"], label', group).map(makeChoice);
 
-                // Fallback tanpa :has(> b)
+                // Explanation: ambil HTML + computed font-size basis
                 let expWrap = $('[id^="question-explanation-"]', root);
                 if (!expWrap) {
                     const secs = $all('section', root);
                     expWrap = secs.find(s => s.querySelector('b')) || secs[0] || null;
                 }
-                let explanationHTML = '', explanationText = '', explanationHasLabel = false;
+                let explanationHTML = '', explanationText = '', explanationHasLabel = false, explanationBaseFont = null;
                 if (expWrap) {
                     const clone = expWrap.cloneNode(true);
                     explanationHasLabel = !!$('b', clone);
                     explanationHTML = clone.innerHTML.trim();
                     explanationText = clone.innerText.trim();
+                    try {
+                        explanationBaseFont = getComputedStyle(expWrap).fontSize || null; // << basis ukuran
+                    } catch(_) {}
                 }
+
+                // Simpan juga basis font-size untuk stem/question jika perlu (optional)
+                let stemBaseFont = null;
+                try { stemBaseFont = getComputedStyle(qEl).fontSize || null; } catch(_) {}
 
                 const idEl = content.closest('[id^="question_"]') || content;
                 const qId = idEl.id || null;
@@ -167,6 +170,8 @@
                     explanationHTML,
                     explanationText,
                     explanationHasLabel,
+                    explanationBaseFont, // << simpan basis font
+                    stemBaseFont,        // << simpan basis font stem
                     readingHTML: readingHTML || null
                 };
             }
@@ -183,12 +188,22 @@
                 if (setContainer) {
                     const readingEl = $('.QuestionSet-module__questionText--e_VDw[data-question-target="overview"]', setContainer);
                     const readingHTML = readingEl ? readingEl.innerHTML : null;
+                    let readingBaseFont = null;
+                    if (readingEl) {
+                        try { readingBaseFont = getComputedStyle(readingEl).fontSize || null; } catch(_) {}
+                    }
 
                     const qBodies = $all('.QuestionSet-module__questionSetBodyContainer--N7Atb', setContainer)
                         .map(span => $('.QuestionBody-module__questionContainer--wi5XU', span) || span)
                         .filter(Boolean);
 
-                    qBodies.forEach(root => { results.push(extractFromContainer(root, readingHTML)); });
+                    qBodies.forEach(root => {
+                        const rec = extractFromContainer(root, readingHTML);
+                        // sisipkan basis font reading pada record pertama setiap blok baru via readingHTML wrapper di render
+                        rec._readingBaseFont = readingBaseFont || null;
+                        results.push(rec);
+                    });
+
                     return { records: results, pageMaxQNum: getMaxQNumFromRecords(results) };
                 }
 
@@ -267,23 +282,25 @@
             }
 
             function getPageTemplate(title, originalHeadHTML, bodyHTML) {
-                // Konfigurasi MathJax disisipkan lebih dulu agar dibaca sebelum script MathJax yang tersalin.
+                // Konfigurasi MathJax: jangan ubah scale (biar sama), hanya stabilkan height
                 const mjxCfg = `
   <script>
     window.MathJax = window.MathJax || {};
-    MathJax.chtml = Object.assign({ scale: 1, matchFontHeight: false }, MathJax.chtml || {});
+    MathJax.chtml = Object.assign({ matchFontHeight: false }, MathJax.chtml || {});
   </script>`;
 
-                // Samakan base font dengan halaman asal agar ukuran CHTML tetap konsisten
+                // Samakan base font root dengan halaman asal
                 const baseFont = getComputedStyle(document.documentElement).fontSize || '16px';
-                const normalizeMath = `
+                const normalize = `
   <style>
     html { font-size: ${baseFont}; }
-    mjx-container { font-size: 1em !important; line-height: 1.2; }
-    /* pastikan display/inline rapi di stem & choices */
-    .qc-stem mjx-container[display="false"],
-    .qc-choice mjx-container[display="false"] { display:inline-block; vertical-align: baseline; }
-    .qc-choice mjx-container[display="true"] { display:block; }
+    /* Jangan memaksa ukuran MathJax; biarkan relatif ke kontainer yang kita set di bawah */
+    /* Cetak tetap aman */
+    @media print {
+      .qc-reading.qc-break { page-break-before: always; break-before: page; }
+      .qc-item { page-break-inside: avoid; break-inside: avoid; }
+      body { padding:0 20px; }
+    }
   </style>`;
 
                 const quizStyles = `<style>
@@ -294,11 +311,6 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
 .qc-title { font-size:20px; font-weight:700; margin:0 0 12px; }
 .qc-reading { padding:12px; background: var(--qc-reading); border:1px solid #e5e7eb; border-radius:8px; margin: 16px 0; }
 .qc-breakMarker { height:0; border:none; margin:0; }
-@media print {
-  .qc-reading.qc-break { page-break-before: always; break-before: page; }
-  .qc-item { page-break-inside: avoid; break-inside: avoid; }
-  body { padding:0 20px; }
-}
 .qc-item { padding:12px 8px; margin-bottom:12px; border-radius:8px; border:1px solid #f0f0f0; background:#fff;
   break-inside: avoid; page-break-inside: avoid; }
 .qc-item h3 { margin:0 0 6px; font-size:16px; font-weight:700; }
@@ -312,7 +324,7 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
 </style>`;
 
                 return '<!doctype html><html><head><title>' + esc(title) + '</title>'
-                    + mjxCfg + originalHeadHTML + quizStyles + normalizeMath
+                    + mjxCfg + originalHeadHTML + quizStyles + normalize
                     + '</head><body>' + bodyHTML + '</body></html>';
             }
 
@@ -320,13 +332,17 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
                 let html = '<div class="qc-container"><h1 class="qc-title">' + esc(title) + '</h1>';
                 let lastReadingKey = null;
                 let firstBlock = true;
+                let currentReadingBase = null;
 
                 records.forEach((rec, i) => {
+                    // Jika ada reading baru, render dengan base font yang disalin dari sumber
                     if (rec.readingHTML && rec.readingHTML !== lastReadingKey) {
                         const readingClass = firstBlock ? 'qc-reading' : 'qc-reading qc-break';
+                        const baseStyle = rec._readingBaseFont ? ` style="font-size:${esc(rec._readingBaseFont)}"` : '';
                         html += (firstBlock ? '' : '<hr class="qc-breakMarker">')
-                            + '<section class="' + readingClass + '">' + rec.readingHTML + '</section>';
+                            + `<section class="${readingClass}"${baseStyle}>${rec.readingHTML}</section>`;
                         lastReadingKey = rec.readingHTML;
+                        currentReadingBase = rec._readingBaseFont || null;
                         firstBlock = false;
                     }
 
@@ -339,21 +355,27 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
                         return '<li class="qc-choice ' + ((mode === 'A' && ch.isCorrect) ? 'qc-correct' : '') + '">' + base + '</li>';
                     }).join('');
 
+                    // stem dengan basis font sumber
+                    const stemStyle = rec.stemBaseFont ? ` style="font-size:${esc(rec.stemBaseFont)}"` : '';
                     html += ''
                         + '<article class="qc-item" data-qid="' + esc(rec.id || ('q-' + (i + 1))) + '">'
                         + '<h3>' + esc(idxText) + '</h3>'
-                        + '<div class="qc-stem">' + (rec.questionHTML || esc(rec.questionText)) + '</div>'
-                        + '<ul class="qc-choices">' + choiceLis + '</ul>'
-                        + (mode === 'A'
-                            ? ('<div class="qc-answer-block">'
-                                + (rec.explanationHTML
-                                    ? (rec.explanationHasLabel
-                                        ? '<div class="qc-expl">' + rec.explanationHTML + '</div>'
-                                        : '<div class="qc-expl"><b>Explanation:</b> ' + rec.explanationHTML + '</div>')
-                                    : '<div class="qc-expl"><b>Explanation:</b> <em>No explanation found.</em></div>')
-                                + '</div>')
-                            : '')
-                        + '</article>';
+                        + `<div class="qc-stem"${stemStyle}>` + (rec.questionHTML || esc(rec.questionText)) + '</div>'
+                        + '<ul class="qc-choices">' + choiceLis + '</ul>';
+
+                    if (mode === 'A') {
+                        const explBase = rec.explanationBaseFont || currentReadingBase || null;
+                        const explStyle = explBase ? ` style="font-size:${esc(explBase)}"` : '';
+                        html += '<div class="qc-answer-block">'
+                            + (rec.explanationHTML
+                                ? (rec.explanationHasLabel
+                                    ? `<div class="qc-expl"${explStyle}>` + rec.explanationHTML + '</div>'
+                                    : `<div class="qc-expl"${explStyle}><b>Explanation:</b> ` + rec.explanationHTML + '</div>')
+                                : '<div class="qc-expl"><b>Explanation:</b> <em>No explanation found.</em></div>')
+                            + '</div>';
+                    }
+
+                    html += '</article>';
                     firstBlock = false;
                 });
 
@@ -391,7 +413,7 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
             const questionsPage = getPageTemplate(questionsTitle, originalHead, questionsBody);
             openTabWith(questionsPage);
 
-            await sleep(200); // Jeda singkat agar browser tidak bingung
+            await sleep(200);
 
             const answersTitle = shortTitle + ' - Answers';
             const answersBody = renderListHTML(records, answersTitle, 'A');
@@ -402,35 +424,21 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
             console.error(err);
             alert('Gagal memproses quiz: ' + err.message);
         } finally {
-            // BARIS BARU: Kembalikan tombol ke keadaan semula setelah selesai/gagal
             const btn = document.getElementById('quiz-extractor-btn');
-            if (btn) {
-                btn.textContent = '🖨️ Ekstrak Quiz';
-                btn.disabled = false;
-            }
+            if (btn) { btn.textContent = '🖨️ Ekstrak Quiz'; btn.disabled = false; }
         }
     }
 
     // =================================================================================
-    // BAGIAN 2: FUNGSI UNTUK MEMBUAT TOMBOL (INI YANG BARU)
+    // BAGIAN 2: TOMBOL
     // =================================================================================
     function buatTombolEkstraktor() {
-        // BARIS BARU: Cek dulu apakah tombol sudah ada, jangan buat lagi.
-        if (document.getElementById('quiz-extractor-btn')) {
-            console.log('Tombol ekstraktor sudah ada.');
-            return;
-        }
-
-        // BARIS BARU: Buat elemen tombol
-        const a = 1; // (biarkan apa adanya seperti di script asli kamu)
+        if (document.getElementById('quiz-extractor-btn')) { console.log('Tombol ekstraktor sudah ada.'); return; }
+        const a = 1;
         const button = document.createElement('button');
         button.id = 'quiz-extractor-btn';
         button.innerHTML = '🖨️ Ekstrak Quiz';
-
-        // BARIS BARU: Tambahkan event listener untuk menjalankan proses saat diklik
         button.addEventListener('click', jalankanProsesEkstraksi);
-
-        // BARIS BARU: Atur gaya (style) tombol agar selalu terlihat
         Object.assign(button.style, {
             position: 'fixed',
             bottom: '20px',
@@ -446,13 +454,11 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
             cursor: 'pointer',
             boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
         });
-
-        // BARIS BARU: Tambahkan tombol ke halaman
         document.body.appendChild(button);
     }
 
     // =================================================================================
-    // BAGIAN 3: JALANKAN FUNGSI PEMBUAT TOMBOL
+    // BAGIAN 3: RUN
     // =================================================================================
     buatTombolEkstraktor();
 
