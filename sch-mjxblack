@@ -1,0 +1,107 @@
+// === Console Script: Render & Darken MathJax from MathML previews (v3) ===
+// Jalankan di HALAMAN HASIL GENERATE (setelah file HTML terbuka).
+
+(async () => {
+  // -------- 1) Ganti pasangan <span class="MathJax_Preview"> + <script type="math/mml"> menjadi <math> --------
+  (function replacePreviewWithMath() {
+    const scripts = Array.from(document.querySelectorAll('script[type="math/mml"]'));
+    for (const scr of scripts) {
+      const prev = scr.previousElementSibling;
+      // Cari pasangan standard: <span class="MathJax_Preview"> ... </span> <script type="math/mml">...</script>
+      if (prev && prev.classList.contains('MathJax_Preview')) {
+        // Ambil MathML dari isi <script>
+        const raw = scr.innerHTML || scr.textContent || '';
+        if (!raw.trim()) { continue; }
+
+        // Parse aman via template
+        const tpl = document.createElement('template');
+        tpl.innerHTML = raw.trim();
+        let math = tpl.content.querySelector('math');
+
+        // Fallback: jika tidak ada <math>, bungkus sebagai inline MathML
+        if (!math) {
+          math = document.createElementNS('http://www.w3.org/1998/Math/MathML', 'math');
+          math.innerHTML = raw.trim();
+        }
+
+        // Sisipkan <math> tepat sebelum preview, lalu hapus preview & script
+        prev.parentNode.insertBefore(math, prev);
+        prev.remove();
+        scr.remove();
+      }
+    }
+  })();
+
+  // -------- 2) Pastikan MathJax v3 (mml -> chtml) tersedia, lalu typeset --------
+  async function ensureMathJaxV3() {
+    // Sudah ada mjx-container? berarti sudah dirender sebelumnya
+    if (document.querySelector('mjx-container')) return true;
+
+    // Jika MathJax v3 belum ada, inject loader mml-chtml
+    if (!window.MathJax) {
+      window.MathJax = {
+        loader: { load: ['input/mml', 'output/chtml'] },
+        startup: { typeset: false }
+      };
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/mml-chtml.js';
+      s.async = true;
+      const loaded = new Promise((res) => { s.onload = res; s.onerror = res; });
+      document.head.appendChild(s);
+      await loaded;
+    }
+
+    // Typeset semua <math> yang baru kita sisipkan
+    if (window.MathJax && MathJax.typesetPromise) {
+      await MathJax.typesetPromise();
+      return !!document.querySelector('mjx-container');
+    }
+    return false;
+  }
+
+  const ok = await ensureMathJaxV3();
+
+  // -------- 3) Styling: paksa warna hitam & tebalkan bentuk glyph (tanpa ubah layout) --------
+  // Atur parameter di sini jika perlu.
+  const FONT_SIZE = null;      // contoh: '120%' atau '16px' (null = biarkan ukuran asli MathJax/halaman)
+  const BOLD_SHADOW = '0.02em';// 0em (tanpa penebalan), 0.02em (sedang), 0.04em (lebih tebal)
+
+  (function injectStyle() {
+    const styleId = 'mjx-darken-style';
+    let tag = document.getElementById(styleId);
+    if (!tag) {
+      tag = document.createElement('style');
+      tag.id = styleId;
+      document.head.appendChild(tag);
+    }
+    // Jangan ganggu ukuran jika FONT_SIZE == null
+    const sizeRule = FONT_SIZE ? `font-size:${FONT_SIZE} !important;` : '';
+
+    tag.textContent = `
+      /* Warnai hitam semua output CHTML MathJax */
+      mjx-container,
+      .MathJax_CHTML,
+      .mjx-chtml,
+      .mjx-math {
+        color:#000 !important;
+        ${sizeRule}
+        -webkit-font-smoothing:auto !important;
+        -moz-osx-font-smoothing:auto !important;
+        text-rendering:geometricPrecision !important;
+        mix-blend-mode:multiply;
+      }
+      /* Sedikit penebalan optik tanpa mengubah font-weight CSS */
+      mjx-container .mjx-char {
+        text-shadow:
+          0 0 0 currentColor,
+          ${BOLD_SHADOW} 0 currentColor;
+      }
+      /* Pastikan tidak ada opacity terwarisi */
+      mjx-container * { opacity:1 !important; }
+    `;
+  })();
+
+  // -------- 4) Laporan ringkas di console --------
+  const found = document.querySelectorAll('mjx-container').length;
+  console.log(`✅ MathJax processed=${ok}, mjx-container count=${found}. Warna dipaksa #000, penebalan=${BOLD_SHADOW}${FONT_SIZE ? `, font-size=${FONT_SIZE}` : ''}.`);
+})();
