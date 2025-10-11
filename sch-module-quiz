@@ -357,11 +357,14 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
 
                     // stem dengan basis font sumber
                     const stemStyle = rec.stemBaseFont ? ` style="font-size:${esc(rec.stemBaseFont)}"` : '';
+                    // >>> PERUBAHAN SATU-SATUNYA: samakan font-size choices dengan stem
+                    const choicesStyle = rec.stemBaseFont ? ` style="font-size:${esc(rec.stemBaseFont)}"` : '';
+
                     html += ''
                         + '<article class="qc-item" data-qid="' + esc(rec.id || ('q-' + (i + 1))) + '">'
                         + '<h3>' + esc(idxText) + '</h3>'
                         + `<div class="qc-stem"${stemStyle}>` + (rec.questionHTML || esc(rec.questionText)) + '</div>'
-                        + '<ul class="qc-choices">' + choiceLis + '</ul>';
+                        + `<ul class="qc-choices"${choicesStyle}>` + choiceLis + '</ul>';
 
                     if (mode === 'A') {
                         const explBase = rec.explanationBaseFont || currentReadingBase || null;
