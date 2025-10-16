@@ -1,0 +1,92 @@
+// =====================================================
+// Auto "See Answer" → "Next" berulang, dan di soal terakhir:
+// klik "See Answer" lalu download isi <article> sebagai .txt (raw outerHTML)
+// =====================================================
+
+// Jangan deklarasi ulang autoRevealInterval; bila sudah ada, bersihkan dulu
+if (typeof autoRevealInterval !== 'undefined' && autoRevealInterval) {
+  clearInterval(autoRevealInterval);
+  autoRevealInterval = null;
+}
+
+// --- State ---
+let clickedLastSeeAnswer = false;
+let didDownload = false;
+
+// --- Utils ---
+function isVisible(el) {
+  return el && el.offsetParent !== null;
+}
+
+function downloadText(textContent, filename) {
+  const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function makeFilename(prefix = 'quiz-article') {
+  const pad = n => String(n).padStart(2,'0');
+  const d = new Date();
+  return `${prefix}-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.txt`;
+}
+
+// --- Core ---
+function revealAndAdvance() {
+  const nextButton = document.getElementById('Next');
+  const seeAnswerButton = document.getElementById('liveResultBtn');
+
+  // Soal biasa (masih ada Next)
+  if (nextButton && isVisible(nextButton)) {
+    if (seeAnswerButton && isVisible(seeAnswerButton)) {
+      seeAnswerButton.click();
+      console.log("[INFO] 'See Answer' diklik (soal biasa).");
+      setTimeout(() => {
+        nextButton.click();
+        console.log("[INFO] 'Next' diklik.");
+      }, 500);
+    } else {
+      console.log("[WAIT] Menunggu tombol 'See Answer' muncul...");
+    }
+    return;
+  }
+
+  // Soal terakhir (tidak ada Next)
+  if (!clickedLastSeeAnswer) {
+    if (seeAnswerButton && isVisible(seeAnswerButton)) {
+      seeAnswerButton.click();
+      clickedLastSeeAnswer = true;
+      console.log("[LAST] 'See Answer' diklik pada soal terakhir. Menunggu render...");
+      setTimeout(() => {
+        if (!didDownload) {
+          try {
+            const article = document.querySelector('article');
+            const raw = article ? article.outerHTML : '<article>(not found)</article>';
+            const filename = makeFilename('quiz-article');
+            downloadText(raw, filename);
+            didDownload = true;
+            console.log(`[DONE] Unduhan selesai: ${filename}`);
+          } catch (e) {
+            console.error("[ERROR] Gagal menyiapkan unduhan article:", e);
+          }
+        }
+        clearInterval(autoRevealInterval);
+        console.log("[END] Script dihentikan.");
+      }, 1000); // beri waktu render jawaban terakhir
+    } else {
+      console.log("[WAIT] Soal terakhir: menunggu 'See Answer' muncul...");
+    }
+  }
+}
+
+// --- Start ---
+console.log("Script otomatis See Answer → Next dimulai (unduh raw <article> .txt di soal terakhir)...");
+autoRevealInterval = setInterval(revealAndAdvance, 2000);
+
+// Hentikan manual bila perlu:
+// clearInterval(autoRevealInterval); autoRevealInterval = null;
