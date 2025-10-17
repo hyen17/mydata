@@ -1,0 +1,438 @@
+// PDF Extractor dengan CUSTOM DELAY
+function createPDFExtractorUI() {
+    if (document.getElementById('pdf-extractor-ui')) {
+        document.getElementById('pdf-extractor-ui').remove();
+    }
+
+    const ui = document.createElement('div');
+    ui.id = 'pdf-extractor-ui';
+    ui.innerHTML = `
+        <div style="
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            border: 2px solid #007cba;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            z-index: 10000;
+            font-family: Arial, sans-serif;
+            min-width: 400px;
+        ">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3 style="margin: 0; color: #007cba;">⏱️ PDF Extractor with Delay</h3>
+                <button onclick="document.getElementById('pdf-extractor-ui').remove()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: #666;">×</button>
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+                <label style="display: block; margin-bottom: 8px; font-weight: bold;">Halaman Saat Ini: <span id="currentPage">1</span></label>
+                <div style="display: flex; gap: 10px; margin-top: 5px;">
+                    <button onclick="testButtonDetection()" style="flex: 1; padding: 5px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">Test Buttons</button>
+                    <button onclick="manualNext()" style="flex: 1; padding: 5px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">Manual Next</button>
+                </div>
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+                <label style="display: block; margin-bottom: 8px; font-weight: bold;">Jumlah Halaman:</label>
+                <input type="number" id="pageCount" min="1" max="100" value="10" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                <small style="color: #666;">Mulai dari halaman saat ini</small>
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+                <label style="display: block; margin-bottom: 8px; font-weight: bold;">⏰ Delay Settings:</label>
+                <div style="display: flex; gap: 10px; margin-bottom: 8px;">
+                    <div style="flex: 1;">
+                        <label style="font-size: 12px; display: block; margin-bottom: 3px;">Delay After Next (ms):</label>
+                        <input type="number" id="delayAfterNext" min="500" max="10000" value="2000" style="width: 100%; padding: 5px; border: 1px solid #ddd; border-radius: 4px;">
+                    </div>
+                    <div style="flex: 1;">
+                        <label style="font-size: 12px; display: block; margin-bottom: 3px;">Delay Before Save (ms):</label>
+                        <input type="number" id="delayBeforeSave" min="500" max="10000" value="1000" style="width: 100%; padding: 5px; border: 1px solid #ddd; border-radius: 4px;">
+                    </div>
+                </div>
+                <small style="color: #666;">
+                    Next → Delay → Save → Next → ...
+                </small>
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+                <label style="display: block; margin-bottom: 8px; font-weight: bold;">Format File:</label>
+                <select id="fileFormat" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    <option value="png">PNG (Kualitas Terbaik)</option>
+                    <option value="jpeg">JPEG (Ukuran Lebih Kecil)</option>
+                </select>
+            </div>
+
+            <div style="margin-bottom: 15px;">
+                <label style="display: block; margin-bottom: 8px; font-weight: bold;">Kualitas JPEG:</label>
+                <input type="range" id="jpegQuality" min="0.1" max="1" step="0.1" value="0.8" style="width: 100%;">
+                <small style="color: #666;" id="qualityLabel">80% quality</small>
+            </div>
+            
+            <button onclick="startBatchExtraction()" style="width: 100%; padding: 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px;">
+                🚀 Start Extract & ZIP
+            </button>
+            
+            <div id="progress" style="margin-top: 15px; display: none;">
+                <div style="background: #f8f9fa; padding: 10px; border-radius: 4px;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                        <span>Progress:</span>
+                        <span id="progressText">0/0</span>
+                    </div>
+                    <div style="background: #e9ecef; height: 10px; border-radius: 5px; overflow: hidden;">
+                        <div id="progressBar" style="background: #007cba; height: 100%; width: 0%; transition: width 0.3s;"></div>
+                    </div>
+                    <div id="statusMessage" style="margin-top: 5px; font-size: 12px; color: #666;"></div>
+                    <div id="timerInfo" style="margin-top: 5px; font-size: 11px; color: #999;"></div>
+                </div>
+                <button onclick="stopExtraction()" style="width: 100%; margin-top: 10px; padding: 8px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                    🛑 Stop Process
+                </button>
+            </div>
+
+            <div id="debugInfo" style="margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 4px; font-size: 12px; display: none;">
+                <h4 style="margin: 0 0 5px 0;">Debug Info:</h4>
+                <div id="debugContent"></div>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(ui);
+    
+    // Initialize
+    updateCurrentPage();
+    setupQualitySlider();
+}
+
+// Setup quality slider
+function setupQualitySlider() {
+    const slider = document.getElementById('jpegQuality');
+    const label = document.getElementById('qualityLabel');
+    slider.addEventListener('input', function() {
+        label.textContent = Math.round(this.value * 100) + '% quality';
+    });
+}
+
+// Global variables
+let extractionStopped = false;
+let currentTimeout = null;
+
+// Main extraction function dengan DELAY CONTROLLED
+async function startBatchExtraction() {
+    extractionStopped = false;
+    
+    const pageCount = parseInt(document.getElementById('pageCount').value);
+    const fileFormat = document.getElementById('fileFormat').value;
+    const jpegQuality = parseFloat(document.getElementById('jpegQuality').value);
+    const delayAfterNext = parseInt(document.getElementById('delayAfterNext').value);
+    const delayBeforeSave = parseInt(document.getElementById('delayBeforeSave').value);
+    const startPage = getCurrentPageNumber();
+    
+    // Find next button before starting
+    const nextButton = findNextButton();
+    if (!nextButton) {
+        alert('❌ Next button tidak ditemukan! Gunakan "Test Buttons" untuk debug.');
+        return;
+    }
+
+    if (pageCount < 1 || pageCount > 100) {
+        alert('Jumlah halaman harus antara 1-100');
+        return;
+    }
+
+    // Show progress
+    document.getElementById('progress').style.display = 'block';
+    updateProgress(0, pageCount, 'Memulai proses...');
+    
+    try {
+        // Load JSZip library
+        await loadJSZip();
+        
+        const zip = new JSZip();
+        let currentPage = startPage;
+        let successfulPages = 0;
+
+        for (let i = 0; i < pageCount && !extractionStopped; i++) {
+            // UPDATE: Tampilkan halaman saat ini di progress
+            updateProgress(i, pageCount, `Halaman ${currentPage} - Menunggu render...`);
+            updateTimerInfo(`Delay: ${delayBeforeSave}ms`);
+            
+            // DELAY BEFORE SAVE - tunggu render halaman
+            await delay(delayBeforeSave);
+            
+            if (extractionStopped) break;
+            
+            // Capture current page
+            updateProgress(i, pageCount, `Halaman ${currentPage} - Capturing...`);
+            const canvas = findCanvasForPage(currentPage);
+            if (canvas && isCanvasValid(canvas)) {
+                const imageData = await captureCanvas(canvas, fileFormat, jpegQuality);
+                const filename = `page-${currentPage}.${fileFormat}`;
+                zip.file(filename, imageData.split(',')[1], {base64: true});
+                
+                successfulPages++;
+                updateProgress(i + 1, pageCount, `✅ Halaman ${currentPage} tersimpan`);
+            } else {
+                updateProgress(i + 1, pageCount, `⚠️ Halaman ${currentPage} gagal di-capture`);
+            }
+            
+            // Click next for next page (except last iteration)
+            if (i < pageCount - 1 && !extractionStopped) {
+                // Re-find next button (might change state)
+                const currentNextButton = findNextButton();
+                if (currentNextButton && !currentNextButton.disabled) {
+                    // Klik next button
+                    currentNextButton.click();
+                    currentPage++;
+                    updateCurrentPage();
+                    
+                    // DELAY AFTER NEXT - tunggu halaman baru load
+                    updateProgress(i + 1, pageCount, `⏱️ Menunggu halaman ${currentPage} load...`);
+                    updateTimerInfo(`Delay: ${delayAfterNext}ms`);
+                    await delay(delayAfterNext);
+                    
+                } else {
+                    updateProgress(i + 1, pageCount, `❌ Next button tidak tersedia di halaman ${currentPage}`);
+                    break;
+                }
+            }
+        }
+
+        if (!extractionStopped && successfulPages > 0) {
+            updateProgress(pageCount, pageCount, 'Membuat file ZIP...');
+            
+            const zipBlob = await zip.generateAsync({type: 'blob'});
+            const url = URL.createObjectURL(zipBlob);
+            
+            const link = document.createElement('a');
+            link.download = `pages-${startPage}-to-${currentPage}.zip`;
+            link.href = url;
+            link.click();
+            
+            URL.revokeObjectURL(url);
+            
+            updateProgress(pageCount, pageCount, `✅ Selesai! ${successfulPages} halaman dalam ZIP`);
+        } else if (successfulPages === 0) {
+            updateProgress(0, pageCount, '❌ Gagal menangkap halaman apapun');
+        }
+
+    } catch (error) {
+        console.error('Extraction error:', error);
+        updateProgress(0, pageCount, `❌ Error: ${error.message}`);
+    }
+    
+    // Clear any remaining timeouts
+    if (currentTimeout) {
+        clearTimeout(currentTimeout);
+        currentTimeout = null;
+    }
+}
+
+// Improved delay function dengan timeout management
+function delay(ms) {
+    return new Promise(resolve => {
+        if (extractionStopped) {
+            resolve();
+            return;
+        }
+        currentTimeout = setTimeout(() => {
+            currentTimeout = null;
+            resolve();
+        }, ms);
+    });
+}
+
+// Stop extraction dengan timeout cleanup
+function stopExtraction() {
+    extractionStopped = true;
+    if (currentTimeout) {
+        clearTimeout(currentTimeout);
+        currentTimeout = null;
+    }
+    updateProgress(0, 0, '🛑 Proses dihentikan');
+    updateTimerInfo('');
+}
+
+// Update timer info
+function updateTimerInfo(message) {
+    document.getElementById('timerInfo').textContent = message;
+}
+
+// TEST: Manual next dengan delay
+async function manualNext() {
+    const nextButton = findNextButton();
+    if (nextButton) {
+        nextButton.click();
+        
+        const delayAfterNext = parseInt(document.getElementById('delayAfterNext').value);
+        showDebugMessage(`Manual next clicked, waiting ${delayAfterNext}ms...`);
+        
+        await delay(delayAfterNext);
+        updateCurrentPage();
+        
+        showDebugMessage(`Now on page ${getCurrentPageNumber()} after delay`);
+    } else {
+        showDebugMessage('Next button not found for manual click');
+    }
+}
+
+// ... (keep all the other helper functions from previous version)
+// findNextButton, findPrevButton, testButtonDetection, loadJSZip, 
+// findCanvasForPage, isCanvasValid, captureCanvas, getCurrentPageNumber,
+// updateCurrentPage, updateProgress, showDebugMessage
+
+// Find next button with multiple strategies
+function findNextButton() {
+    const selectors = [
+        '[data-element="nextPageButton"]',
+        '[aria-label="Next page"]',
+        '[aria-label*="Next"]',
+        '[aria-label*="next"]',
+        '.PageControlsWrapper button:not([disabled]):last-child',
+        '.PageControlsWrapper button:not([aria-disabled="true"])',
+        'button svg path[d*="4.5,10"]',
+        'nav button:not([disabled])'
+    ];
+    
+    for (let selector of selectors) {
+        try {
+            const element = document.querySelector(selector);
+            if (element && !element.disabled && element.getAttribute('aria-disabled') !== 'true') {
+                return element;
+            }
+        } catch (e) {}
+    }
+    
+    const navButtons = document.querySelectorAll('.PageControlsWrapper button, nav button');
+    for (let button of navButtons) {
+        if (!button.disabled && button.getAttribute('aria-disabled') !== 'true') {
+            return button;
+        }
+    }
+    
+    return null;
+}
+
+// Find previous button
+function findPrevButton() {
+    const selectors = [
+        '[data-element="previousPageButton"]',
+        '[aria-label="Previous page"]',
+        '[aria-label*="Previous"]',
+        '[aria-label*="previous"]',
+        '.PageControlsWrapper button:first-child'
+    ];
+    
+    for (let selector of selectors) {
+        const element = document.querySelector(selector);
+        if (element) return element;
+    }
+    return null;
+}
+
+// Test button detection
+function testButtonDetection() {
+    const debugInfo = document.getElementById('debugInfo');
+    const debugContent = document.getElementById('debugContent');
+    
+    const nextButton = findNextButton();
+    const prevButton = findPrevButton();
+    
+    let debugHTML = `
+        <div><strong>Next Button:</strong> ${nextButton ? '✅ Ditemukan' : '❌ Tidak ditemukan'}</div>
+        <div><strong>Previous Button:</strong> ${prevButton ? '✅ Ditemukan' : '❌ Tidak ditemukan'}</div>
+        <div><strong>Current Page:</strong> ${getCurrentPageNumber()}</div>
+    `;
+    
+    debugContent.innerHTML = debugHTML;
+    debugInfo.style.display = 'block';
+}
+
+function loadJSZip() {
+    return new Promise((resolve, reject) => {
+        if (window.JSZip) {
+            resolve();
+            return;
+        }
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+        script.onload = resolve;
+        script.onerror = () => reject(new Error('Gagal load JSZip'));
+        document.head.appendChild(script);
+    });
+}
+
+function findCanvasForPage(pageNumber) {
+    const selectors = [
+        `canvas.hacc.canvas${pageNumber}`,
+        `#pageContainer${pageNumber} canvas`,
+        `canvas.hacc`,
+        'canvas.auxiliary'
+    ];
+    for (let selector of selectors) {
+        const canvas = document.querySelector(selector);
+        if (canvas) return canvas;
+    }
+    return document.querySelector('canvas');
+}
+
+function isCanvasValid(canvas) {
+    if (!canvas || canvas.width === 0 || canvas.height === 0) return false;
+    try {
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const imageData = ctx.getImageData(10, 10, 5, 5);
+        const data = imageData.data;
+        for (let i = 3; i < data.length; i += 4) {
+            if (data[i] > 10) return true;
+        }
+        return false;
+    } catch (e) {
+        return false;
+    }
+}
+
+function captureCanvas(canvas, format, quality) {
+    return new Promise((resolve) => {
+        try {
+            let imageData;
+            if (format === 'jpeg') {
+                imageData = canvas.toDataURL('image/jpeg', quality);
+            } else {
+                imageData = canvas.toDataURL('image/png');
+            }
+            resolve(imageData);
+        } catch (error) {
+            resolve(canvas.toDataURL('image/png'));
+        }
+    });
+}
+
+function getCurrentPageNumber() {
+    const pageInput = document.querySelector('[aria-label="Page number input"]');
+    return pageInput && pageInput.value ? parseInt(pageInput.value) : 1;
+}
+
+function updateCurrentPage() {
+    document.getElementById('currentPage').textContent = getCurrentPageNumber();
+}
+
+function updateProgress(current, total, message) {
+    document.getElementById('progressText').textContent = `${current}/${total}`;
+    document.getElementById('progressBar').style.width = total > 0 ? `${(current/total)*100}%` : '0%';
+    document.getElementById('statusMessage').textContent = message;
+}
+
+function showDebugMessage(message) {
+    const debugInfo = document.getElementById('debugInfo');
+    const debugContent = document.getElementById('debugContent');
+    debugContent.innerHTML = `<div>${message}</div>`;
+    debugInfo.style.display = 'block';
+}
+
+// Auto-update current page
+setInterval(updateCurrentPage, 2000);
+
+// Jalankan UI
+createPDFExtractorUI();
