@@ -1,0 +1,133 @@
+// SCRIPT PRINT DENGAN PAGE-BREAK-BEFORE - Paste ini di Console
+(function() {
+    if (document.getElementById('printPagesUI')) return;
+
+    const modalHTML = `
+    <div id="printPagesUI" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:400px;background:white;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,0.3);z-index:10000;font-family:Arial;">
+        <div style="background:#2c3e50;color:white;padding:15px;border-radius:10px 10px 0 0;">
+            <h3 style="margin:0;">🖨️ Print Halaman</h3>
+            <button onclick="closePrintUI()" style="background:none;border:none;color:white;font-size:1.5em;cursor:pointer;float:right;">×</button>
+        </div>
+        <div style="padding:20px;">
+            <p><strong>Total Halaman:</strong> <span id="totalPagesInfo">0</span></p>
+            <div style="display:flex;gap:10px;margin:15px 0;">
+                <div style="flex:1;">
+                    <label style="display:block;margin-bottom:5px;">Halaman Awal:</label>
+                    <input type="number" id="startPageInput" min="1" value="1" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;">
+                </div>
+                <div style="flex:1;">
+                    <label style="display:block;margin-bottom:5px;">Halaman Akhir:</label>
+                    <input type="number" id="endPageInput" min="1" value="1" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;">
+                </div>
+            </div>
+            <button onclick="preparePrint()" style="width:100%;padding:10px;background:#007bff;color:white;border:none;border-radius:4px;cursor:pointer;font-weight:bold;">🖨️ Print Halaman Dipilih</button>
+        </div>
+    </div>
+    <div id="printOverlay" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:9999;"></div>
+    `;
+
+    document.body.insertAdjacentHTML('beforeend', modalHTML);
+
+    let originalStyles = [];
+    let allPages = [];
+
+    window.openPrintUI = function() {
+        allPages = document.querySelectorAll('.stl_.stl_02');
+        const totalPages = allPages.length;
+        
+        document.getElementById('totalPagesInfo').textContent = totalPages;
+        document.getElementById('endPageInput').value = totalPages;
+        document.getElementById('endPageInput').max = totalPages;
+
+        // Simpan style asli
+        originalStyles = [];
+        allPages.forEach((page, index) => {
+            originalStyles[index] = {
+                display: page.style.display,
+                pageBreakBefore: page.style.pageBreakBefore
+            };
+        });
+    };
+
+    window.closePrintUI = function() {
+        restoreAllPages();
+        document.getElementById('printPagesUI').remove();
+        document.getElementById('printOverlay').remove();
+    };
+
+    function restoreAllPages() {
+        allPages.forEach((page, index) => {
+            const original = originalStyles[index];
+            page.style.display = original.display || '';
+            page.style.pageBreakBefore = original.pageBreakBefore || '';
+        });
+    }
+
+    window.preparePrint = function() {
+        const start = parseInt(document.getElementById('startPageInput').value);
+        const end = parseInt(document.getElementById('endPageInput').value);
+        const totalPages = allPages.length;
+
+        if (isNaN(start) || isNaN(end) || start < 1 || end > totalPages || start > end) {
+            alert('❌ Rentang halaman tidak valid!');
+            return;
+        }
+
+        // Sembunyikan UI sebelum print
+        document.getElementById('printPagesUI').style.display = 'none';
+        document.getElementById('printOverlay').style.display = 'none';
+
+        // Sembunyikan semua halaman terlebih dahulu
+        allPages.forEach(page => {
+            page.style.display = 'none';
+        });
+
+        // Tampilkan hanya halaman yang dipilih dan tambahkan PAGE-BREAK-BEFORE
+        for (let i = start - 1; i < end; i++) {
+            const page = allPages[i];
+            page.style.display = 'block';
+            
+            // Tambahkan page-break-before untuk setiap halaman KECUALI halaman pertama
+            if (i > start - 1) {
+                page.style.pageBreakBefore = 'always';
+            } else {
+                page.style.pageBreakBefore = 'auto';
+            }
+        }
+
+        // CSS untuk print - TANPA visibility: hidden yang bermasalah!
+        const printStyle = document.createElement('style');
+        printStyle.innerHTML = `
+            @media print {
+                .stl_.stl_02 {
+                    page-break-inside: avoid !important;
+                }
+                .stl_.stl_02[style*="display: block"] {
+                    display: block !important;
+                    page-break-before: always;
+                }
+                .stl_.stl_02[style*="display: block"]:first-child {
+                    page-break-before: auto !important;
+                }
+            }
+        `;
+        document.head.appendChild(printStyle);
+
+        // Tunggu sebentar lalu print
+        setTimeout(() => {
+            window.print();
+            
+            // Setelah print, kembalikan ke state semula
+            setTimeout(() => {
+                restoreAllPages();
+                printStyle.remove();
+                document.getElementById('printPagesUI').style.display = 'block';
+                document.getElementById('printOverlay').style.display = 'block';
+            }, 500);
+            
+        }, 1000);
+    };
+
+    document.getElementById('printOverlay').addEventListener('click', closePrintUI);
+    openPrintUI();
+})();
