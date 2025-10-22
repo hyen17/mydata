@@ -1,25 +1,25 @@
 (async () => {
   // === DEDUP GLOBAL BERDASARKAN NOMOR SOAL ===
-  const seenQuestionNumbers = new Set(); // untuk deduplikasi global
+  const seenQuestionNumbers = new Set();
 
   const savedData = [];
-  let lastQuestionNumber = ""; // dedup cepat antar-berturutan
+  let lastQuestionNumber = "";
   let isProcessing = false;
-  let isPaused = false;        // menahan proses saat tidak ada NEXT
-  let awaitingLoad = false;    // tunggu Tab B selesai buka link baru
+  let isPaused = false;
+  let awaitingLoad = false;
 
-const codeMap = {
-  "2310": "Applying Appropriate Supervision",
-  "2311": "Supervising the Engagement Process",
-  "2312": "Supervisor Responsibilities Related to Coordinating Work Assignments",
-  "2313": "Supervisor Responsibilities Related to Reviewing Workpapers and Engagement Conclusions",
-  "2314": "Supervisor Responsibilities Related to Evaluating Auditors' Performance",
-  "2320": "Applying Appropriate Communication with Stakeholders Throughout the Engagement",
-  "2321": "Effective Communication Methods",
-  "2322": "Communicating Acceptance of Risk",
-  "2323": "Determining Appropriate Stakeholders for Engagement Communication"
-};
-
+  // === CODE MAP (4 digit) ===
+  const codeMap = {
+    "2310": "Applying Appropriate Supervision",
+    "2311": "Supervising the Engagement Process",
+    "2312": "Supervisor Responsibilities Related to Coordinating Work Assignments",
+    "2313": "Supervisor Responsibilities Related to Reviewing Workpapers and Engagement Conclusions",
+    "2314": "Supervisor Responsibilities Related to Evaluating Auditors' Performance",
+    "2320": "Applying Appropriate Communication with Stakeholders Throughout the Engagement",
+    "2321": "Effective Communication Methods",
+    "2322": "Communicating Acceptance of Risk",
+    "2323": "Determining Appropriate Stakeholders for Engagement Communication"
+  };
 
   const questionWindow = window.open(window.location.href, "questionTab");
   if (!questionWindow) {
@@ -32,14 +32,13 @@ const codeMap = {
   // Tunggu Tab B selesai loading
   await new Promise(resolve => setTimeout(resolve, 3000));
 
-  // Util: normalisasi nomor soal -> ambil angka saja, contoh "Question #101182" => "101182"
+  // === UTIL ===
   function normalizeQuestionNumber(raw) {
     if (!raw) return "";
     const m = String(raw).trim().match(/#?\s*(\d+)/);
     return m ? m[1] : String(raw).trim();
   }
 
-  // Util: cari tombol NEXT (menurut struktur milikmu)
   function findNextButton(doc) {
     const el = doc.querySelector('button#submitButton');
     if (!el) return null;
@@ -47,12 +46,68 @@ const codeMap = {
     return txt.includes("NEXT") ? el : null;
   }
 
-  // Util: status panel
   function setStatus(msg, color) {
     const el = document.getElementById("status");
     if (el) {
       el.textContent = msg;
       if (color) el.style.color = color;
+    }
+  }
+
+  // === AMBIL REFERENSI (ketat: hanya blok "Reference" & hanya /reference/) ===
+  function collectReferences(doc) {
+    const results = new Set();
+
+    // Kumpulkan SEMUA header kategori
+    const headers = Array.from(doc.querySelectorAll('ul.list-inline.question-explanation-category-header'));
+
+    // Untuk setiap header yang bertuliskan "Reference"
+    const refHeaders = headers.filter(ul => {
+      const label = ul.querySelector('.question-explanation-category');
+      return label && /reference/i.test((label.textContent || '').trim());
+    });
+
+    for (const refHeader of refHeaders) {
+      // Tentukan batas: header kategori berikut-nya (jika ada)
+      const nextHeader = headers.find(h => h !== refHeader && (h.compareDocumentPosition(refHeader) & Node.DOCUMENT_POSITION_FOLLOWING));
+
+      // Iterasi siblings setelah refHeader hingga sebelum nextHeader
+      let el = refHeader.nextElementSibling;
+      while (el && el !== nextHeader) {
+        if (
+          el.matches('a.btnInfoDialog.question-explanation-link') &&
+          /\/reference\//i.test(el.getAttribute('data-url') || '')
+        ) {
+          const text = (el.textContent || '').trim();          // mis: "2314.01"
+          const baseMatch = text.match(/^(\d{4})/);             // ambil "2314"
+          const base = baseMatch ? baseMatch[1] : null;
+          const desc = base && codeMap[base] ? codeMap[base] : '';
+          results.add(desc ? `${text} — ${desc}` : text);
+        }
+        el = el.nextElementSibling;
+      }
+    }
+
+    // Jika tidak ketemu blok Reference sama sekali, jangan ambil global (hindari "Relevant Terms")
+    return Array.from(results);
+  }
+
+  // Sanitizer: hapus checked/disabled di input radio dalam label HTML
+  function sanitizeLabelOuterHTML(labelEl) {
+    try {
+      const clone = labelEl.cloneNode(true);
+      const inputs = clone.querySelectorAll('input[type="radio"]');
+      inputs.forEach(inp => {
+        inp.removeAttribute('checked');
+        inp.removeAttribute('disabled');
+      });
+      return clone.outerHTML;
+    } catch {
+      // fallback regex kalau clone gagal
+      let html = labelEl.outerHTML;
+      html = html.replace(/\schecked(?:="checked")?/ig, '');
+      html = html.replace(/\sdisabled(?:="disabled")?/ig, '');
+      return html;
     }
   }
 
@@ -63,7 +118,6 @@ const codeMap = {
     try {
       const doc = questionWindow.document;
 
-      // Kalau Tab B baru saja diarahkan ke link baru, tunggu ready
       if (doc.readyState !== 'complete' && doc.readyState !== 'interactive') {
         isProcessing = false;
         return;
@@ -78,23 +132,20 @@ const codeMap = {
       const currentQuestionNumberRaw = questionRefDiv ? questionRefDiv.textContent : "";
       const currentQuestionNumber    = normalizeQuestionNumber(currentQuestionNumberRaw);
 
-      // Kalau belum lengkap, jangan lanjut
       if (!questionDiv || !choicesDiv || !currentQuestionNumber) {
         isProcessing = false;
         return;
       }
 
-      // ===== DEDUP 1: antar berturutan (cepat) =====
+      // DEDUP cepat
       if (currentQuestionNumber === lastQuestionNumber) {
         console.log("⏩ Soal sama (berturutan), skip simpan…");
-        // meski sama, tetap lanjut ke NEXT jika ada
         const nextButtonA = findNextButton(doc);
         if (nextButtonA) {
           nextButtonA.click();
           console.log("🖱️ NEXT setelah duplikat (berturutan)");
           await new Promise(r => setTimeout(r, 2000));
         } else {
-          // kalau tidak ada NEXT, pause
           isPaused = true;
           setStatus("⏸️ Tidak ada NEXT. Menunggu link baru untuk Tab B…", "orange");
           console.log("ℹ️ NEXT tidak ada. Proses di-pause.");
@@ -103,17 +154,15 @@ const codeMap = {
         return;
       }
 
-      // ===== DEDUP 2: global berbasis Set (tetap lanjut NEXT) =====
+      // DEDUP global (tetap NEXT)
       if (seenQuestionNumbers.has(currentQuestionNumber)) {
-        console.log(`⏭️ Soal #${currentQuestionNumber} sudah pernah disimpan, skip simpan (GLOBAL).`);
-        // TETAP lanjut ke NEXT jika ada
+        console.log(`⏭️ Soal #${currentQuestionNumber} sudah pernah disimpan, skip (GLOBAL).`);
         const nextButtonB = findNextButton(doc);
         if (nextButtonB) {
           nextButtonB.click();
           console.log("🖱️ NEXT setelah duplikat (global)");
           await new Promise(r => setTimeout(r, 2000));
         } else {
-          // kalau tidak ada NEXT, pause
           isPaused = true;
           setStatus("⏸️ Tidak ada NEXT. Menunggu link baru untuk Tab B…", "orange");
           console.log("ℹ️ NEXT tidak ada. Proses di-pause.");
@@ -126,51 +175,31 @@ const codeMap = {
 
       // Simpan data soal
       const choices = Array.from(choicesDiv.querySelectorAll("label.session-radio")).map(label => {
-        const html = label.outerHTML;
+        const htmlSanitized = sanitizeLabelOuterHTML(label); // <-- buang checked/disabled
         const isCorrect = label.classList.contains("session-radio-proper");
-        return { html, isCorrect };
+        return { html: htmlSanitized, isCorrect };
       });
 
       const explanation = explanationDiv ? [explanationDiv.innerHTML.trim()] : [];
 
-      // Referensi (tetap sama)
-      const categoryHeaders = Array.from(doc.querySelectorAll(".question-explanation-category")).map(e => e.textContent.trim());
-      const refIndex = categoryHeaders.lastIndexOf("Reference");
-      let references = [];
-
-      if (refIndex !== -1) {
-        const headers = Array.from(doc.querySelectorAll(".question-explanation-category"));
-        const refHeader = headers[refIndex];
-        const parentUl = refHeader.closest("ul");
-        let el = parentUl?.nextElementSibling;
-        while (el) {
-          if (el.matches("ul")) break;
-          if (el.matches("a.btnInfoDialog.question-explanation-link")) {
-            const text = el.textContent.trim();
-            const code = text.match(/^\d{4}/)?.[0];
-            const mapped = code && codeMap[code] ? `${text} ${codeMap[code]}` : text;
-            references.push(mapped);
-          }
-          el = el.nextElementSibling;
-        }
-      }
+      // Referensi akurat
+      const references = collectReferences(doc);
 
       savedData.push({
-        questionNumber: currentQuestionNumber, // metadata nomor soal (disimpan, tidak dirender)
+        questionNumber: currentQuestionNumber,
         questionHtml: questionDiv.innerHTML.trim(),
         choices,
         feedbacks: explanation,
         references
       });
 
-      // Tandai nomor ini sudah pernah disimpan
       seenQuestionNumbers.add(currentQuestionNumber);
       lastQuestionNumber = currentQuestionNumber;
 
       console.log(`✔ Saved #${currentQuestionNumber} (Total: ${savedData.length})`);
       setStatus(`🟢 Running… Terkumpul: ${savedData.length}`, "green");
 
-      // Setelah simpan, coba klik NEXT
+      // NEXT
       await new Promise(resolve => setTimeout(resolve, 1000));
       const nextButton = findNextButton(doc);
 
@@ -180,10 +209,9 @@ const codeMap = {
         await new Promise(resolve => setTimeout(resolve, 2000));
       } else {
         console.log("ℹ️ Tombol NEXT tidak ditemukan. Masuk mode pause.");
-        isPaused = true; // Pause di sini
+        isPaused = true;
         setStatus("⏸️ Tidak ada NEXT. Menunggu link baru untuk Tab B…", "orange");
 
-        // Opsional: cek kata kunci selesai
         const finishedText = doc.querySelector('body')?.textContent || "";
         if (/\b(finished|completed|akhir)\b/i.test(finishedText)) {
           console.log("✅ Sesi tampaknya selesai. Tetap pause menunggu link baru.");
@@ -207,66 +235,25 @@ const codeMap = {
     processQuestion();
   }, pollInterval);
 
-  // === Printable (FIX kutip/backtick; logika sama) ===
+  // === Printable ===
   const buildPrintableHTML = (showAnswers = false) => {
     const css = `
       <style>
-        @page:first {
-          margin-top: 0;
-        }
-        body {
-          font-family: Arial, sans-serif;
-          font-size: 16px;
-          color: #000;
-          line-height: 1.6;
-          padding: 30px;
-          margin-top: 0 !important;
-        }
-        .question-block {
-          page-break-inside: avoid;
-          margin-bottom: 30px;
-        }
-        .question-title {
-          font-size: 18px;
-          font-weight: bold;
-          margin-bottom: 6px;
-        }
-        .question-body {
-          margin-bottom: 12px;
-        }
-        label.session-radio {
-          display: flex;
-          align-items: flex-start;
-          gap: 10px;
-          margin-bottom: 8px;
-        }
-        label.session-radio input[type="radio"] {
-          margin-top: 5px;
-        }
-        label.session-radio p {
-          margin: 0;
-        }
-        .question-mode .session-radio-proper {
-          font-weight: normal !important;
-        }
-        .answer-mode .session-radio-proper {
-          font-weight: bold !important;
-        }
-        .explanation {
-          margin-top: 10px;
-          background: #f3f3f3;
-          padding: 10px;
-          border-left: 4px solid #999;
-        }
-        .reference {
-          margin-top: 0;
-        }
-        hr {
-          margin: 12px 0;
-        }
-        /* Nomor soal asli TIDAK ditampilkan. */
+        @page:first { margin-top: 0; }
+        body { font-family: Arial, sans-serif; font-size: 16px; color: #000; line-height: 1.6; padding: 30px; margin-top: 0 !important; }
+        .question-block { page-break-inside: avoid; margin-bottom: 30px; }
+        .question-title { font-size: 18px; font-weight: bold; margin-bottom: 6px; }
+        .question-body { margin-bottom: 12px; }
+        label.session-radio { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+        label.session-radio input[type="radio"] { margin-top: 5px; }
+        label.session-radio p { margin: 0; }
+        .question-mode .session-radio-proper { font-weight: normal !important; }
+        .answer-mode .session-radio-proper { font-weight: bold !important; }
+        .explanation { margin-top: 10px; background: #f3f3f3; padding: 10px; border-left: 4px solid #999; }
+        .reference { margin-top: 0; }
+        hr { margin: 12px 0; }
       </style>
-    `; // ← tidak ada tanda kutip nyasar di sini
+    `;
 
     const content = savedData.map((q, i) => {
       const modeClass = showAnswers ? "answer-mode" : "question-mode";
@@ -313,7 +300,7 @@ const codeMap = {
     alert(`✅ ${savedData.length} soal berhasil di-generate. Silakan tekan Ctrl+P untuk menyimpan.`);
   };
 
-  // === Panel kontrol (dengan input link + tombol buka di Tab B) ===
+  // === Panel kontrol ===
   const panel = document.createElement("div");
   panel.style = `
     position: fixed; top: 20px; right: 20px; z-index: 9999;
@@ -322,7 +309,7 @@ const codeMap = {
     border-radius: 8px; min-width: 270px;
   `;
   panel.innerHTML = `
-    <strong>📚 PDF Tool v3.1 (Dedup by Question #)</strong><br/>
+    <strong>📚 PDF Tool v3.2 (Ref-only + Uncheck Radios)</strong><br/>
     <small>Soal terkumpul: <span id="count">0</span></small><br/><br/>
 
     <button id="generateHTMLPDF">Generate PDF</button>
@@ -341,7 +328,7 @@ const codeMap = {
   document.getElementById("generateHTMLPDF").onclick = renderPrintableHTML;
 
   document.getElementById("stopAutoNext").onclick = () => {
-    isPaused = true; // berhenti manual
+    isPaused = true;
     setStatus("🟡 Stopped (manual)", "orange");
     alert(`Auto-NEXT dihentikan. ${savedData.length} soal terkumpul.`);
   };
@@ -351,18 +338,16 @@ const codeMap = {
     if (!url) { alert("Masukkan URL baru terlebih dahulu."); return; }
 
     try {
-      isPaused = false;         // lanjutkan otomatis
-      awaitingLoad = true;      // tunggu sampai halaman termuat
+      isPaused = false;
+      awaitingLoad = true;
       setStatus("🔄 Membuka link baru di Tab B…", "blue");
 
-      // Reset minimal agar tidak bentrok
       lastQuestionNumber = "";
-      // JANGAN reset seenQuestionNumbers agar dedup tetap global lintas sesi
+      // Jangan reset seenQuestionNumbers agar dedup tetap global lintas sesi
       questionWindow.location.href = url;
 
-      // polling ringan menunggu DOM siap
       const start = Date.now();
-      while (Date.now() - start < 15000) { // max 15 detik
+      while (Date.now() - start < 15000) {
         await new Promise(r => setTimeout(r, 500));
         const state = questionWindow.document?.readyState;
         if (state === 'interactive' || state === 'complete') break;
