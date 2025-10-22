@@ -1,0 +1,435 @@
+(() => {
+  if (window.__QUIZ_CTRL__) { console.log('[CTRL] already running'); return; }
+  window.__QUIZ_CTRL__ = true;
+
+  /* ---------------- UI ---------------- */
+  var css = ''
+  + '#__ctrl{position:fixed;right:16px;bottom:16px;width:360px;font:13px/1.45 system-ui,Segoe UI,Arial,sans-serif;z-index:2147483000;background:#111;color:#eaeaea;border:1px solid #2b2b2b;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.3);overflow:hidden}'
+  + '#__ctrl header{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #222}'
+  + '#__ctrl h3{margin:0;font-size:14px}'
+  + '#__ctrl .sec{padding:10px 12px;border-top:1px solid #1a1a1a}'
+  + '#__ctrl label{display:block;margin:4px 0 6px;opacity:.85}'
+  + '#__ctrl input[type="text"]{width:100%;padding:8px 10px;border-radius:8px;border:1px solid #2a2a2a;background:#171717;color:#eee}'
+  + '#__ctrl .row{display:flex;gap:8px;align-items:center}'
+  + '#__ctrl button{background:#242424;color:#eee;border:1px solid #343434;border-radius:8px;padding:8px 10px;cursor:pointer}'
+  + '#__ctrl button.primary{background:#2563eb;border-color:#1e4fd6}'
+  + '#__ctrl button.warn{background:#eab308;border-color:#b69105;color:#000}'
+  + '#__ctrl button.danger{background:#b91c1c;border-color:#991b1b}'
+  + '#__ctrl .pill{display:inline-block;margin:3px 6px 0 0;padding:4px 8px;border:1px solid #2b2b2b;border-radius:999px;background:#141414;color:#c7c7c7;font-size:11px}'
+  + '#__ctrl .logs{max-height:160px;overflow:auto;background:#0a0a0a;border:1px solid #1f1f1f;border-radius:8px;padding:8px;margin-top:8px;font-family:ui-monospace,Menlo,Consolas,monospace}'
+  + '#__ctrl .logs p{margin:0 0 6px;white-space:pre-wrap}'
+  + '#__ctrl .urls .urow{display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:8px}';
+  var style = document.createElement('style'); style.textContent = css; document.head.appendChild(style);
+
+  var root = document.createElement('div'); root.id='__ctrl';
+  root.innerHTML =
+    '<header>'
+    + '  <h3>Quiz Controller</h3>'
+    + '  <div class="row">'
+    + '    <button id="__ctrl_min">—</button>'
+    + '    <button id="__ctrl_close" class="danger">×</button>'
+    + '  </div>'
+    + '</header>'
+    + '<div class="sec" id="sec-aa">'
+    + '  <b>1) Auto Answer</b>'
+    + '  <label>URL Kuis</label>'
+    + '  <div class="row">'
+    + '    <input id="aa_url" type="text" placeholder="(default: halaman ini)">'
+    + '    <button id="aa_use_here">Gunakan URL ini</button>'
+    + '  </div>'
+    + '  <div style="margin:6px 0 4px">'
+    + '    <span class="pill">Status: <b id="aa_status">Idle</b></span>'
+    + '    <span class="pill">Interval: <b id="aa_iv">1500ms</b></span>'
+    + '    <span class="pill">Child: <b id="aa_child">-</b></span>'
+    + '  </div>'
+    + '  <div class="row" style="margin-top:6px">'
+    + '    <button id="aa_start" class="primary">Start Auto Answer</button>'
+    + '    <button id="aa_pause" class="warn">Pause</button>'
+    + '    <button id="aa_stop" class="danger">Stop</button>'
+    + '  </div>'
+    + '  <div class="logs" id="aa_log"></div>'
+    + '</div>'
+    + '<div class="sec" id="sec-sq">'
+    + '  <b>2) Save Quiz (Multi-URL)</b>'
+    + '  <div class="row" style="justify-content:space-between">'
+    + '    <label style="margin:0">Daftar URL</label>'
+    + '    <button id="sq_add">+ Tambah URL</button>'
+    + '  </div>'
+    + '  <div class="urls" id="sq_urls"></div>'
+    + '  <div style="margin:6px 0 4px">'
+    + '    <span class="pill">Status: <b id="sq_status">Idle</b></span>'
+    + '    <span class="pill">Terkumpul: <b id="sq_count">0</b></span>'
+    + '    <span class="pill">Antrian: <b id="sq_queue">0/0</b></span>'
+    + '    <span class="pill">Tab B: <b id="sq_child">-</b></span>'
+    + '  </div>'
+    + '  <div class="row" style="margin-top:6px">'
+    + '    <button id="sq_start" class="primary">Start Save Quiz</button>'
+    + '    <button id="sq_gen">Generate HTML</button>'
+    + '    <button id="sq_clear" class="danger">Clear</button>'
+    + '  </div>'
+    + '  <div class="logs" id="sq_log"></div>'
+    + '</div>';
+  document.body.appendChild(root);
+
+  function $(sel, r){return (r||root).querySelector(sel);}
+  function sleep(ms){return new Promise(function(res){setTimeout(res,ms);});}
+  $('#__ctrl_close').onclick = function(){ root.remove(); };
+  $('#__ctrl_min').onclick = function(){
+    var a = $('#sec-aa'), b=$('#sec-sq');
+    var vis = a.style.display !== 'none';
+    a.style.display = b.style.display = vis ? 'none':'block';
+  };
+  function log(el, tag, msg){ var p=document.createElement('p'); p.textContent=tag+' '+msg; el.appendChild(p); el.scrollTop=el.scrollHeight; }
+  var aaLog = $('#aa_log'), sqLog = $('#sq_log');
+
+  /* ---------------- 1) AUTO ANSWER (parent-driven, onload re-attach) ---------------- */
+  var AA_INTERVAL_MS = 1500;
+  $('#aa_iv').textContent = AA_INTERVAL_MS+'ms';
+  var elAA = {
+    url: $('#aa_url'), useHere: $('#aa_use_here'),
+    start: $('#aa_start'), pause: $('#aa_pause'), stop: $('#aa_stop'),
+    status: $('#aa_status'), child: $('#aa_child')
+  };
+  elAA.useHere.onclick = function(){ elAA.url.value = location.href; };
+
+  var aaChild = null;
+  var aaLoop = null;
+
+  function setAAStatus(s, color){
+    elAA.status.textContent = s;
+    if (color) elAA.status.style.color = color;
+    elAA.child.textContent = (aaChild && !aaChild.closed) ? 'OPEN' : '-';
+  }
+
+  // === LOOP BERJALAN DI PARENT, mengakses DOM child seperti skrip aslimu
+  function startAutoAnswerLoop(){
+    if (!aaChild || aaChild.closed) return;
+    if (aaLoop) try{ clearInterval(aaLoop); }catch(e){}
+    aaLoop = setInterval(function(){
+      try{
+        var doc = aaChild.document;
+        if (!doc) return;
+        var pilihan = doc.querySelectorAll('.answer-choices input[type="radio"]');
+        if (!pilihan || pilihan.length === 0){
+          console.log('[Auto Answer] tidak ada pilihan; stop interval');
+          clearInterval(aaLoop); aaLoop=null; return;
+        }
+        var acak = Math.floor(Math.random()*pilihan.length);
+        var target = pilihan[acak] || pilihan[0];
+        target.checked = true;
+        try {
+          var ev = new Event('change', {bubbles:true});
+          target.dispatchEvent(ev);
+        } catch(e2){
+          try { var ev2 = document.createEvent('HTMLEvents'); ev2.initEvent('change', true, false); target.dispatchEvent(ev2); } catch(e3){}
+        }
+        console.log('[Auto Answer] pilih:', target.value);
+
+        var submit = doc.querySelector('#submitButton');
+        if (submit){ submit.click(); console.log('[Auto Answer] klik SUBMIT'); }
+        else { console.log('[Auto Answer] #submitButton tidak ada; stop'); clearInterval(aaLoop); aaLoop=null; }
+      }catch(e){ console.warn('[Auto Answer] loop err:', e); }
+    }, AA_INTERVAL_MS);
+  }
+
+  function attachChildOnload(){
+    try{
+      aaChild.onload = function(){ try{ startAutoAnswerLoop(); }catch(e){} };
+      // untuk kasus bfcache/onpageshow
+      aaChild.onpageshow = function(){ try{ startAutoAnswerLoop(); }catch(e){} };
+    }catch(e){
+      log(aaLog,'[AA]','gagal pasang onload di child (cross-origin?): '+e);
+    }
+  }
+
+  async function aaStart(){
+    var url = (elAA.url.value || '').trim() || location.href;
+    aaChild = window.open(url, '_blank');
+    if (!aaChild){ alert('Pop-up diblokir.'); return; }
+    setAAStatus('Opening…','#5aa0ff'); log(aaLog,'[AA]','open tab; attach onload');
+    attachChildOnload();
+
+    // first-run agar question 1 langsung jalan
+    var t0 = Date.now();
+    while (Date.now()-t0 < 15000){
+      try{
+        if (aaChild.document && (aaChild.document.readyState==='interactive' || aaChild.document.readyState==='complete')) break;
+      }catch(e){}
+      await sleep(200);
+    }
+    try{
+      startAutoAnswerLoop(); // <— tidak pakai eval, langsung loop di parent
+      setAAStatus('Running','#22c55e'); log(aaLog,'[AA]','loop started (parent-driven).');
+    }catch(e){
+      setAAStatus('Start failed','#ff6666'); log(aaLog,'[AA]','start failed: '+e);
+    }
+  }
+  function aaPause(){
+    try{ if (aaLoop) { clearInterval(aaLoop); aaLoop=null; } }catch(e){}
+    setAAStatus('Paused','#eab308'); log(aaLog,'[AA]','paused');
+  }
+  function aaStop(){
+    try{ if (aaChild){ aaChild.onload=null; aaChild.onpageshow=null; } }catch(e){}
+    try{ if (aaLoop){ clearInterval(aaLoop); aaLoop=null; } }catch(e){}
+    try{ if (aaChild && !aaChild.closed) aaChild.close(); }catch(e){}
+    aaChild=null; setAAStatus('Stopped','#aaa'); log(aaLog,'[AA]','stopped & closed');
+  }
+  elAA.start.onclick = aaStart;
+  elAA.pause.onclick = aaPause;
+  elAA.stop.onclick  = aaStop;
+
+  /* ---------------- 2) SAVE QUIZ (multi-URL) ---------------- */
+  var elSQ = {
+    urls: $('#sq_urls'),
+    add:  $('#sq_add'),
+    start:$('#sq_start'),
+    gen:  $('#sq_gen'),
+    clear:$('#sq_clear'),
+    status:$('#sq_status'),
+    count: $('#sq_count'),
+    queue: $('#sq_queue'),
+    child: $('#sq_child')
+  };
+  var seenQ = new Set(), saved = [], lastQN = '';
+  var processing = false, awaiting = false;
+  var sqChild = null, poller = null, queue = [], idx = 0;
+
+  var codeMap = {
+"2110": "Determining Engagement Objectives and Scope",
+  "2111": "Applying Topical Requirements When Determining Objectives and Scope",
+  "2112": "Elements to Consider When Defining Engagement Objectives",
+  "2113": "Identifying and Documenting Relevant Scope Limitations During Planning",
+  "2114": "Approaches for Managing and Documenting Stakeholder Requests",
+  "2115": "Addressing Changes to Engagement Objectives or Scope as Needed",
+  "2120": "Evaluation Criteria",
+  "2121": "Identifying the Most Relevant Criteria",
+  "2122": "Assessing the Adequacy of Evaluation Criteria",
+  "2130": "Engagement Planning",
+  "2131": "Applying Topical Requirements When Planning an Engagement",
+  "2132": "Strategic Objectives of the Activity Under Review",
+  "2133": "Cybersecurity Risks, Information Security and IT Controls, and Data Privacy and Security",
+  "2134": "Business Continuity and Disaster Recovery",
+  "2135": "Accounting, Investment, and Capital Financing",
+  "2136": "Business Processes",
+  "2140": "Determining the Appropriate Approach for an Engagement",
+  "2141": "Evaluating Engagement Approaches",
+  "2142": "Applying Project Management Concepts to Internal Audit Engagements",
+  "2150": "Conducting a Detailed Risk Assessment",
+  "2151": "Applying Topical Requirements in Risk Assessments",
+  "2152": "Recognizing Pervasive Risks",
+  "2153": "Assessing Emerging Risks",
+  "2154": "Evaluating and Prioritizing Risks",
+  "2155": "Impact of Change on Risk",
+  "2156": "Organizational Structure and Environment",
+  "2157": "Organizational Culture and Control Environment",
+  "2160": "Engagement Work Program",
+  "2161": "Evaluating Control Design",
+  "2162": "Evaluating the Effectiveness of Controls",
+  "2163": "Evaluating the Efficiency of Controls",
+  "2164": "Evaluating the Adequacy of the Engagement Work Program",
+  "2165": "Testing Methodologies of Key Business Functions",
+  "2170": "Determining Engagement Resources and Skills",
+  "2171": "Determining Financial Resources for the Engagement",
+  "2172": "Determining Human Resources for the Engagement",
+  "2173": "Determining Technological Resources for the Engagement",
+  "2174": "Evaluating the Implications of Resource Limitations"
+  };
+
+  function setSQStatus(s,color){
+    elSQ.status.textContent = s;
+    if (color) elSQ.status.style.color = color;
+    elSQ.count.textContent = String(saved.length);
+    elSQ.queue.textContent = String(Math.min(idx+1, queue.length)) + '/' + String(queue.length);
+    elSQ.child.textContent = (sqChild && !sqChild.closed) ? 'OPEN' : '-';
+  }
+  function normQN(raw){ var m=String(raw||'').trim().match(/#?\s*(\d+)/); return m?m[1]:String(raw||'').trim(); }
+  function findNext(doc){ var el=doc.querySelector('button#submitButton'); if(!el) return null; return ((el.textContent||'').toUpperCase().indexOf('NEXT')>=0)?el:null; }
+  function collectRefs(doc){
+    var seen={}, out=[];
+    function addOnce(s){ if(!seen[s]){seen[s]=1; out.push(s);} }
+    var headers=[].slice.call(doc.querySelectorAll('ul.list-inline.question-explanation-category-header'));
+    var refHeaders=headers.filter(function(ul){ var lab=ul.querySelector('.question-explanation-category'); return lab && /reference/i.test((lab.textContent||'').trim()); });
+    for (var i=0;i<refHeaders.length;i++){
+      var refHeader=refHeaders[i], nextHeader=null;
+      for (var j=0;j<headers.length;j++){ var h=headers[j];
+        if (h!==refHeader && (h.compareDocumentPosition(refHeader)&Node.DOCUMENT_POSITION_FOLLOWING)){ nextHeader=h; break; } }
+      var el=refHeader.nextElementSibling;
+      while(el && el!==nextHeader){
+        if (el.matches && el.matches('a.btnInfoDialog.question-explanation-link')){
+          var du=el.getAttribute('data-url')||'';
+          if (/\/reference\//i.test(du)){
+            var text=(el.textContent||'').trim();
+            var m=text.match(/^(\d{4})/); var base=m?m[1]:null;
+            var desc=base&&codeMap[base]?codeMap[base]:'';
+            addOnce(desc ? (text+' — '+desc) : text);
+          }
+        }
+        el=el.nextElementSibling;
+      }
+    }
+    return out;
+  }
+  function sanitizeLabel(labelEl){
+    try{
+      var c=labelEl.cloneNode(true);
+      var inputs=c.querySelectorAll('input[type="radio"]');
+      for (var i=0;i<inputs.length;i++){ inputs[i].removeAttribute('checked'); inputs[i].removeAttribute('disabled'); }
+      return c.outerHTML;
+    }catch(e){
+      var html=labelEl.outerHTML;
+      html=html.replace(/\schecked(?:="checked")?/ig,'').replace(/\sdisabled(?:="disabled")?/ig,'');
+      return html;
+    }
+  }
+
+  async function processQ(){
+    if (processing || awaiting) return;
+    processing = true;
+    try{
+      var doc = sqChild.document;
+      if (!doc){ processing=false; return; }
+      if (!(doc.readyState==='interactive'||doc.readyState==='complete')){ processing=false; return; }
+
+      var qdiv = doc.querySelector('.question-text');
+      var cdiv = doc.querySelector('.answer-choices');
+      var ex   = doc.querySelector('#explanationPanel .question-explanation');
+      var refT = doc.querySelector('.question-ref-text');
+      var qn   = normQN(refT ? refT.textContent : '');
+      if (!qdiv || !cdiv || !qn){ processing=false; return; }
+
+      if (qn === lastQN){
+        var nxA = findNext(doc);
+        if (nxA){ nxA.click(); log(sqLog,'[SQ]','dup seq #'+qn+' → NEXT'); await sleep(1900); }
+        else { log(sqLog,'[SQ]','NEXT missing → next URL'); await nextURL(); }
+        processing=false; return;
+      }
+      if (seenQ.has(qn)){
+        var nxB = findNext(doc);
+        if (nxB){ nxB.click(); log(sqLog,'[SQ]','dup global #'+qn+' → NEXT'); await sleep(1900); }
+        else { log(sqLog,'[SQ]','NEXT missing (dup global) → next URL'); await nextURL(); }
+        processing=false; return;
+      }
+
+      var labels=[].slice.call(cdiv.querySelectorAll('label.session-radio'));
+      var choices=labels.map(function(l){ return { html: sanitizeLabel(l), isCorrect: l.classList.contains('session-radio-proper') }; });
+      var explanation = ex ? [ex.innerHTML.trim()] : [];
+      var refs = collectRefs(doc);
+
+      saved.push({ questionNumber: qn, questionHtml: qdiv.innerHTML.trim(), choices: choices, feedbacks: explanation, references: refs });
+      seenQ.add(qn); lastQN=qn;
+      setSQStatus('Running…','#22c55e'); log(sqLog,'[SQ]','saved #'+qn+' (total '+saved.length+')');
+
+      await sleep(900);
+      var nx = findNext(doc);
+      if (nx){ nx.click(); await sleep(1800); }
+      else { log(sqLog,'[SQ]','NEXT missing → next URL'); await nextURL(); }
+    }catch(e){
+      log(sqLog,'[SQ]','processQ error: '+e);
+    }
+    processing = false;
+  }
+
+  function buildHTML(showAnswers){
+    var css = '<style>@page:first{margin-top:0}body{font-family:Arial,sans-serif;font-size:16px;color:#000;line-height:1.6;padding:30px;margin-top:0!important}.question-block{page-break-inside:avoid;margin-bottom:30px}.question-title{font-size:18px;font-weight:bold;margin-bottom:6px}.question-body{margin-bottom:12px}label.session-radio{display:flex;align-items:flex-start;gap:10px;margin-bottom:8px}label.session-radio input[type="radio"]{margin-top:5px}label.session-radio p{margin:0}.question-mode .session-radio-proper{font-weight:normal!important}.answer-mode .session-radio-proper{font-weight:bold!important}.explanation{margin-top:10px;background:#f3f3f3;padding:10px;border-left:4px solid #999}.reference{margin-top:0}hr{margin:12px 0}</style>';
+    var out = [];
+    for (var i=0;i<saved.length;i++){
+      var q=saved[i], mode=showAnswers?'answer-mode':'question-mode';
+      var ch=''; for (var j=0;j<q.choices.length;j++){ ch += '<div class="'+mode+'">'+q.choices[j].html+'</div>'; }
+      var ex=''; if (showAnswers && q.feedbacks && q.feedbacks.length){
+        ex += '<div class="explanation"><b><i>Explanation:</i></b><br>'+q.feedbacks.join('<br><br>');
+        if (q.references && q.references.length){ ex += '<div class="reference"><b><i>Reference:</i></b><br>'+q.references.join('<br>')+'</div>'; }
+        ex += '</div>';
+      }
+      out.push('<div class="question-block">'
+        +'<div class="question-title">Question '+(i+1)+' of '+saved.length+'</div><hr/>'
+        +'<div class="question-body">'+q.questionHtml+'</div>'+ch+ex
+        +'<!-- Nomor soal asli: '+q.questionNumber+' -->'
+        +'</div>');
+    }
+    return '<html><head><title>'+ (showAnswers?'Answers':'Questions') +'</title>'+css
+      +'<script>window.onload=function(){setTimeout(function(){window.print();},600);};<\/script>'
+      +'</head><body>'+out.join('')+'</body></html>';
+  }
+  function renderHTML(){
+    if (!saved.length){ alert('Belum ada data.'); return; }
+    var q = window.open('', '_blank'); q.document.write(buildHTML(false)); q.document.close();
+    var a = window.open('', '_blank'); a.document.write(buildHTML(true));  a.document.close();
+    alert('OK: '+saved.length+' soal tergenerate. Gunakan Ctrl+P untuk menyimpan.');
+  }
+
+  async function nextURL(){
+    idx++; setSQStatus('Switching URL…','#5aa0ff');
+    if (idx >= queue.length){
+      setSQStatus('Selesai semua URL','#eab308'); log(sqLog,'[SQ]','done all URLs');
+      if (poller){ clearInterval(poller); poller=null; }
+      return;
+    }
+    try{
+      awaiting = true; lastQN='';
+      var next = queue[idx];
+      log(sqLog,'[SQ]','open ['+(idx+1)+'/'+queue.length+']: '+next);
+      sqChild.location.href = next;
+
+      var t0 = Date.now();
+      while (Date.now()-t0 < 15000){
+        await sleep(400);
+        var st = sqChild.document && sqChild.document.readyState;
+        if (st==='interactive'||st==='complete') break;
+      }
+      awaiting = false; setSQStatus('Running…','#22c55e');
+    }catch(e){
+      awaiting=false; setSQStatus('Gagal open URL','#ff6666'); log(sqLog,'[SQ]','open next error: '+e);
+    }
+  }
+
+  function startPoller(){
+    if (poller) clearInterval(poller);
+    poller = setInterval(function(){
+      if (!sqChild || sqChild.closed){
+        clearInterval(poller); poller=null; setSQStatus('Tab B ditutup','#ff6666'); alert('Tab B ditutup.');
+        return;
+      }
+      processQ();
+    }, 3200);
+  }
+
+  async function sqStart(){
+    var inputs = $('#sq_urls').querySelectorAll('input[type="text"]');
+    queue = []; for (var i=0;i<inputs.length;i++){ var v=(inputs[i].value||'').trim(); if (v) queue.push(v); }
+    if (!queue.length){ alert('Tambahkan minimal satu URL.'); return; }
+    idx=0; setSQStatus('Opening Tab B…','#5aa0ff');
+
+    sqChild = window.open(queue[0],'questionTab');
+    if (!sqChild){ alert('Pop-up diblokir.'); setSQStatus('Blocked','#ff6666'); return; }
+
+    awaiting = true; lastQN='';
+    var t0 = Date.now();
+    while (Date.now()-t0 < 15000){
+      try{
+        if (sqChild.document && (sqChild.document.readyState==='interactive'||sqChild.document.readyState==='complete')) break;
+      }catch(e){}
+      await sleep(250);
+    }
+    awaiting=false; setSQStatus('Running…','#22c55e'); log(sqLog,'[SQ]','start');
+    startPoller();
+  }
+
+  function sqClear(){ saved=[]; seenQ.clear(); lastQN=''; setSQStatus('Cleared','#eab308'); log(sqLog,'[SQ]','cleared'); }
+
+  function addUrlRow(v){
+    var row=document.createElement('div'); row.className='urow';
+    row.innerHTML = '<input type="text" placeholder="Tempel URL kuis..." value="'+(v?String(v).replace(/"/g,'&quot;'):'')+'"><button class="danger">×</button>';
+    row.querySelector('button').onclick = function(){ row.remove(); };
+    elSQ.urls.appendChild(row);
+  }
+  addUrlRow('');
+
+  elSQ.add.onclick   = function(){ addUrlRow(''); };
+  elSQ.start.onclick = sqStart;
+  elSQ.gen.onclick   = renderHTML;
+  elSQ.clear.onclick = sqClear;
+
+  $('#aa_url').value = location.href;
+
+  console.log('[CTRL] ready. Mode: parent-driven loop + child onload reattach. No eval, no watcher.');
+})();
