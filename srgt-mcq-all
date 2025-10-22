@@ -8,11 +8,18 @@
   let isPaused = false;        // menahan proses saat tidak ada NEXT
   let awaitingLoad = false;    // tunggu Tab B selesai buka link baru
 
-  const codeMap = {
-    "1110": "IS Audit Standards, Guidelines, and Codes of Ethics",
-    // ... (codeMap lengkap tetap sama seperti sebelumnya)
-    "5260": "Evidence Collection and Forensics"
-  };
+const codeMap = {
+  "2310": "Applying Appropriate Supervision",
+  "2311": "Supervising the Engagement Process",
+  "2312": "Supervisor Responsibilities Related to Coordinating Work Assignments",
+  "2313": "Supervisor Responsibilities Related to Reviewing Workpapers and Engagement Conclusions",
+  "2314": "Supervisor Responsibilities Related to Evaluating Auditors' Performance",
+  "2320": "Applying Appropriate Communication with Stakeholders Throughout the Engagement",
+  "2321": "Effective Communication Methods",
+  "2322": "Communicating Acceptance of Risk",
+  "2323": "Determining Appropriate Stakeholders for Engagement Communication"
+};
+
 
   const questionWindow = window.open(window.location.href, "questionTab");
   if (!questionWindow) {
