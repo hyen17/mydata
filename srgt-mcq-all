@@ -8,18 +8,39 @@
   let isPaused = false;
   let awaitingLoad = false;
 
-  // === CODE MAP (4 digit) ===
-  const codeMap = {
-    "2310": "Applying Appropriate Supervision",
-    "2311": "Supervising the Engagement Process",
-    "2312": "Supervisor Responsibilities Related to Coordinating Work Assignments",
-    "2313": "Supervisor Responsibilities Related to Reviewing Workpapers and Engagement Conclusions",
-    "2314": "Supervisor Responsibilities Related to Evaluating Auditors' Performance",
-    "2320": "Applying Appropriate Communication with Stakeholders Throughout the Engagement",
-    "2321": "Effective Communication Methods",
-    "2322": "Communicating Acceptance of Risk",
-    "2323": "Determining Appropriate Stakeholders for Engagement Communication"
-  };
+const codeMap = {
+  "2210": "Identifying Sources of Information",
+  "2211": "Methods for Obtaining Information",
+  "2212": "Using Document Tools to Obtain Information",
+  "2220": "Evaluating Audit Evidence",
+  "2221": "Criteria of Evaluating the Quality of Audit Evidence",
+  "2222": "Factors That Impact the Reliability of Evidence",
+  "2223": "Strength of Evidence",
+  "2230": "Applying Technology in Internal Auditing",
+  "2231": "Employing Efficient and Effective Solutions in Internal Audit",
+  "2240": "Analytical Approaches and Process Mapping",
+  "2241": "Process Workflow Segments",
+  "2242": "Process Workflow Analysis",
+  "2243": "Data Types",
+  "2244": "Data Analytics",
+  "2245": "Methods of Data Analysis",
+  "2250": "Applying Analytical Review Techniques",
+  "2251": "Major Types of Analytical Review Techniques",
+  "2252": "Determining Appropriate Analytical Techniques",
+  "2260": "Determining Audit Findings",
+  "2261": "Evaluating the Significance of Potential Audit Findings",
+  "2262": "Evaluating the Root Causes of Audit Findings",
+  "2263": "Factors for Determining the Risk Significance of Audit Findings",
+  "2270": "Engagement Workpapers",
+  "2271": "Organizing Information in Workpapers",
+  "2272": "Elements of Workpapers",
+  "2273": "Analyzing Links Between Workpapers and Engagement Results",
+  "2274": "Factors When Organizing and Retaining Engagement Documentation",
+  "2280": "Engagement Conclusions",
+  "2281": "Determining the Significance of Aggregated Findings",
+  "2282": "Elements to Consider When Developing Engagement Conclusions"
+};
+
 
   const questionWindow = window.open(window.location.href, "questionTab");
   if (!questionWindow) {
