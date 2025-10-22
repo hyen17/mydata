@@ -1,0 +1,45 @@
+(() => {
+  const URL_AWAL = location.href; // Simpan URL saat ini
+
+  // === 1. Buka tab baru ===
+  const tabBaru = window.open(URL_AWAL, '_blank');
+  tabBaru.focus();
+
+  tabBaru.onload = () => {
+    tabBaru.console.log('[Auto Answer] Tab siap.');
+
+    // === 2. Jalankan interval auto jawab ===
+    tabBaru.autoInterval = setInterval(() => {
+      const doc = tabBaru.document;
+
+      // Ambil semua pilihan jawaban
+      const pilihan = doc.querySelectorAll('.answer-choices input[type="radio"]');
+
+      // Jika tidak ada pilihan, hentikan (kemungkinan soal sudah habis)
+      if (!pilihan || pilihan.length === 0) {
+        console.log('[Auto Answer] Tidak ada pilihan lagi, menghentikan...');
+        clearInterval(tabBaru.autoInterval);
+        return;
+      }
+
+      // Pilih jawaban acak atau paling atas
+      const acak = Math.floor(Math.random() * pilihan.length);
+      const target = pilihan[acak] || pilihan[0];
+      target.checked = true;
+      target.dispatchEvent(new Event('change', { bubbles: true }));
+
+      console.log('[Auto Answer] Jawaban dipilih:', target.value);
+
+      // Klik tombol submit
+      const tombolSubmit = doc.querySelector('#submitButton');
+      if (tombolSubmit) {
+        tombolSubmit.click();
+        console.log('[Auto Answer] Klik tombol SUBMIT');
+      } else {
+        console.log('[Auto Answer] Tombol submit tidak ditemukan, menghentikan...');
+        clearInterval(tabBaru.autoInterval);
+      }
+
+    }, 1500); // jeda 1.5 detik per soal
+  };
+})();
