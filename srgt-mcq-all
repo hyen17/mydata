@@ -1,0 +1,380 @@
+(async () => {
+  // === DEDUP GLOBAL BERDASARKAN NOMOR SOAL ===
+  const seenQuestionNumbers = new Set(); // untuk deduplikasi global
+
+  const savedData = [];
+  let lastQuestionNumber = ""; // dedup cepat antar-berturutan
+  let isProcessing = false;
+  let isPaused = false;        // menahan proses saat tidak ada NEXT
+  let awaitingLoad = false;    // tunggu Tab B selesai buka link baru
+
+  const codeMap = {
+    "1110": "IS Audit Standards, Guidelines, and Codes of Ethics",
+    // ... (codeMap lengkap tetap sama seperti sebelumnya)
+    "5260": "Evidence Collection and Forensics"
+  };
+
+  const questionWindow = window.open(window.location.href, "questionTab");
+  if (!questionWindow) {
+    alert("Pop-up diblokir. Harap izinkan pop-up untuk situs ini.");
+    return;
+  }
+
+  alert("Tab B dibuka. Script akan otomatis mengklik NEXT di Tab B setelah menyimpan setiap soal.");
+
+  // Tunggu Tab B selesai loading
+  await new Promise(resolve => setTimeout(resolve, 3000));
+
+  // Util: normalisasi nomor soal -> ambil angka saja, contoh "Question #101182" => "101182"
+  function normalizeQuestionNumber(raw) {
+    if (!raw) return "";
+    const m = String(raw).trim().match(/#?\s*(\d+)/);
+    return m ? m[1] : String(raw).trim();
+  }
+
+  // Util: cari tombol NEXT (menurut struktur milikmu)
+  function findNextButton(doc) {
+    const el = doc.querySelector('button#submitButton');
+    if (!el) return null;
+    const txt = (el.textContent || "").toUpperCase();
+    return txt.includes("NEXT") ? el : null;
+  }
+
+  // Util: status panel
+  function setStatus(msg, color) {
+    const el = document.getElementById("status");
+    if (el) {
+      el.textContent = msg;
+      if (color) el.style.color = color;
+    }
+  }
+
+  async function processQuestion() {
+    if (isProcessing || isPaused || awaitingLoad) return;
+    isProcessing = true;
+
+    try {
+      const doc = questionWindow.document;
+
+      // Kalau Tab B baru saja diarahkan ke link baru, tunggu ready
+      if (doc.readyState !== 'complete' && doc.readyState !== 'interactive') {
+        isProcessing = false;
+        return;
+      }
+
+      const questionDiv    = doc.querySelector(".question-text");
+      const choicesDiv     = doc.querySelector(".answer-choices");
+      const explanationDiv = doc.querySelector("#explanationPanel .question-explanation");
+
+      // Ambil nomor soal unik
+      const questionRefDiv = doc.querySelector(".question-ref-text");
+      const currentQuestionNumberRaw = questionRefDiv ? questionRefDiv.textContent : "";
+      const currentQuestionNumber    = normalizeQuestionNumber(currentQuestionNumberRaw);
+
+      // Kalau belum lengkap, jangan lanjut
+      if (!questionDiv || !choicesDiv || !currentQuestionNumber) {
+        isProcessing = false;
+        return;
+      }
+
+      // ===== DEDUP 1: antar berturutan (cepat) =====
+      if (currentQuestionNumber === lastQuestionNumber) {
+        console.log("⏩ Soal sama (berturutan), skip simpan…");
+        // meski sama, tetap lanjut ke NEXT jika ada
+        const nextButtonA = findNextButton(doc);
+        if (nextButtonA) {
+          nextButtonA.click();
+          console.log("🖱️ NEXT setelah duplikat (berturutan)");
+          await new Promise(r => setTimeout(r, 2000));
+        } else {
+          // kalau tidak ada NEXT, pause
+          isPaused = true;
+          setStatus("⏸️ Tidak ada NEXT. Menunggu link baru untuk Tab B…", "orange");
+          console.log("ℹ️ NEXT tidak ada. Proses di-pause.");
+        }
+        isProcessing = false;
+        return;
+      }
+
+      // ===== DEDUP 2: global berbasis Set (tetap lanjut NEXT) =====
+      if (seenQuestionNumbers.has(currentQuestionNumber)) {
+        console.log(`⏭️ Soal #${currentQuestionNumber} sudah pernah disimpan, skip simpan (GLOBAL).`);
+        // TETAP lanjut ke NEXT jika ada
+        const nextButtonB = findNextButton(doc);
+        if (nextButtonB) {
+          nextButtonB.click();
+          console.log("🖱️ NEXT setelah duplikat (global)");
+          await new Promise(r => setTimeout(r, 2000));
+        } else {
+          // kalau tidak ada NEXT, pause
+          isPaused = true;
+          setStatus("⏸️ Tidak ada NEXT. Menunggu link baru untuk Tab B…", "orange");
+          console.log("ℹ️ NEXT tidak ada. Proses di-pause.");
+        }
+        isProcessing = false;
+        return;
+      }
+
+      console.log(`🔄 Memproses soal baru: #${currentQuestionNumber}`);
+
+      // Simpan data soal
+      const choices = Array.from(choicesDiv.querySelectorAll("label.session-radio")).map(label => {
+        const html = label.outerHTML;
+        const isCorrect = label.classList.contains("session-radio-proper");
+        return { html, isCorrect };
+      });
+
+      const explanation = explanationDiv ? [explanationDiv.innerHTML.trim()] : [];
+
+      // Referensi (tetap sama)
+      const categoryHeaders = Array.from(doc.querySelectorAll(".question-explanation-category")).map(e => e.textContent.trim());
+      const refIndex = categoryHeaders.lastIndexOf("Reference");
+      let references = [];
+
+      if (refIndex !== -1) {
+        const headers = Array.from(doc.querySelectorAll(".question-explanation-category"));
+        const refHeader = headers[refIndex];
+        const parentUl = refHeader.closest("ul");
+        let el = parentUl?.nextElementSibling;
+        while (el) {
+          if (el.matches("ul")) break;
+          if (el.matches("a.btnInfoDialog.question-explanation-link")) {
+            const text = el.textContent.trim();
+            const code = text.match(/^\d{4}/)?.[0];
+            const mapped = code && codeMap[code] ? `${text} ${codeMap[code]}` : text;
+            references.push(mapped);
+          }
+          el = el.nextElementSibling;
+        }
+      }
+
+      savedData.push({
+        questionNumber: currentQuestionNumber, // metadata nomor soal (disimpan, tidak dirender)
+        questionHtml: questionDiv.innerHTML.trim(),
+        choices,
+        feedbacks: explanation,
+        references
+      });
+
+      // Tandai nomor ini sudah pernah disimpan
+      seenQuestionNumbers.add(currentQuestionNumber);
+      lastQuestionNumber = currentQuestionNumber;
+
+      console.log(`✔ Saved #${currentQuestionNumber} (Total: ${savedData.length})`);
+      setStatus(`🟢 Running… Terkumpul: ${savedData.length}`, "green");
+
+      // Setelah simpan, coba klik NEXT
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const nextButton = findNextButton(doc);
+
+      if (nextButton) {
+        console.log("🖱️ Mengklik NEXT QUESTION…");
+        nextButton.click();
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      } else {
+        console.log("ℹ️ Tombol NEXT tidak ditemukan. Masuk mode pause.");
+        isPaused = true; // Pause di sini
+        setStatus("⏸️ Tidak ada NEXT. Menunggu link baru untuk Tab B…", "orange");
+
+        // Opsional: cek kata kunci selesai
+        const finishedText = doc.querySelector('body')?.textContent || "";
+        if (/\b(finished|completed|akhir)\b/i.test(finishedText)) {
+          console.log("✅ Sesi tampaknya selesai. Tetap pause menunggu link baru.");
+        }
+      }
+
+    } catch (e) {
+      console.warn("Gagal memproses soal:", e);
+    }
+
+    isProcessing = false;
+  }
+
+  const pollInterval = 3500;
+  const poller = setInterval(() => {
+    if (questionWindow.closed) {
+      alert("Tab B ditutup. Simpan jika sudah selesai.");
+      clearInterval(poller);
+      return;
+    }
+    processQuestion();
+  }, pollInterval);
+
+  // === Printable (FIX kutip/backtick; logika sama) ===
+  const buildPrintableHTML = (showAnswers = false) => {
+    const css = `
+      <style>
+        @page:first {
+          margin-top: 0;
+        }
+        body {
+          font-family: Arial, sans-serif;
+          font-size: 16px;
+          color: #000;
+          line-height: 1.6;
+          padding: 30px;
+          margin-top: 0 !important;
+        }
+        .question-block {
+          page-break-inside: avoid;
+          margin-bottom: 30px;
+        }
+        .question-title {
+          font-size: 18px;
+          font-weight: bold;
+          margin-bottom: 6px;
+        }
+        .question-body {
+          margin-bottom: 12px;
+        }
+        label.session-radio {
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
+          margin-bottom: 8px;
+        }
+        label.session-radio input[type="radio"] {
+          margin-top: 5px;
+        }
+        label.session-radio p {
+          margin: 0;
+        }
+        .question-mode .session-radio-proper {
+          font-weight: normal !important;
+        }
+        .answer-mode .session-radio-proper {
+          font-weight: bold !important;
+        }
+        .explanation {
+          margin-top: 10px;
+          background: #f3f3f3;
+          padding: 10px;
+          border-left: 4px solid #999;
+        }
+        .reference {
+          margin-top: 0;
+        }
+        hr {
+          margin: 12px 0;
+        }
+        /* Nomor soal asli TIDAK ditampilkan. */
+      </style>
+    `; // ← tidak ada tanda kutip nyasar di sini
+
+    const content = savedData.map((q, i) => {
+      const modeClass = showAnswers ? "answer-mode" : "question-mode";
+      const choicesHtml = q.choices.map(c => `<div class="${modeClass}">${c.html}</div>`).join("");
+      const explanationHtml = showAnswers && q.feedbacks?.length ? `
+        <div class="explanation">
+          <b><i>Explanation:</i></b><br>${q.feedbacks.join("<br><br>")}
+          ${q.references?.length ? `<div class="reference"><b><i>Reference:</i></b><br>${q.references.join("<br>")}</div>` : ""}
+        </div>` : "";
+
+      return `
+        <div class="question-block">
+          <div class="question-title">Question ${i + 1} of ${savedData.length}</div>
+          <hr/>
+          <div class="question-body">${q.questionHtml}</div>
+          ${choicesHtml}
+          ${explanationHtml}
+          <!-- Nomor soal asli: ${q.questionNumber} (disembunyikan) -->
+        </div>
+      `;
+    }).join("");
+
+    return `
+      <html>
+        <head>
+          <title>${showAnswers ? "Answers" : "Questions"}</title>
+          ${css}
+          <script>window.onload = () => setTimeout(() => window.print(), 600);</script>
+        </head>
+        <body>${content}</body>
+      </html>
+    `;
+  };
+
+  const renderPrintableHTML = () => {
+    const qWin = window.open("", "_blank");
+    qWin.document.write(buildPrintableHTML(false));
+    qWin.document.close();
+
+    const aWin = window.open("", "_blank");
+    aWin.document.write(buildPrintableHTML(true));
+    aWin.document.close();
+
+    alert(`✅ ${savedData.length} soal berhasil di-generate. Silakan tekan Ctrl+P untuk menyimpan.`);
+  };
+
+  // === Panel kontrol (dengan input link + tombol buka di Tab B) ===
+  const panel = document.createElement("div");
+  panel.style = `
+    position: fixed; top: 20px; right: 20px; z-index: 9999;
+    background: #fff; padding: 12px; border: 1px solid #ccc;
+    box-shadow: 0 0 6px rgba(0,0,0,0.2); font-family: sans-serif;
+    border-radius: 8px; min-width: 270px;
+  `;
+  panel.innerHTML = `
+    <strong>📚 PDF Tool v3.1 (Dedup by Question #)</strong><br/>
+    <small>Soal terkumpul: <span id="count">0</span></small><br/><br/>
+
+    <button id="generateHTMLPDF">Generate PDF</button>
+    <button id="stopAutoNext">Stop Auto-NEXT</button>
+    <br/><br/>
+
+    <div style="display:flex; gap:6px; align-items:center;">
+      <input id="newUrl" type="text" placeholder="Paste link baru di sini" style="flex:1; padding:6px; font-size:12px;">
+      <button id="openNew">Open Link in Tab B</button>
+    </div>
+    <br/>
+    <div id="status">🟢 Running...</div>
+  `;
+  document.body.appendChild(panel);
+
+  document.getElementById("generateHTMLPDF").onclick = renderPrintableHTML;
+
+  document.getElementById("stopAutoNext").onclick = () => {
+    isPaused = true; // berhenti manual
+    setStatus("🟡 Stopped (manual)", "orange");
+    alert(`Auto-NEXT dihentikan. ${savedData.length} soal terkumpul.`);
+  };
+
+  document.getElementById("openNew").onclick = async () => {
+    const url = document.getElementById("newUrl").value.trim();
+    if (!url) { alert("Masukkan URL baru terlebih dahulu."); return; }
+
+    try {
+      isPaused = false;         // lanjutkan otomatis
+      awaitingLoad = true;      // tunggu sampai halaman termuat
+      setStatus("🔄 Membuka link baru di Tab B…", "blue");
+
+      // Reset minimal agar tidak bentrok
+      lastQuestionNumber = "";
+      // JANGAN reset seenQuestionNumbers agar dedup tetap global lintas sesi
+      questionWindow.location.href = url;
+
+      // polling ringan menunggu DOM siap
+      const start = Date.now();
+      while (Date.now() - start < 15000) { // max 15 detik
+        await new Promise(r => setTimeout(r, 500));
+        const state = questionWindow.document?.readyState;
+        if (state === 'interactive' || state === 'complete') break;
+      }
+
+      awaitingLoad = false;
+      setStatus("🟢 Running…", "green");
+    } catch (e) {
+      awaitingLoad = false;
+      isPaused = true;
+      setStatus("❌ Gagal membuka link. Tetap pause.", "red");
+      console.warn("Gagal membuka link baru di Tab B:", e);
+      alert("Gagal membuka link di Tab B. Coba paste ulang atau cek pop-up blocker.");
+    }
+  };
+
+  // Update counter di panel
+  setInterval(() => {
+    const el = document.getElementById("count");
+    if (el) el.textContent = savedData.length;
+  }, 1000);
+})();
