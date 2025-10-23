@@ -14,7 +14,7 @@
   + '#__ctrl button{background:#242424;color:#eee;border:1px solid #343434;border-radius:8px;padding:8px 10px;cursor:pointer}'
   + '#__ctrl button.primary{background:#2563eb;border-color:#1e4fd6}'
   + '#__ctrl button.warn{background:#eab308;border-color:#b69105;color:#000}'
-  + '#__ctrl button.danger{background:#b91c1c;border-color:#991b1b}'
+  + '#__ctrl button.danger{background:#b91c1b;border-color:#991b1b}'
   + '#__ctrl .pill{display:inline-block;margin:3px 6px 0 0;padding:4px 8px;border:1px solid #2b2b2b;border-radius:999px;background:#141414;color:#c7c7c7;font-size:11px}'
   + '#__ctrl .logs{max-height:160px;overflow:auto;background:#0a0a0a;border:1px solid #1f1f1f;border-radius:8px;padding:8px;margin-top:8px;font-family:ui-monospace,Menlo,Consolas,monospace}'
   + '#__ctrl .logs p{margin:0 0 6px;white-space:pre-wrap}'
@@ -101,7 +101,7 @@
     elAA.child.textContent = (aaChild && !aaChild.closed) ? 'OPEN' : '-';
   }
 
-  // === LOOP BERJALAN DI PARENT, mengakses DOM child seperti skrip aslimu
+  // === LOOP BERJALAN DI PARENT, mengakses DOM child
   function startAutoAnswerLoop(){
     if (!aaChild || aaChild.closed) return;
     if (aaLoop) try{ clearInterval(aaLoop); }catch(e){}
@@ -135,7 +135,6 @@
   function attachChildOnload(){
     try{
       aaChild.onload = function(){ try{ startAutoAnswerLoop(); }catch(e){} };
-      // untuk kasus bfcache/onpageshow
       aaChild.onpageshow = function(){ try{ startAutoAnswerLoop(); }catch(e){} };
     }catch(e){
       log(aaLog,'[AA]','gagal pasang onload di child (cross-origin?): '+e);
@@ -158,7 +157,7 @@
       await sleep(200);
     }
     try{
-      startAutoAnswerLoop(); // <— tidak pakai eval, langsung loop di parent
+      startAutoAnswerLoop();
       setAAStatus('Running','#22c55e'); log(aaLog,'[AA]','loop started (parent-driven).');
     }catch(e){
       setAAStatus('Start failed','#ff6666'); log(aaLog,'[AA]','start failed: '+e);
@@ -194,31 +193,32 @@
   var processing = false, awaiting = false;
   var sqChild = null, poller = null, queue = [], idx = 0;
 
+  // codeMap contoh (ganti sesuai kebutuhanmu)
   var codeMap = {
-  "3110": "Methodologies for Internal Audit Operations",
-  "3111": "Managing External Providers of Internal Audit Services",
-  "3112": "Monitoring Internal Audit Operations",
-  "3113": "Balancing Assurance and Advisory Engagements",
-  "3114": "Reviewing and Revising Internal Audit Methodologies",
-  "3120": "Managing Financial, Human, and IT Resources",
-  "3121": "Budgeting Process in Internal Audit Functions",
-  "3122": "Recruiting Resources for Internal Audit Functions",
-  "3123": "Roles and Responsibilities in Internal Audit Functions",
-  "3124": "Training, Developing, and Retaining Internal Auditors",
-  "3125": "Performance Management in Internal Audit Functions",
-  "3126": "Technological Resources in Internal Audit Engagements",
-  "3127": "Effective Management Techniques in Internal Audit Functions",
-  "3130": "Aligning Internal Audit Strategy to Stakeholder Expectations",
-  "3131": "Aligning Internal Audit Activities with Business Strategy and Risk Management Practices",
-  "3132": "Internal Audit Mission and Vision Statements",
-  "3133": "Resource Planning in Internal Audit Strategies",
-  "3134": "Reviewing and Revising the Internal Audit Strategy",
-  "3140": "Chief Audit Executive's Responsibilities for Building Relationships and Communication",
-  "3141": "Formal and Informal Communication with Stakeholders",
-  "3142": "Communicating Audit Plan Changes and Linkage to Organizational Strategy",
-  "3143": "Communicating Independence Concerns and Significant Risk Exposures",
-  "3144": "Reporting on the Effectiveness of Risk Management and Control Processes",
-  "3145": "Communicating Quality Assessment Results and Performance Metrics"
+    "3110": "Methodologies for Internal Audit Operations",
+    "3111": "Managing External Providers of Internal Audit Services",
+    "3112": "Monitoring Internal Audit Operations",
+    "3113": "Balancing Assurance and Advisory Engagements",
+    "3114": "Reviewing and Revising Internal Audit Methodologies",
+    "3120": "Managing Financial, Human, and IT Resources",
+    "3121": "Budgeting Process in Internal Audit Functions",
+    "3122": "Recruiting Resources for Internal Audit Functions",
+    "3123": "Roles and Responsibilities in Internal Audit Functions",
+    "3124": "Training, Developing, and Retaining Internal Auditors",
+    "3125": "Performance Management in Internal Audit Functions",
+    "3126": "Technological Resources in Internal Audit Engagements",
+    "3127": "Effective Management Techniques in Internal Audit Functions",
+    "3130": "Aligning Internal Audit Strategy to Stakeholder Expectations",
+    "3131": "Aligning Internal Audit Activities with Business Strategy and Risk Management Practices",
+    "3132": "Internal Audit Mission and Vision Statements",
+    "3133": "Resource Planning in Internal Audit Strategies",
+    "3134": "Reviewing and Revising the Internal Audit Strategy",
+    "3140": "Chief Audit Executive's Responsibilities for Building Relationships and Communication",
+    "3141": "Formal and Informal Communication with Stakeholders",
+    "3142": "Communicating Audit Plan Changes and Linkage to Organizational Strategy",
+    "3143": "Communicating Independence Concerns and Significant Risk Exposures",
+    "3144": "Reporting on the Effectiveness of Risk Management and Control Processes",
+    "3145": "Communicating Quality Assessment Results and Performance Metrics"
   };
 
   function setSQStatus(s,color){
@@ -296,8 +296,14 @@
         processing=false; return;
       }
 
+      // === PERUBAHAN DI SINI: deteksi benar jika ada 'session-radio-proper' ATAU 'session-radio-correct'
       var labels=[].slice.call(cdiv.querySelectorAll('label.session-radio'));
-      var choices=labels.map(function(l){ return { html: sanitizeLabel(l), isCorrect: l.classList.contains('session-radio-proper') }; });
+      var choices=labels.map(function(l){
+        var html = sanitizeLabel(l);
+        var ok = l.classList.contains('session-radio-proper') || l.classList.contains('session-radio-correct');
+        return { html: html, isCorrect: ok };
+      });
+
       var explanation = ex ? [ex.innerHTML.trim()] : [];
       var refs = collectRefs(doc);
 
@@ -316,7 +322,20 @@
   }
 
   function buildHTML(showAnswers){
-    var css = '<style>@page:first{margin-top:0}body{font-family:Arial,sans-serif;font-size:16px;color:#000;line-height:1.6;padding:30px;margin-top:0!important}.question-block{page-break-inside:avoid;margin-bottom:30px}.question-title{font-size:18px;font-weight:bold;margin-bottom:6px}.question-body{margin-bottom:12px}label.session-radio{display:flex;align-items:flex-start;gap:10px;margin-bottom:8px}label.session-radio input[type="radio"]{margin-top:5px}label.session-radio p{margin:0}.question-mode .session-radio-proper{font-weight:normal!important}.answer-mode .session-radio-proper{font-weight:bold!important}.explanation{margin-top:10px;background:#f3f3f3;padding:10px;border-left:4px solid #999}.reference{margin-top:0}hr{margin:12px 0}</style>';
+    // tambahkan penegasan style untuk .session-radio-correct juga
+    var css = '<style>@page:first{margin-top:0}'
+      + 'body{font-family:Arial,sans-serif;font-size:16px;color:#000;line-height:1.6;padding:30px;margin-top:0!important}'
+      + '.question-block{page-break-inside:avoid;margin-bottom:30px}'
+      + '.question-title{font-size:18px;font-weight:bold;margin-bottom:6px}'
+      + '.question-body{margin-bottom:12px}'
+      + 'label.session-radio{display:flex;align-items:flex-start;gap:10px;margin-bottom:8px}'
+      + 'label.session-radio input[type="radio"]{margin-top:5px}'
+      + 'label.session-radio p{margin:0}'
+      + '.question-mode .session-radio-proper,.question-mode .session-radio-correct{font-weight:normal!important}'
+      + '.answer-mode .session-radio-proper,.answer-mode .session-radio-correct{font-weight:bold!important}'
+      + '.explanation{margin-top:10px;background:#f3f3f3;padding:10px;border-left:4px solid #999}'
+      + '.reference{margin-top:0}hr{margin:12px 0}</style>';
+
     var out = [];
     for (var i=0;i<saved.length;i++){
       var q=saved[i], mode=showAnswers?'answer-mode':'question-mode';
@@ -336,6 +355,7 @@
       +'<script>window.onload=function(){setTimeout(function(){window.print();},600);};<\/script>'
       +'</head><body>'+out.join('')+'</body></html>';
   }
+
   function renderHTML(){
     if (!saved.length){ alert('Belum ada data.'); return; }
     var q = window.open('', '_blank'); q.document.write(buildHTML(false)); q.document.close();
@@ -417,5 +437,5 @@
 
   $('#aa_url').value = location.href;
 
-  console.log('[CTRL] ready. Mode: parent-driven loop + child onload reattach. No eval, no watcher.');
+  console.log('[CTRL] ready. Added support for class "session-radio-correct" (besides "session-radio-proper").');
 })();
