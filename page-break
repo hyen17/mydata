@@ -113,5 +113,4 @@ function nonaktifkanModePageBreak() {
     console.log('Semua tanda dan event listener telah dihapus.');
 }
 
-// Langsung panggil fungsi aktifkanModePageBreak()
-aktifkanModePageBreak();
+
