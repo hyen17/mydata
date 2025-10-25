@@ -1,0 +1,117 @@
+/**
+ * Fungsi untuk menangani klik saat mode page break aktif.
+ * VERSI BARU: Mencari elemen "induk" yang paling logis untuk di-break.
+ */
+function handlePageBreakClick(event) {
+    const target = event.target;
+    
+    // Daftar selector untuk elemen-elemen "utama" yang bisa di-page-break
+    // Kita cari dari yang paling spesifik (tabel, list) hingga umum (paragraf)
+    const breakableSelector = 'table, figure, ul, ol, p, img, h1, h2, h3, h4, h5, h6, div, section, article';
+    
+    // Cari elemen terdekat (termasuk diri sendiri) yang cocok dengan selector
+    // Ini "naik" dari elemen yang diklik (misal: <td>) ke induknya (misal: <table>)
+    const breakableElement = target.closest(breakableSelector);
+
+    // Jika kita menemukan elemen yang bisa di-break
+    if (breakableElement) {
+        
+        // Mencegah aksi default (misal: mengikuti link jika elemen ada di dalam <a>)
+        event.preventDefault();
+        event.stopPropagation();
+        
+        // Toggle (tambah/hapus) class 'manual-page-break'
+        breakableElement.classList.toggle('manual-page-break');
+        
+        if (breakableElement.classList.contains('manual-page-break')) {
+            console.log('Page break ditambahkan ke:', breakableElement);
+        } else {
+            console.log('Page break dihapus dari:', breakableElement);
+        }
+    } else {
+        // Info jika klik tidak di elemen yang valid
+        console.log('Klik di area yang tidak bisa di-page-break:', target);
+    }
+}
+
+/**
+ * Fungsi untuk MENGAKTIFKAN mode penambahan page break.
+ * (Tidak ada perubahan di fungsi ini)
+ */
+function aktifkanModePageBreak() {
+    const styleId = 'style-page-break-manual';
+
+    if (document.getElementById(styleId)) {
+        console.log('Mode page break sudah aktif.');
+        return;
+    }
+
+    const style = document.createElement('style');
+    style.id = styleId;
+    
+    style.innerHTML = `
+        /* --- HANYA TAMPIL DI LAYAR --- */
+        @media screen {
+            .manual-page-break {
+                /* Tanda visual ini TIDAK AKAN IKUT TER-PRINT */
+                border-top: 3px dashed red !important;
+                padding-top: 8px !important;
+                margin-top: 8px !important;
+            }
+            
+            body.mode-page-break-aktif, 
+            body.mode-page-break-aktif * {
+                /* Ganti kursor saat mode aktif */
+                cursor: crosshair !important;
+            }
+        }
+        
+        /* --- HANYA BERLAKU SAAT PRINT --- */
+        @media print {
+            .manual-page-break {
+                /* Perintah untuk pindah halaman sebelum elemen ini */
+                page-break-before: always !important;
+                
+                /* Pastikan tanda visual (border) HILANG saat print */
+                border-top: none !important;
+                padding-top: 0 !important;
+                margin-top: 0 !important;
+            }
+        }
+    `;
+    
+    document.head.appendChild(style);
+    document.body.classList.add('mode-page-break-aktif');
+    
+    // Gunakan 'true' (useCapture) agar listener ini berjalan lebih dulu
+    document.body.addEventListener('click', handlePageBreakClick, true);
+
+    console.log('--- MODE PAGE BREAK AKTIF (Versi 2) ---');
+    console.log('Sekarang lebih pintar! Klik di dalam tabel akan memilih seluruh tabel.');
+    console.log('Jalankan nonaktifkanModePageBreak() untuk berhenti.');
+}
+
+/**
+ * Fungsi untuk MENONAKTIFKAN mode dan membersihkan.
+ * (Tidak ada perubahan di fungsi ini)
+ */
+function nonaktifkanModePageBreak() {
+    document.body.removeEventListener('click', handlePageBreakClick, true);
+    
+    const style = document.getElementById('style-page-break-manual');
+    if (style) {
+        style.remove();
+    }
+    
+    document.body.classList.remove('mode-page-break-aktif');
+    
+    document.querySelectorAll('.manual-page-break').forEach(el => {
+        el.classList.remove('manual-page-break');
+    });
+    
+    console.log('--- MODE PAGE BREAK DINONAKTIFKAN ---');
+    console.log('Semua tanda dan event listener telah dihapus.');
+}
+
+// Langsung panggil fungsi aktifkanModePageBreak()
+aktifkanModePageBreak();
