@@ -1,60 +1,77 @@
 (function () {
   // =======================
-  // SMART PRINT SPLIT (Letter) — v2.3
+  // SMART PRINT SPLIT (Letter) — v2.4
   // =======================
 
-  // Letter 11" dengan margin default ~0.5" → area ≈ 10" → 10*96 ≈ 960px
-  var PRINT_CONTENT_HEIGHT_PX = 960;
-
+  var PRINT_CONTENT_HEIGHT_PX = 960; // Letter margin default (~0.5")
   var SELECTOR_Q = '.QuestionItem-module__container--OivH7';
-  var LONG_CLASS = 'q-long';        // soal panjang: start new page + split-friendly
+  var LONG_CLASS = 'q-long';
   var STYLE_ID   = 'gemini-print-fix-smart';
 
   var css = `
     @media print {
-      /* === DEFAULT (soal pendek): hindari pecah === */
-      ${SELECTOR_Q} { break-inside: avoid !important; page-break-inside: avoid !important; }
+      /* === SOAL PENDEK (default) === */
+      ${SELECTOR_Q} {
+        break-inside: avoid !important;
+        page-break-inside: avoid !important;
+      }
       .QuestionItem-module__questionHeader--MKsJT,
-      .QuestionItem-module__questionSectionHeader--BuF48 { break-after: avoid !important; page-break-after: avoid !important; }
+      .QuestionItem-module__questionSectionHeader--BuF48 {
+        break-after: avoid !important;
+        page-break-after: avoid !important;
+      }
 
       /* Opsi jangan terbelah */
-      .Option-module__optionWrapper--RihDm { break-inside: avoid !important; page-break-inside: avoid !important; }
+      .Option-module__optionWrapper--RihDm {
+        break-inside: avoid !important;
+        page-break-inside: avoid !important;
+      }
 
       /* Paragraf rapi (default) */
       .QuestionItem-module__questionText--vjHa3 p,
       .QuestionItem-module__questionExplanation--Pxqbi p,
-      .Option-module__optionText--sNKm2 p { orphans: 3; widows: 3; }
+      .Option-module__optionText--sNKm2 p {
+        orphans: 3;
+        widows: 3;
+      }
 
       /* === SOAL PANJANG === */
       ${SELECTOR_Q}.${LONG_CLASS} {
-        /* Mulai halaman baru agar konsisten */
-        break-before: page !important; page-break-before: always !important;
-
-        /* Boleh pecah di dalam (biar mengalir) */
-        break-inside: auto !important; page-break-inside: auto !important;
+        break-before: page !important;
+        page-break-before: always !important;
+        break-inside: auto !important;
+        page-break-inside: auto !important;
       }
 
-      /* Untuk soal panjang, JANGAN buat header “nempel” ketat (biar tidak menahan halaman) */
       ${SELECTOR_Q}.${LONG_CLASS} .QuestionItem-module__questionHeader--MKsJT,
       ${SELECTOR_Q}.${LONG_CLASS} .QuestionItem-module__questionSectionHeader--BuF48 {
-        break-after: auto !important; page-break-after: auto !important;
+        break-after: auto !important;
+        page-break-after: auto !important;
       }
 
-      /* Izinkan blok penjelasan dan teks soal pecah lebih bebas */
       ${SELECTOR_Q}.${LONG_CLASS} .QuestionItem-module__questionText--vjHa3,
       ${SELECTOR_Q}.${LONG_CLASS} .QuestionItem-module__questionExplanation--Pxqbi {
-        break-inside: auto !important; page-break-inside: auto !important;
+        break-inside: auto !important;
+        page-break-inside: auto !important;
       }
 
-      /* Longgarkan aturan paragraf KHUSUS pada soal panjang agar tidak “ngambek” pindah penuh */
       ${SELECTOR_Q}.${LONG_CLASS} .QuestionItem-module__questionText--vjHa3 p,
       ${SELECTOR_Q}.${LONG_CLASS} .QuestionItem-module__questionExplanation--Pxqbi p {
-        orphans: 1; widows: 1;
+        orphans: 1;
+        widows: 1;
       }
 
-      /* Opsi tetap aman walau kontainer boleh pecah */
       ${SELECTOR_Q}.${LONG_CLASS} .Option-module__optionWrapper--RihDm {
-        break-inside: avoid !important; page-break-inside: avoid !important;
+        break-inside: avoid !important;
+        page-break-inside: avoid !important;
+      }
+
+      /* === ATURAN TAMBAHAN: PrintQuiz questionText ===
+         Selalu mulai di halaman baru.
+      */
+      .PrintQuiz-module__questionText--dgDVs {
+        break-before: page !important;
+        page-break-before: always !important;
       }
     }
   `;
@@ -67,7 +84,10 @@
     document.head.appendChild(style);
   }
   if (style.styleSheet) style.styleSheet.cssText = css;
-  else { style.innerHTML = ''; style.appendChild(document.createTextNode(css)); }
+  else {
+    style.innerHTML = '';
+    style.appendChild(document.createTextNode(css));
+  }
 
   function markLongQuestions() {
     var items = document.querySelectorAll(SELECTOR_Q);
@@ -83,7 +103,9 @@
   }
 
   markLongQuestions();
-  if ('onbeforeprint' in window) window.addEventListener('beforeprint', markLongQuestions);
+
+  if ('onbeforeprint' in window)
+    window.addEventListener('beforeprint', markLongQuestions);
 
   try {
     var mo = new MutationObserver(function () {
@@ -93,5 +115,5 @@
     mo.observe(document.body, { childList: true, subtree: true, attributes: true });
   } catch (e) {}
 
-  console.log('Print fix v2.3 aktif — Long questions start new page; relaxed widows/orphans; threshold', PRINT_CONTENT_HEIGHT_PX, 'px.');
+  console.log('Print fix v2.4 aktif — long questions start new page; .PrintQuiz-module__questionText--dgDVs always starts new page.');
 })();
