@@ -1,46 +1,97 @@
-(function() {
-  // 1. Definisikan aturan CSS untuk print
-  var cssRules = `
+(function () {
+  // =======================
+  // SMART PRINT SPLIT (Letter) — v2.3
+  // =======================
+
+  // Letter 11" dengan margin default ~0.5" → area ≈ 10" → 10*96 ≈ 960px
+  var PRINT_CONTENT_HEIGHT_PX = 960;
+
+  var SELECTOR_Q = '.QuestionItem-module__container--OivH7';
+  var LONG_CLASS = 'q-long';        // soal panjang: start new page + split-friendly
+  var STYLE_ID   = 'gemini-print-fix-smart';
+
+  var css = `
     @media print {
-      
-      /* ATURAN LAMA: (Masih berguna untuk item pendek)
-         Coba untuk tidak memotong seluruh kontainer item. */
-      .QuestionItem-module__container--OivH7,
-      .PrintQuiz-module__questionText--dgDVs {
-        page-break-inside: avoid !important;
-        break-inside: avoid !important;
+      /* === DEFAULT (soal pendek): hindari pecah === */
+      ${SELECTOR_Q} { break-inside: avoid !important; page-break-inside: avoid !important; }
+      .QuestionItem-module__questionHeader--MKsJT,
+      .QuestionItem-module__questionSectionHeader--BuF48 { break-after: avoid !important; page-break-after: avoid !important; }
+
+      /* Opsi jangan terbelah */
+      .Option-module__optionWrapper--RihDm { break-inside: avoid !important; page-break-inside: avoid !important; }
+
+      /* Paragraf rapi (default) */
+      .QuestionItem-module__questionText--vjHa3 p,
+      .QuestionItem-module__questionExplanation--Pxqbi p,
+      .Option-module__optionText--sNKm2 p { orphans: 3; widows: 3; }
+
+      /* === SOAL PANJANG === */
+      ${SELECTOR_Q}.${LONG_CLASS} {
+        /* Mulai halaman baru agar konsisten */
+        break-before: page !important; page-break-before: always !important;
+
+        /* Boleh pecah di dalam (biar mengalir) */
+        break-inside: auto !important; page-break-inside: auto !important;
       }
 
-      /* ATURAN BARU: (Untuk memperbaiki item panjang)
-         JANGAN PERNAH memotong halaman SETELAH header.
-         Ini "merekatkan" header ke konten di bawahnya. */
-      .QuestionItem-module__questionHeader--MKsJT {
-        page-break-after: avoid !important;
-        break-after: avoid !importan_t; 
+      /* Untuk soal panjang, JANGAN buat header “nempel” ketat (biar tidak menahan halaman) */
+      ${SELECTOR_Q}.${LONG_CLASS} .QuestionItem-module__questionHeader--MKsJT,
+      ${SELECTOR_Q}.${LONG_CLASS} .QuestionItem-module__questionSectionHeader--BuF48 {
+        break-after: auto !important; page-break-after: auto !important;
+      }
+
+      /* Izinkan blok penjelasan dan teks soal pecah lebih bebas */
+      ${SELECTOR_Q}.${LONG_CLASS} .QuestionItem-module__questionText--vjHa3,
+      ${SELECTOR_Q}.${LONG_CLASS} .QuestionItem-module__questionExplanation--Pxqbi {
+        break-inside: auto !important; page-break-inside: auto !important;
+      }
+
+      /* Longgarkan aturan paragraf KHUSUS pada soal panjang agar tidak “ngambek” pindah penuh */
+      ${SELECTOR_Q}.${LONG_CLASS} .QuestionItem-module__questionText--vjHa3 p,
+      ${SELECTOR_Q}.${LONG_CLASS} .QuestionItem-module__questionExplanation--Pxqbi p {
+        orphans: 1; widows: 1;
+      }
+
+      /* Opsi tetap aman walau kontainer boleh pecah */
+      ${SELECTOR_Q}.${LONG_CLASS} .Option-module__optionWrapper--RihDm {
+        break-inside: avoid !important; page-break-inside: avoid !important;
       }
     }
   `;
 
-  // 2. Buat atau perbarui elemen <style>
-  var styleId = 'gemini-print-fix';
-  var styleElement = document.getElementById(styleId);
-  
-  // Jika belum ada, buat baru
-  if (!styleElement) {
-    styleElement = document.createElement('style');
-    styleElement.id = styleId;
-    styleElement.type = 'text/css';
-    document.head.appendChild(styleElement);
+  var style = document.getElementById(STYLE_ID);
+  if (!style) {
+    style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.type = 'text/css';
+    document.head.appendChild(style);
+  }
+  if (style.styleSheet) style.styleSheet.cssText = css;
+  else { style.innerHTML = ''; style.appendChild(document.createTextNode(css)); }
+
+  function markLongQuestions() {
+    var items = document.querySelectorAll(SELECTOR_Q);
+    for (var i = 0; i < items.length; i++) {
+      var el = items[i];
+      el.classList.remove(LONG_CLASS);
+      var rect = el.getBoundingClientRect();
+      var h = rect ? rect.height : 0;
+      if (h > PRINT_CONTENT_HEIGHT_PX) {
+        el.classList.add(LONG_CLASS);
+      }
+    }
   }
 
-  // 3. Masukkan aturan CSS baru
-  if (styleElement.styleSheet) {
-    styleElement.styleSheet.cssText = cssRules;
-  } else {
-    styleElement.innerHTML = ''; // Hapus aturan lama
-    styleElement.appendChild(document.createTextNode(cssRules));
-  }
+  markLongQuestions();
+  if ('onbeforeprint' in window) window.addEventListener('beforeprint', markLongQuestions);
 
-  console.log('Aturan CSS print telah DIPERBARUI!');
-  console.log('Menambahkan aturan untuk "merekatkan" header ke konten.');
+  try {
+    var mo = new MutationObserver(function () {
+      clearTimeout(markLongQuestions._t);
+      markLongQuestions._t = setTimeout(markLongQuestions, 120);
+    });
+    mo.observe(document.body, { childList: true, subtree: true, attributes: true });
+  } catch (e) {}
+
+  console.log('Print fix v2.3 aktif — Long questions start new page; relaxed widows/orphans; threshold', PRINT_CONTENT_HEIGHT_PX, 'px.');
 })();
