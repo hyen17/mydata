@@ -1,0 +1,49 @@
+(function() {
+    // ID untuk style sheet kita, dari skrip Anda
+    const i = 'font-fixer-style-v3'; 
+    
+    // Hapus style sheet lama jika ada, agar tidak duplikat
+    let o = document.getElementById(i);
+    if (o) {
+        o.remove();
+    }
+    
+    // Buat elemen <style> baru
+    const s = document.createElement('style');
+    s.id = i;
+    
+    // --- GABUNGKAN SEMUA ATURAN CSS DI SINI ---
+    // Kita gunakan backticks (`) untuk string multi-baris
+    s.textContent = `
+        /* * ATURAN 1: Mengatur font .qc-expl menjadi 1rem 
+         */
+        .qc-expl,
+        .qc-expl * {
+            font-size: 1rem !important; 
+        }
+
+        /* * ATURAN 2: Sembunyikan elemen-elemen saat print 
+         */
+        @media print {
+            /* Sembunyikan video player */
+            #VideoPlayerContainer,
+            
+            /* Sembunyikan <br> yang persis setelah video */
+            #VideoPlayerContainer + br,
+            
+            /* Sembunyikan <p> yang persis setelah <br> */
+            #VideoPlayerContainer + br + p,
+            
+            /* Sembunyikan section "Related Material" (anak terakhir) */
+            .qc-expl > section.QuestionBody-module__item--oc5Wf:last-child {
+                display: none !important;
+            }
+        }
+    `;
+    // --- AKHIR DARI ATURAN CSS ---
+    
+    // Tambahkan <style> baru ke <head> dokumen
+    document.head.appendChild(s);
+    
+    console.log('Skrip gabungan berhasil dijalankan: Font 1rem dan aturan print telah diterapkan.');
+})();
