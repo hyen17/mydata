@@ -1,0 +1,126 @@
+(function() {
+    // --- SETUP UI ---
+    const btn = document.createElement("button");
+    btn.innerText = "START AUTO";
+    btn.id = "auto-quiz-btn";
+    Object.assign(btn.style, {
+        position: "fixed", top: "10px", right: "10px", zIndex: "99999",
+        padding: "10px 20px", backgroundColor: "green", color: "white",
+        border: "none", borderRadius: "5px", cursor: "pointer", fontWeight: "bold"
+    });
+    document.body.appendChild(btn);
+
+    // --- CONFIG ---
+    let isRunning = false;
+    let mainTimer = null;
+    let checkInterval = null;
+    
+    // Waktu tunggu maksimal untuk tombol Next menjadi aktif (misal 10 detik)
+    // Jika lebih dari ini masih disabled, baru script berhenti.
+    const MAX_WAIT_FOR_ACTIVE = 10000; 
+
+    btn.addEventListener("click", () => {
+        if (!isRunning) {
+            isRunning = true;
+            btn.innerText = "STOP (Running...)";
+            btn.style.backgroundColor = "red";
+            processQuestion();
+        } else {
+            stopScript();
+        }
+    });
+
+    function stopScript() {
+        isRunning = false;
+        clearTimeout(mainTimer);
+        clearInterval(checkInterval);
+        btn.innerText = "START AUTO";
+        btn.style.backgroundColor = "green";
+        console.log("Script stopped manually.");
+    }
+
+    function processQuestion() {
+        if (!isRunning) return;
+
+        // 1. Cari Opsi Jawaban
+        const options = document.querySelectorAll('div[role="radiogroup"] input[type="radio"]');
+
+        if (options.length > 0) {
+            const randomIndex = Math.floor(Math.random() * options.length);
+            const randomOption = options[randomIndex];
+            
+            // 2. KLIK JAWABAN (Dengan Event Trigger Ekstra)
+            // Kita kirim event 'change' dan 'input' manual agar React sadar ada perubahan
+            randomOption.click();
+            randomOption.dispatchEvent(new Event('change', { bubbles: true }));
+            randomOption.dispatchEvent(new Event('input', { bubbles: true }));
+            
+            console.log(`Menjawab opsi ke-${randomIndex + 1}...`);
+
+            // 3. Masuk ke Mode Menunggu Tombol Next Aktif
+            waitForButtonToEnable();
+
+        } else {
+            console.log("Tidak ada soal, mencoba mencari navigasi...");
+            waitForButtonToEnable();
+        }
+    }
+
+    function waitForButtonToEnable() {
+        let elapsedTime = 0;
+        const checkDelay = 500; // Cek setiap 0.5 detik
+
+        // Bersihkan interval sebelumnya jika ada
+        if (checkInterval) clearInterval(checkInterval);
+
+        checkInterval = setInterval(() => {
+            if (!isRunning) {
+                clearInterval(checkInterval);
+                return;
+            }
+
+            // Cari tombol
+            const submitBtn = document.querySelector('button[class*="RunFooter-module__submitButton"]');
+            const nextBtn = document.querySelector('button[class*="RunFooter-module__nextbtn"]');
+            
+            // LOGIKA 1: Cek Tombol Submit dulu (jika ada flow submit)
+            if (submitBtn && !submitBtn.disabled) {
+                clearInterval(checkInterval);
+                submitBtn.click();
+                console.log("Tombol Submit diklik.");
+                // Setelah submit, tunggu sebentar lalu cari Next lagi
+                mainTimer = setTimeout(waitForButtonToEnable, 1000); 
+                return;
+            }
+
+            // LOGIKA 2: Cek Tombol Next
+            if (nextBtn) {
+                if (!nextBtn.disabled) {
+                    // BERHASIL! Tombol sudah aktif
+                    clearInterval(checkInterval);
+                    console.log("Tombol Next aktif -> Klik.");
+                    nextBtn.click();
+                    
+                    // Tunggu loading halaman baru
+                    mainTimer = setTimeout(processQuestion, 3000); 
+                } else {
+                    // Tombol ada tapi masih disabled, tunggu putaran loop berikutnya...
+                    console.log("Menunggu tombol Next aktif...");
+                }
+            } else {
+                console.log("Tombol Next belum muncul di DOM...");
+            }
+
+            // Timeout Safety: Jika sudah menunggu terlalu lama (misal error jaringan atau quiz selesai)
+            elapsedTime += checkDelay;
+            if (elapsedTime >= MAX_WAIT_FOR_ACTIVE) {
+                clearInterval(checkInterval);
+                console.log("Timeout: Tombol Next tidak kunjung aktif. Berhenti.");
+                stopScript();
+                alert("Script berhenti: Tombol Next tidak aktif dalam 10 detik. (Mungkin Quiz Selesai?)");
+            }
+
+        }, checkDelay);
+    }
+
+})();
