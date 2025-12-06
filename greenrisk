@@ -1,0 +1,242 @@
+(function() {
+    // --- 1. Cek Instance (Agar tidak dobel jika di-run ulang) ---
+    if (document.getElementById('quiz-collector-panel')) {
+        alert("Panel sudah aktif! Cek pojok kanan atas.");
+        return;
+    }
+
+    // --- 2. State Management ---
+    const state = {
+        isRecording: false,
+        data: [],
+        processedSet: new Set()
+    };
+
+    // --- 3. UI Control Panel ---
+    const panel = document.createElement('div');
+    panel.id = 'quiz-collector-panel';
+    panel.style.cssText = `
+        position: fixed; top: 10px; right: 10px; z-index: 2147483647;
+        background: #2c3e50; color: white; padding: 15px;
+        border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        font-family: 'Segoe UI', Arial, sans-serif; min-width: 240px; text-align: center;
+        border: 1px solid #455a64;
+    `;
+    
+    // HTML Structure Panel
+    panel.innerHTML = `
+        <div style="font-weight:bold; margin-bottom:5px; font-size:16px; color:#ecf0f1;">Quiz Collector V10</div>
+        <div id="qc-status" style="font-size:12px; color:#f39c12; margin-bottom:10px;">Status: IDLE (Menunggu)</div>
+        <div style="background:rgba(0,0,0,0.2); padding:5px; border-radius:4px; margin-bottom:10px;">
+            <span id="qc-count" style="font-size:20px; font-weight:bold;">0</span> Soal
+        </div>
+        
+        <div style="display:flex; gap:5px; justify-content:center; margin-bottom:10px;">
+            <button id="qc-btn-start" style="flex:1; background:#27ae60; color:white; border:none; padding:8px; border-radius:4px; cursor:pointer; font-weight:bold;">▶ MULAI</button>
+            <button id="qc-btn-pause" style="flex:1; background:#f39c12; color:white; border:none; padding:8px; border-radius:4px; cursor:pointer; font-weight:bold; display:none;">⏸ PAUSE</button>
+        </div>
+
+        <div style="display:flex; gap:5px; justify-content:center;">
+             <button id="qc-btn-reset" style="flex:1; background:#c0392b; color:white; border:none; padding:8px; border-radius:4px; cursor:pointer; font-weight:bold;">🗑 RESET</button>
+             <button id="qc-btn-process" style="flex:2; background:#3498db; color:white; border:none; padding:8px; border-radius:4px; cursor:pointer; font-weight:bold;">⬇ PROSES</button>
+        </div>
+        <div style="margin-top:5px; font-size:10px; color:#bdc3c7;">*Klik RESET sebelum quiz baru</div>
+    `;
+    document.body.appendChild(panel);
+
+    // --- 4. Helper Functions ---
+    function cleanText(html) {
+        if (!html) return "";
+        const temp = document.createElement("div");
+        temp.innerHTML = html;
+        return temp.textContent.replace(/\u00a0/g, " ").trim();
+    }
+
+    function findElementHybrid(block, selectorInside) {
+        let el = block.querySelector(selectorInside);
+        if (!el) {
+            const parent = block.closest('.lw-ass-widget-wrapper');
+            if (parent && parent.parentElement) {
+                el = parent.parentElement.querySelector(selectorInside);
+            }
+        }
+        return el;
+    }
+
+    // --- 5. Core Logic: Extract Data ---
+    function extractFromDoc(doc) {
+        if (!doc) return 0;
+        const blocks = doc.querySelectorAll('.assessment-feedback-block');
+        let foundCount = 0;
+
+        blocks.forEach(block => {
+            const qTextEl = block.querySelector('h4');
+            const questionText = qTextEl ? qTextEl.innerHTML.trim() : null;
+
+            if (!questionText || state.processedSet.has(questionText)) return; 
+
+            // Ambil Kunci Jawaban
+            let correctAnswerText = "";
+            const correctWrapper = findElementHybrid(block, '.correct-answers-wrapper');
+            if (correctWrapper) {
+                const correctEl = correctWrapper.querySelector('.lw-ass-widget-wrapper p') || 
+                                  correctWrapper.querySelector('.learnworlds-main-text-normal span') ||
+                                  correctWrapper.querySelector('.learnworlds-main-text-normal');
+                if (correctEl) correctAnswerText = cleanText(correctEl.innerHTML);
+            }
+
+            // Ambil Opsi
+            const options = [];
+            const optionLabels = block.querySelectorAll('.lw-qn-radio-option-lbl');
+            optionLabels.forEach(lbl => {
+                let rawHtml = lbl.innerHTML;
+                const pWrap = lbl.querySelector('p');
+                if (pWrap) rawHtml = pWrap.innerHTML;
+                const textForCheck = cleanText(rawHtml);
+                const isCorrect = (correctAnswerText !== "" && textForCheck === correctAnswerText);
+                options.push({ display: rawHtml, isCorrect: isCorrect });
+            });
+
+            // Ambil Explanation
+            let explanation = 'No explanation provided.';
+            const feedbackWrapper = findElementHybrid(block, '.author-feedback-wrapper');
+            if (feedbackWrapper) {
+                const expText = feedbackWrapper.querySelector('.learnworlds-main-text-small');
+                if (expText) explanation = expText.innerHTML;
+            }
+
+            state.data.push({ question: questionText, options: options, explanation: explanation });
+            state.processedSet.add(questionText);
+            foundCount++;
+        });
+        return foundCount;
+    }
+
+    // --- 6. The Scanner Loop ---
+    function deepScan() {
+        if (!state.isRecording) return; // Hanya scan jika status recording
+
+        let newFound = extractFromDoc(document);
+        
+        // Scan Iframes
+        const iframes = document.querySelectorAll('iframe');
+        iframes.forEach(iframe => {
+            try {
+                const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                if (iframeDoc) newFound += extractFromDoc(iframeDoc);
+            } catch (e) {}
+        });
+
+        // Update UI
+        document.getElementById('qc-count').innerText = state.data.length;
+    }
+
+    // Jalankan interval
+    setInterval(deepScan, 800);
+
+    // --- 7. Button Event Listeners ---
+    
+    // Tombol MULAI
+    document.getElementById('qc-btn-start').onclick = function() {
+        state.isRecording = true;
+        this.style.display = 'none';
+        document.getElementById('qc-btn-pause').style.display = 'block';
+        document.getElementById('qc-status').innerHTML = "Status: <span style='color:#2ecc71; font-weight:bold;'>MEREKAM...</span>";
+        document.getElementById('qc-status').style.color = "#ecf0f1";
+    };
+
+    // Tombol PAUSE
+    document.getElementById('qc-btn-pause').onclick = function() {
+        state.isRecording = false;
+        this.style.display = 'none';
+        document.getElementById('qc-btn-start').style.display = 'block';
+        document.getElementById('qc-status').innerHTML = "Status: PAUSED";
+        document.getElementById('qc-status').style.color = "#f39c12";
+    };
+
+    // Tombol RESET
+    document.getElementById('qc-btn-reset').onclick = function() {
+        if(confirm("Hapus semua data soal yang tersimpan untuk memulai Quiz baru?")) {
+            state.data = [];
+            state.processedSet.clear();
+            state.isRecording = false;
+            
+            // Reset UI Buttons
+            document.getElementById('qc-btn-pause').style.display = 'none';
+            document.getElementById('qc-btn-start').style.display = 'block';
+            document.getElementById('qc-count').innerText = "0";
+            document.getElementById('qc-status').innerHTML = "Status: DATA DIHAPUS";
+            setTimeout(() => { document.getElementById('qc-status').innerHTML = "Status: IDLE"; }, 2000);
+        }
+    };
+
+    // Tombol PROSES HTML
+    document.getElementById('qc-btn-process').onclick = function() {
+        if (state.data.length === 0) {
+            alert("Belum ada soal! Klik MULAI dan Scroll dulu.");
+            return;
+        }
+
+        // Matikan recording otomatis saat proses
+        state.isRecording = false;
+        document.getElementById('qc-btn-pause').style.display = 'none';
+        document.getElementById('qc-btn-start').style.display = 'block';
+        document.getElementById('qc-status').innerHTML = "Status: GENERATING HTML...";
+
+        // Generate CSS & HTML (Sesuai V7/V9 Request: 1.1em, Rapat)
+        const styleCSS = `
+            <style>
+                body { font-family: Arial, sans-serif; line-height: 1.4; color: #222; max-width: 900px; margin: 0 auto; padding: 40px; }
+                .q-block { margin-bottom: 25px; padding-bottom: 15px; border-bottom: 2px solid #999; page-break-inside: avoid; }
+                .q-header { font-weight: bold; font-size: 1.2em; margin-bottom: 8px; }
+                .q-text { margin-bottom: 10px; font-size: 1.1em; } /* 1.1em */
+                .options-list { list-style-type: none; padding-left: 0; margin-top: 5px; }
+                .option-item { margin-bottom: 2px; padding: 2px 5px; display: flex; font-size: 1.1em; align-items: baseline; } /* 1.1em & Rapat */
+                .tick-box { min-width: 25px; font-weight: bold; }
+                .correct-opt { font-weight: bold; }
+                .explanation-box { background-color: #e8e8e8; padding: 10px 15px; margin-top: 10px; border: 1px solid #ccc; -webkit-print-color-adjust: exact; font-size: 1.1em; } /* 1.1em */
+                .exp-title { font-weight: bold; display: block; margin-bottom: 3px; }
+                .q-block:last-child { border-bottom: none; }
+            </style>
+        `;
+
+        function buildContent(type) {
+            let html = `<!DOCTYPE html><html><head><title>Quiz ${type}</title>${styleCSS}`;
+            html += `<script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+                     <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script></head><body>`;
+            html += `<h1>Quiz Result - ${type}</h1>`;
+            
+            state.data.forEach((q, idx) => {
+                html += `<div class="q-block">`;
+                html += `<div class="q-header">Question ${idx + 1} of ${state.data.length}</div>`;
+                html += `<div class="q-text">${q.question}</div>`;
+                html += `<ul class="options-list">`;
+                q.options.forEach(opt => {
+                    let marker = "○";
+                    let cssClass = "option-item";
+                    if (type === 'Answers' && opt.isCorrect) {
+                        cssClass += " correct-opt";
+                        marker = "✔";
+                    }
+                    html += `<li class="${cssClass}"><span class="tick-box">${marker}</span><span>${opt.display}</span></li>`;
+                });
+                html += `</ul>`;
+                if (type === 'Answers') {
+                    html += `<div class="explanation-box"><span class="exp-title">Explanation:</span><div>${q.explanation}</div></div>`;
+                }
+                html += `</div>`;
+            });
+            html += `</body></html>`;
+            return html;
+        }
+
+        const winQ = window.open('', '_blank');
+        if(winQ) { winQ.document.write(buildContent('Questions')); winQ.document.close(); }
+        
+        const winA = window.open('', '_blank');
+        if(winA) { winA.document.write(buildContent('Answers')); winA.document.close(); }
+
+        document.getElementById('qc-status').innerHTML = "Status: SELESAI (Panel Ready)";
+    };
+
+})();
