@@ -1,0 +1,95 @@
+(function() {
+    // 1. Inject CSS untuk tampilan layar dan aturan print
+    const style = document.createElement('style');
+    style.innerHTML = `
+        /* Tampilan di Layar (Visual Editor) */
+        .custom-page-break {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 20px;
+            background: repeating-linear-gradient(
+                45deg,
+                #ffebee,
+                #ffebee 10px,
+                #ffcdd2 10px,
+                #ffcdd2 20px
+            );
+            border-top: 2px dashed red;
+            border-bottom: 2px dashed red;
+            margin: 10px 0;
+            color: red;
+            font-weight: bold;
+            font-family: sans-serif;
+            font-size: 12px;
+            cursor: context-menu; /* Menandakan bisa diklik kanan */
+            user-select: none;
+        }
+        .custom-page-break::after {
+            content: "✂ PAGE BREAK (Klik Kanan untuk Hapus)";
+        }
+
+        /* Tampilan saat Print (Kertas) */
+        @media print {
+            .custom-page-break {
+                background: none !important;
+                border: none !important;
+                height: 0 !important;
+                margin: 0 !important;
+                color: transparent !important;
+                /* Ini kuncinya: Memaksa halaman baru */
+                page-break-before: always !important; 
+                break-before: page !important;
+                display: block !important; 
+            }
+            .custom-page-break::after {
+                content: "" !important;
+            }
+        }
+        
+        /* Mengubah kursor agar user tahu mode aktif */
+        body {
+            cursor: crosshair !important;
+        }
+    `;
+    document.head.appendChild(style);
+
+    // 2. Fungsi Listener Klik
+    const handler = function(e) {
+        // Mencegah klik link atau tombol agar tidak berpindah halaman saat mengedit
+        e.preventDefault();
+        e.stopPropagation();
+
+        // Jika user klik kanan pada elemen page break, hapus elemen tersebut
+        if (e.target.classList.contains('custom-page-break')) {
+            if (e.type === 'contextmenu') { // Klik kanan
+                e.target.remove();
+                console.log('Page break dihapus.');
+            }
+            return; 
+        }
+
+        // Jika klik kiri biasa, tambahkan page break SEBELUM elemen yang diklik
+        if (e.type === 'click') {
+            const breakEl = document.createElement('div');
+            breakEl.className = 'custom-page-break';
+            
+            // Masukkan sebelum elemen target
+            // Kita cari parent block terdekat agar rapi
+            let target = e.target;
+            
+            // Insert element
+            if(target.parentNode) {
+                target.parentNode.insertBefore(breakEl, target);
+                console.log('Page break ditambahkan.');
+            }
+        }
+    };
+
+    // 3. Pasang Event Listener
+    document.addEventListener('click', handler, true);
+    document.addEventListener('contextmenu', handler, true);
+
+    alert("MODE PAGE BREAK AKTIF!\n\n- Klik Kiri pada elemen untuk menambah page break.\n- Klik Kanan pada garis merah untuk menghapus page break.\n- Refresh halaman untuk keluar dari mode ini.");
+
+})();
