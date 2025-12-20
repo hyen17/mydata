@@ -1,0 +1,117 @@
+javascript:(async () => {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const totalQuestions = document.querySelectorAll('#questionsSelect option').length;
+  const questionSelect = document.querySelector('#questionsSelect');
+
+  // timing aman (tidak agresif)
+  const delayAfterChange = 2000;
+
+  const questions = [];
+
+  // === TAMBAHAN SAJA ===
+  const topicName =
+    document.querySelector('#topicName')?.innerText.trim() || '';
+
+  let firstReadingHTML = '';
+
+  const extractEssayData = (isFirst = false) => {
+    const questionHTML =
+      document.querySelector('#description')?.innerHTML.trim() || '';
+
+    if (isFirst) {
+      firstReadingHTML = questionHTML;
+    }
+
+    const correctAnswerHTML =
+      document.querySelector('#correctAnswer')?.innerHTML.trim() || '';
+
+    return {
+      questionText: questionHTML,
+      explanation: correctAnswerHTML
+    };
+  };
+
+  const generateHTML = (withAnswers = false) => {
+    const doc = document.implementation.createHTMLDocument();
+    const style = document.createElement('style');
+    style.textContent = `
+      body { font-family: Arial, sans-serif; font-size: 17px; margin: 40px; }
+      .topic-title { font-size: 22px; font-weight: bold; margin-bottom: 15px; }
+      .reading { margin-bottom: 40px; }
+      .question-block { page-break-inside: avoid; margin-bottom: 50px; }
+      .question-title { font-weight: bold; margin-bottom: 10px; }
+      .question-text { margin-bottom: 15px; }
+      .explanation { margin-top: 15px; }
+      .hr-line { border: 0; border-top: 2px solid #000; margin: 10px 0 15px; }
+      .explanation p { margin: 0; }
+    `;
+    doc.head.appendChild(style);
+
+    // === TAMPILKAN TOPIC (SEKALI) ===
+    if (topicName) {
+      const topic = document.createElement('div');
+      topic.className = 'topic-title';
+      topic.textContent = topicName;
+      doc.body.appendChild(topic);
+    }
+
+    // === TAMPILKAN READING DARI SOAL 1 (APA ADANYA) ===
+    if (firstReadingHTML) {
+      const reading = document.createElement('div');
+      reading.className = 'reading';
+      reading.innerHTML = firstReadingHTML;
+      doc.body.appendChild(reading);
+    }
+
+    questions.forEach((q, index) => {
+      const block = doc.createElement('div');
+      block.className = 'question-block';
+
+      const title = document.createElement('div');
+      title.className = 'question-title';
+      title.textContent = `Question ${index + 1} of ${totalQuestions}`;
+      block.appendChild(title);
+
+      const hr = document.createElement('hr');
+      hr.className = 'hr-line';
+      block.appendChild(hr);
+
+      const qtext = document.createElement('div');
+      qtext.className = 'question-text';
+      qtext.innerHTML = q.questionText;
+      block.appendChild(qtext);
+
+      if (withAnswers && q.explanation) {
+        const exp = document.createElement('div');
+        exp.className = 'explanation';
+        exp.innerHTML = `<b><i>Answer:</i></b><br>${q.explanation}`;
+        block.appendChild(exp);
+      }
+
+      doc.body.appendChild(block);
+    });
+
+    return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
+  };
+
+  const saveHTMLAsTab = (html, title) => {
+    const win = window.open();
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    win.document.title = title;
+  };
+
+  // === LOOP SEMUA SOAL (ALL) ===
+  for (let i = 0; i < totalQuestions; i++) {
+    questionSelect.selectedIndex = i;
+    questionSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    await sleep(delayAfterChange);
+
+    const data = extractEssayData(i === 0);
+    questions.push(data);
+  }
+
+  saveHTMLAsTab(generateHTML(false), 'Essay Questions');
+  saveHTMLAsTab(generateHTML(true), 'Essay Answers');
+})();
