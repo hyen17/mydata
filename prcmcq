@@ -2,9 +2,12 @@ javascript:(async () => {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const totalQuestions = document.querySelectorAll('#questionsSelect option').length;
   const questionSelect = document.querySelector('#questionsSelect');
-  const delayBeforeClickAnswer = 2000;
-  const delayAfterClick = 3000;
-  const delayAfterChange = 3000;
+
+  // ⏱️ HANYA INI YANG DIUBAH
+  const delayBeforeClickAnswer = 1000;
+  const delayAfterClick = 1500;
+  const delayAfterChange = 1500;
+
   const questions = [];
 
   const clickFirstChoice = () => {
