@@ -1,37 +1,128 @@
 javascript:(async () => {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+
   const totalQuestions = document.querySelectorAll('#questionsSelect option').length;
   const questionSelect = document.querySelector('#questionsSelect');
-
-  // timing aman (tidak agresif)
   const delayAfterChange = 2000;
 
-  const questions = [];
-
-  // === TAMBAHAN SAJA ===
   const topicName =
-    document.querySelector('#topicName')?.innerText.trim() || '';
+    document.querySelector('#topicName')?.innerText.trim() || 'Topic';
 
-  let firstReadingHTML = '';
+  const questions = [];
+  let readingHTML = '';
 
-  const extractEssayData = (isFirst = false) => {
-    const questionHTML =
-      document.querySelector('#description')?.innerHTML.trim() || '';
+  /* =========================
+     STEP 1: PINDAH KE SOAL 1
+     ========================= */
+  questionSelect.selectedIndex = 0;
+  questionSelect.dispatchEvent(new Event('change', { bubbles: true }));
+  await sleep(delayAfterChange);
 
-    if (isFirst) {
-      firstReadingHTML = questionHTML;
+  alert(
+    'Klik BAGIAN TERAKHIR dari READING di soal pertama.\n\n' +
+    'Setelah diklik:\n' +
+    '- Script akan menyimpan reading\n' +
+    '- Lalu otomatis memproses semua soal'
+  );
+
+  const desc = document.querySelector('#description');
+  if (!desc) {
+    alert('#description tidak ditemukan.');
+    return;
+  }
+
+  desc.style.outline = '2px dashed red';
+
+  /* =========================
+     STEP 2: KLIK BATAS READING
+     ========================= */
+  const waitForClick = () =>
+    new Promise(resolve => {
+      const handler = e => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (!desc.contains(e.target)) {
+          alert('Klik HARUS di dalam area soal.');
+          return;
+        }
+
+        // potong setelah node yang diklik
+        let node = e.target.nextSibling;
+        while (node) {
+          const next = node.nextSibling;
+          node.remove();
+          node = next;
+        }
+
+        readingHTML = desc.innerHTML.trim();
+
+        desc.style.outline = '';
+        desc.removeEventListener('click', handler, true);
+        resolve();
+      };
+
+      desc.addEventListener('click', handler, true);
+    });
+
+  await waitForClick();
+
+  /* =========================
+     HELPER: BERSIHKAN QUESTION
+     ========================= */
+  const cleanQuestionHTML = html => {
+    let out = html.trim();
+
+    if (readingHTML && out.startsWith(readingHTML)) {
+      out = out.slice(readingHTML.length).trim();
+    } else if (readingHTML && out.includes(readingHTML)) {
+      out = out.replace(readingHTML, '').trim();
     }
 
-    const correctAnswerHTML =
-      document.querySelector('#correctAnswer')?.innerHTML.trim() || '';
+    // hapus <br> & text kosong di awal
+    const temp = document.createElement('div');
+    temp.innerHTML = out;
 
-    return {
-      questionText: questionHTML,
-      explanation: correctAnswerHTML
-    };
+    let node = temp.firstChild;
+    while (node) {
+      if (
+        (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'BR') ||
+        (node.nodeType === Node.TEXT_NODE && !node.textContent.trim())
+      ) {
+        const next = node.nextSibling;
+        node.remove();
+        node = next;
+      } else {
+        break;
+      }
+    }
+
+    return temp.innerHTML.trim();
   };
 
-  const generateHTML = (withAnswers = false) => {
+  /* =========================
+     STEP 3: LOOP SEMUA SOAL
+     ========================= */
+  for (let i = 0; i < totalQuestions; i++) {
+    questionSelect.selectedIndex = i;
+    questionSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    await sleep(delayAfterChange);
+
+    const rawHTML =
+      document.querySelector('#description')?.innerHTML.trim() || '';
+
+    const questionText = cleanQuestionHTML(rawHTML);
+
+    const explanation =
+      document.querySelector('#correctAnswer')?.innerHTML.trim() || '';
+
+    questions.push({ questionText, explanation });
+  }
+
+  /* =========================
+     STEP 4: GENERATE HTML
+     ========================= */
+  const generateHTML = withAnswers => {
     const doc = document.implementation.createHTMLDocument();
     const style = document.createElement('style');
     style.textContent = `
@@ -47,39 +138,33 @@ javascript:(async () => {
     `;
     doc.head.appendChild(style);
 
-    // === TAMPILKAN TOPIC (SEKALI) ===
-    if (topicName) {
-      const topic = document.createElement('div');
-      topic.className = 'topic-title';
-      topic.textContent = topicName;
-      doc.body.appendChild(topic);
-    }
+    const topic = document.createElement('div');
+    topic.className = 'topic-title';
+    topic.textContent = topicName;
+    doc.body.appendChild(topic);
 
-    // === TAMPILKAN READING DARI SOAL 1 (APA ADANYA) ===
-    if (firstReadingHTML) {
-      const reading = document.createElement('div');
-      reading.className = 'reading';
-      reading.innerHTML = firstReadingHTML;
-      doc.body.appendChild(reading);
-    }
+    const reading = document.createElement('div');
+    reading.className = 'reading';
+    reading.innerHTML = readingHTML;
+    doc.body.appendChild(reading);
 
-    questions.forEach((q, index) => {
-      const block = doc.createElement('div');
+    questions.forEach((q, idx) => {
+      const block = document.createElement('div');
       block.className = 'question-block';
 
       const title = document.createElement('div');
       title.className = 'question-title';
-      title.textContent = `Question ${index + 1} of ${totalQuestions}`;
+      title.textContent = `Question ${idx + 1} of ${totalQuestions}`;
       block.appendChild(title);
 
       const hr = document.createElement('hr');
       hr.className = 'hr-line';
       block.appendChild(hr);
 
-      const qtext = document.createElement('div');
-      qtext.className = 'question-text';
-      qtext.innerHTML = q.questionText;
-      block.appendChild(qtext);
+      const qt = document.createElement('div');
+      qt.className = 'question-text';
+      qt.innerHTML = q.questionText;
+      block.appendChild(qt);
 
       if (withAnswers && q.explanation) {
         const exp = document.createElement('div');
@@ -94,24 +179,14 @@ javascript:(async () => {
     return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
   };
 
-  const saveHTMLAsTab = (html, title) => {
+  const openTab = (html, name) => {
     const win = window.open();
     win.document.open();
     win.document.write(html);
     win.document.close();
-    win.document.title = title;
+    win.document.title = name;
   };
 
-  // === LOOP SEMUA SOAL (ALL) ===
-  for (let i = 0; i < totalQuestions; i++) {
-    questionSelect.selectedIndex = i;
-    questionSelect.dispatchEvent(new Event('change', { bubbles: true }));
-    await sleep(delayAfterChange);
-
-    const data = extractEssayData(i === 0);
-    questions.push(data);
-  }
-
-  saveHTMLAsTab(generateHTML(false), 'Essay Questions');
-  saveHTMLAsTab(generateHTML(true), 'Essay Answers');
+  openTab(generateHTML(false), `${topicName} - Questions`);
+  openTab(generateHTML(true), `${topicName} - Answers`);
 })();
