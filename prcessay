@@ -20,9 +20,8 @@ javascript:(async () => {
 
   alert(
     'Klik BAGIAN TERAKHIR dari READING di soal pertama.\n\n' +
-    'Setelah diklik:\n' +
-    '- Script akan menyimpan reading\n' +
-    '- Lalu otomatis memproses semua soal'
+    'Boleh klik paragraf, list, atau tabel.\n' +
+    'Script akan mengenali batas dengan benar.'
   );
 
   const desc = document.querySelector('#description');
@@ -32,6 +31,15 @@ javascript:(async () => {
   }
 
   desc.style.outline = '2px dashed red';
+
+  /* === TAMBAHAN YANG KAMU MINTA (SAJA) === */
+  const getTopLevelChild = (container, node) => {
+    let current = node;
+    while (current && current.parentNode !== container) {
+      current = current.parentNode;
+    }
+    return current;
+  };
 
   /* =========================
      STEP 2: KLIK BATAS READING
@@ -47,8 +55,13 @@ javascript:(async () => {
           return;
         }
 
-        // potong setelah node yang diklik
-        let node = e.target.nextSibling;
+        const boundaryNode = getTopLevelChild(desc, e.target);
+        if (!boundaryNode) {
+          alert('Gagal menentukan batas reading.');
+          return;
+        }
+
+        let node = boundaryNode.nextSibling;
         while (node) {
           const next = node.nextSibling;
           node.remove();
@@ -79,7 +92,6 @@ javascript:(async () => {
       out = out.replace(readingHTML, '').trim();
     }
 
-    // hapus <br> & text kosong di awal
     const temp = document.createElement('div');
     temp.innerHTML = out;
 
