@@ -3,7 +3,6 @@ javascript:(async () => {
   const totalQuestions = document.querySelectorAll('#questionsSelect option').length;
   const questionSelect = document.querySelector('#questionsSelect');
 
-  // ⏱️ HANYA INI YANG DIUBAH
   const delayBeforeClickAnswer = 1000;
   const delayAfterClick = 1500;
   const delayAfterChange = 1500;
@@ -37,8 +36,13 @@ javascript:(async () => {
     return parts.filter(i => i >= 0 && i < max);
   };
 
-  const userInput = prompt(`Which question numbers to save? Example:\nall\n1-10\n1,3,5-7`);
+  // 🔧 PERUBAHAN DI SINI SAJA
+  const userInput = prompt(
+    `Which question numbers to save?\n\nExamples:\nall\n1-10\n1,3,5-7`,
+    'all'
+  );
   if (!userInput) return;
+
   const selectedIndexes = parseRange(userInput, totalQuestions);
 
   const extractQuestionData = () => {
@@ -70,11 +74,12 @@ javascript:(async () => {
       choices.push(wrapped);
     });
 
-    const correctIndex = [...document.querySelectorAll('.choice-order')].findIndex(span =>
-      span.classList.contains('correct')
-    );
+    const correctIndex = [...document.querySelectorAll('.choice-order')]
+      .findIndex(span => span.classList.contains('correct'));
 
-    const feedbackDivs = Array.from(document.querySelectorAll('.feedback-element, .last-feedback-element'));
+    const feedbackDivs = Array.from(
+      document.querySelectorAll('.feedback-element, .last-feedback-element')
+    );
     const explanationHTML = feedbackDivs.map(div => div.outerHTML).join('<br>');
 
     return {
@@ -102,9 +107,7 @@ javascript:(async () => {
       .explanation .last-feedback-element {
         margin: 4px 0 !important;
       }
-      .explanation p {
-        margin: 0 !important;
-      }
+      .explanation p { margin: 0 !important; }
       .explanation br { display: block; margin-top: 5px; }
       td, tr { height: auto !important; }
       table p { margin: 0 !important; }
@@ -153,6 +156,9 @@ javascript:(async () => {
     return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
   };
 
+  const topicName =
+    document.querySelector('#topicName')?.innerText.trim() || 'Questions';
+
   const saveHTMLAsTab = (html, name) => {
     const win = window.open();
     win.document.open();
@@ -177,6 +183,6 @@ javascript:(async () => {
     questions.push(data);
   }
 
-  saveHTMLAsTab(generateHTML(false), 'Questions');
-  saveHTMLAsTab(generateHTML(true), 'Answers');
+  saveHTMLAsTab(generateHTML(false), `${topicName} - Questions`);
+  saveHTMLAsTab(generateHTML(true), `${topicName} - Answers`);
 })();
