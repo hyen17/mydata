@@ -20,8 +20,8 @@ javascript:(async () => {
 
   alert(
     'Klik BAGIAN TERAKHIR dari READING di soal pertama.\n\n' +
-    'Boleh klik paragraf, list, atau tabel.\n' +
-    'Script akan mengenali batas dengan benar.'
+    'Klik normal tetap dipakai.\n' +
+    '<br> hanya digunakan jika klik normal gagal.'
   );
 
   const desc = document.querySelector('#description');
@@ -32,7 +32,7 @@ javascript:(async () => {
 
   desc.style.outline = '2px dashed red';
 
-  /* === TAMBAHAN YANG KAMU MINTA (SAJA) === */
+  /* === HELPER ASLI (TIDAK DIUBAH) === */
   const getTopLevelChild = (container, node) => {
     let current = node;
     while (current && current.parentNode !== container) {
@@ -55,7 +55,17 @@ javascript:(async () => {
           return;
         }
 
-        const boundaryNode = getTopLevelChild(desc, e.target);
+        // 🔹 LOGIKA ASLI
+        let boundaryNode = getTopLevelChild(desc, e.target);
+
+        // 🔹 TAMBAHAN SAJA: fallback <br> JIKA GAGAL
+        if (!boundaryNode) {
+          const brs = desc.querySelectorAll('br');
+          if (brs.length > 0) {
+            boundaryNode = brs[brs.length - 1];
+          }
+        }
+
         if (!boundaryNode) {
           alert('Gagal menentukan batas reading.');
           return;
@@ -81,7 +91,7 @@ javascript:(async () => {
   await waitForClick();
 
   /* =========================
-     HELPER: BERSIHKAN QUESTION
+     HELPER: BERSIHKAN QUESTION (ASLI)
      ========================= */
   const cleanQuestionHTML = html => {
     let out = html.trim();
@@ -132,7 +142,7 @@ javascript:(async () => {
   }
 
   /* =========================
-     STEP 4: GENERATE HTML
+     STEP 4: GENERATE HTML (ASLI)
      ========================= */
   const generateHTML = withAnswers => {
     const doc = document.implementation.createHTMLDocument();
