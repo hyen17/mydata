@@ -1,0 +1,24 @@
+(() => {
+  alert("Klik gambar yang ingin di-resize");
+
+  function handleClick(e) {
+    if (e.target.tagName.toLowerCase() === "img") {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const persen = prompt("Masukkan ukuran gambar dalam persen (contoh: 50 = 50%)");
+
+      if (persen && !isNaN(persen)) {
+        const scale = parseFloat(persen) / 100;
+
+        e.target.style.width = (e.target.naturalWidth * scale) + "px";
+        e.target.style.height = "auto";
+        e.target.style.transition = "0.3s ease";
+      }
+
+      document.removeEventListener("click", handleClick, true);
+    }
+  }
+
+  document.addEventListener("click", handleClick, true);
+})();
