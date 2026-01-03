@@ -3,6 +3,9 @@
   let autoInterval = null;
   let finished = false;
 
+  /* =======================
+     UTIL
+  ======================= */
   function isVisible(el) {
     return el && el.offsetParent !== null;
   }
@@ -14,13 +17,28 @@
     return match ? match[1].trim() : 'Questions';
   }
 
+  function downloadHTML(html, filename) {
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  /* =======================
+     AUTO SEE ANSWER → NEXT
+  ======================= */
   function clickFlow() {
     if (finished) return;
 
     const seeBtn = document.getElementById('liveResultBtn');
     const nextBtn = document.getElementById('Next');
 
-    // soal biasa
+    // Soal biasa
     if (nextBtn && isVisible(nextBtn)) {
       if (seeBtn && isVisible(seeBtn)) {
         seeBtn.click();
@@ -33,7 +51,7 @@
       return;
     }
 
-    // soal terakhir
+    // Soal terakhir
     if (seeBtn && isVisible(seeBtn)) {
       finished = true;
       seeBtn.click();
@@ -45,33 +63,26 @@
     }
   }
 
+  /* =======================
+     HTML GENERATOR
+  ======================= */
   function generateHTML() {
-
-    function downloadHTML(html, filename) {
-      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    }
 
     const blocks = document.querySelectorAll('.watupro-choices-columns.show-question');
     const total = blocks.length;
     const topic = extractTopic();
 
-    let qHTML = '';
-    let aHTML = '';
+    let questionsHTML = '';
+    let answersHTML = '';
 
     blocks.forEach((block, i) => {
       const qNum = i + 1;
 
+      // Question text (hapus Question ID)
       let qContent = block.querySelector('.show-question-content')?.innerHTML || '';
       qContent = qContent.replace(/<span class="watupro_num">.*?<\/span>/, '');
 
+      // Choices
       const choices = [...block.querySelectorAll('.show-question-choices li')].map(li => {
         let text = li.innerText.replace(/\bcorrect\b/i, '').trim();
         return {
@@ -80,24 +91,29 @@
         };
       });
 
+      // Explanations (HTML asli, termasuk UL)
       const explanations = [...block.querySelectorAll('.watupro-choice-feedback')]
         .map(e => e.outerHTML)
         .join('');
 
-      qHTML += `
+      /* QUESTIONS */
+      questionsHTML += `
         <div class="question-block">
           <div class="q-title">Question ${qNum} of ${total}</div>
           <div class="q-text">${qContent}</div>
-          <ul>${choices.map(c => `<li>${c.text}</li>`).join('')}</ul>
+          <ul class="choices">
+            ${choices.map(c => `<li>${c.text}</li>`).join('')}
+          </ul>
         </div>
         <hr>
       `;
 
-      aHTML += `
+      /* ANSWERS */
+      answersHTML += `
         <div class="question-block">
           <div class="q-title">Question ${qNum} of ${total}</div>
           <div class="q-text">${qContent}</div>
-          <ul>
+          <ul class="choices">
             ${choices.map(c =>
               `<li class="${c.isCorrect ? 'correct' : ''}">
                 ${c.text}${c.isCorrect ? ' ✔' : ''}
@@ -113,7 +129,10 @@
       `;
     });
 
-    function wrap(title, body) {
+    /* =======================
+       HTML WRAPPER
+    ======================= */
+    function wrapHTML(title, body) {
       return `
 <!DOCTYPE html>
 <html>
@@ -121,15 +140,64 @@
 <meta charset="UTF-8">
 <title>${title}</title>
 <style>
-  body { font-family: Arial, sans-serif; line-height: 1.5; }
-  .q-title { font-weight: bold; font-size: 1.1em; margin-bottom: 6px; }
-  ul { list-style: none; padding-left: 0; }
-  li.correct { font-weight: bold; }
-  .question-block { page-break-inside: avoid; break-inside: avoid; }
-  .explanation { background: #f2f2f2; padding: 10px; }
-  .ex-title { font-weight: bold; margin-bottom: 6px; }
-  .explanation p { margin: 4px 0; }
-  hr { margin: 30px 0; }
+  body {
+    font-family: Arial, sans-serif;
+    line-height: 1.5;
+  }
+
+  .q-title {
+    font-weight: bold;
+    font-size: 1.1em;
+    margin-bottom: 6px;
+  }
+
+  .question-block {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Choices: NO BULLET */
+  ul.choices {
+    list-style: none;
+    padding-left: 0;
+    margin: 6px 0;
+  }
+
+  ul.choices li.correct {
+    font-weight: bold;
+  }
+
+  /* Explanation styling */
+  .explanation {
+    background: #f2f2f2;
+    padding: 10px;
+    margin-top: 10px;
+  }
+
+  .ex-title {
+    font-weight: bold;
+    margin-bottom: 6px;
+  }
+
+  /* NORMALIZE explanation spacing */
+  .explanation p {
+    margin: 4px 0;
+  }
+
+  /* RESTORE BULLETS IN EXPLANATION */
+  .explanation ul {
+    list-style: disc;
+    padding-left: 20px;
+    margin: 6px 0;
+  }
+
+  .explanation li {
+    margin: 4px 0;
+  }
+
+  hr {
+    margin: 30px 0;
+  }
 </style>
 </head>
 <body>
@@ -138,13 +206,23 @@ ${body}
 </html>`;
     }
 
-    downloadHTML(wrap(`${topic} - Questions`, qHTML), `${topic} - Questions.html`);
-    downloadHTML(wrap(`${topic} - Answers`, aHTML), `${topic} - Answers.html`);
+    downloadHTML(
+      wrapHTML(`${topic} - Questions`, questionsHTML),
+      `${topic} - Questions.html`
+    );
 
-    console.log('[DONE] FINAL clean HTML generated.');
+    downloadHTML(
+      wrapHTML(`${topic} - Answers`, answersHTML),
+      `${topic} - Answers.html`
+    );
+
+    console.log('[DONE] FINAL HTML generated successfully.');
   }
 
-  console.log('[START] See Answer → Next (no random, stable)');
+  /* =======================
+     START
+  ======================= */
+  console.log('[START] See Answer → Next (stable, no random)');
   autoInterval = setInterval(clickFlow, 2000);
 
 })();
