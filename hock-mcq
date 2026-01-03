@@ -1,0 +1,150 @@
+(function () {
+
+  let autoInterval = null;
+  let finished = false;
+
+  function isVisible(el) {
+    return el && el.offsetParent !== null;
+  }
+
+  function extractTopic() {
+    const first = document.querySelector('.watupro_num');
+    if (!first) return 'Questions';
+    const match = first.innerText.match(/\(Topic:\s*(.*?)\)/);
+    return match ? match[1].trim() : 'Questions';
+  }
+
+  function clickFlow() {
+    if (finished) return;
+
+    const seeBtn = document.getElementById('liveResultBtn');
+    const nextBtn = document.getElementById('Next');
+
+    // soal biasa
+    if (nextBtn && isVisible(nextBtn)) {
+      if (seeBtn && isVisible(seeBtn)) {
+        seeBtn.click();
+        console.log('[AUTO] See Answer');
+        setTimeout(() => {
+          nextBtn.click();
+          console.log('[AUTO] Next');
+        }, 500);
+      }
+      return;
+    }
+
+    // soal terakhir
+    if (seeBtn && isVisible(seeBtn)) {
+      finished = true;
+      seeBtn.click();
+      console.log('[LAST] See Answer');
+      setTimeout(() => {
+        clearInterval(autoInterval);
+        generateHTML();
+      }, 1000);
+    }
+  }
+
+  function generateHTML() {
+
+    function downloadHTML(html, filename) {
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    const blocks = document.querySelectorAll('.watupro-choices-columns.show-question');
+    const total = blocks.length;
+    const topic = extractTopic();
+
+    let qHTML = '';
+    let aHTML = '';
+
+    blocks.forEach((block, i) => {
+      const qNum = i + 1;
+
+      let qContent = block.querySelector('.show-question-content')?.innerHTML || '';
+      qContent = qContent.replace(/<span class="watupro_num">.*?<\/span>/, '');
+
+      const choices = [...block.querySelectorAll('.show-question-choices li')].map(li => {
+        let text = li.innerText.replace(/\bcorrect\b/i, '').trim();
+        return {
+          text,
+          isCorrect: li.classList.contains('correct-answer')
+        };
+      });
+
+      const explanations = [...block.querySelectorAll('.watupro-choice-feedback')]
+        .map(e => e.outerHTML)
+        .join('');
+
+      qHTML += `
+        <div class="question-block">
+          <div class="q-title">Question ${qNum} of ${total}</div>
+          <div class="q-text">${qContent}</div>
+          <ul>${choices.map(c => `<li>${c.text}</li>`).join('')}</ul>
+        </div>
+        <hr>
+      `;
+
+      aHTML += `
+        <div class="question-block">
+          <div class="q-title">Question ${qNum} of ${total}</div>
+          <div class="q-text">${qContent}</div>
+          <ul>
+            ${choices.map(c =>
+              `<li class="${c.isCorrect ? 'correct' : ''}">
+                ${c.text}${c.isCorrect ? ' ✔' : ''}
+              </li>`
+            ).join('')}
+          </ul>
+          <div class="explanation">
+            <div class="ex-title">Explanation:</div>
+            ${explanations}
+          </div>
+        </div>
+        <hr>
+      `;
+    });
+
+    function wrap(title, body) {
+      return `
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>${title}</title>
+<style>
+  body { font-family: Arial, sans-serif; line-height: 1.5; }
+  .q-title { font-weight: bold; font-size: 1.1em; margin-bottom: 6px; }
+  ul { list-style: none; padding-left: 0; }
+  li.correct { font-weight: bold; }
+  .question-block { page-break-inside: avoid; break-inside: avoid; }
+  .explanation { background: #f2f2f2; padding: 10px; }
+  .ex-title { font-weight: bold; margin-bottom: 6px; }
+  .explanation p { margin: 4px 0; }
+  hr { margin: 30px 0; }
+</style>
+</head>
+<body>
+${body}
+</body>
+</html>`;
+    }
+
+    downloadHTML(wrap(`${topic} - Questions`, qHTML), `${topic} - Questions.html`);
+    downloadHTML(wrap(`${topic} - Answers`, aHTML), `${topic} - Answers.html`);
+
+    console.log('[DONE] FINAL clean HTML generated.');
+  }
+
+  console.log('[START] See Answer → Next (no random, stable)');
+  autoInterval = setInterval(clickFlow, 2000);
+
+})();
