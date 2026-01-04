@@ -1,0 +1,161 @@
+(function () {
+
+  function downloadHTML(html, filename) {
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function extractTopicLine(block) {
+    const span = block.querySelector('.show-question-content .watupro_num');
+    if (!span) return '';
+    const m = span.innerText.match(/\((Topic:[^)]+)\)/);
+    return m ? `(${m[1]})` : '';
+  }
+
+  function cleanLayout(html) {
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = html;
+
+    wrapper.querySelectorAll('[style]').forEach(el => {
+      el.style.removeProperty('float');
+      el.style.removeProperty('width');
+      el.style.removeProperty('height');
+      el.style.removeProperty('overflow');
+      el.style.removeProperty('margin-top');
+      el.style.removeProperty('clear');
+    });
+
+    return wrapper.innerHTML;
+  }
+
+  const blocks = document.querySelectorAll('.watupro-choices-columns.show-question');
+  if (!blocks.length) {
+    alert('Tidak ditemukan soal essay.');
+    return;
+  }
+
+  const total = blocks.length;
+  const topicForFilename = (() => {
+    const t = extractTopicLine(blocks[0]);
+    return t.replace(/^\(Topic:\s*|\)$/g, '') || 'Essay';
+  })();
+
+  let qHTML = '';
+  let aHTML = '';
+
+  blocks.forEach((block, i) => {
+    const qNum = i + 1;
+
+    const topicLine = extractTopicLine(block);
+
+    let content = block.querySelector('.show-question-content')?.innerHTML || '';
+    content = content.replace(/<span class="watupro_num">.*?<\/span>/, '');
+    content = cleanLayout(content);
+
+    let explanation =
+      block.parentElement.querySelector('.watupro-main-feedback')?.innerHTML || '';
+    explanation = cleanLayout(explanation);
+
+    /* QUESTIONS */
+    qHTML += `
+      <div class="question-block">
+        <div class="q-title">Question ${qNum} of ${total}</div>
+        ${topicLine ? `<div class="q-meta">${topicLine}</div>` : ''}
+        <div class="q-text">${content}</div>
+      </div>
+      <hr>
+    `;
+
+    /* ANSWERS */
+    aHTML += `
+      <div class="question-block">
+        <div class="q-title">Question ${qNum} of ${total}</div>
+        ${topicLine ? `<div class="q-meta">${topicLine}</div>` : ''}
+        <div class="q-text">${content}</div>
+        <div class="explanation">
+          <div class="ex-title">Explanation:</div>
+          ${explanation}
+        </div>
+      </div>
+      <hr>
+    `;
+  });
+
+  function wrapHTML(title, body) {
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>${title}</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    line-height: 1.6;
+  }
+
+  .q-title {
+    font-weight: bold;
+    font-size: 1.1em;
+    margin-bottom: 2px;
+  }
+
+  .q-meta {
+    font-size: 0.9em;
+    font-style: italic;
+    margin-bottom: 8px;
+    color: #333;
+  }
+
+  .question-block {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  .explanation {
+    background: #f2f2f2;
+    padding: 14px;
+    margin-top: 14px;
+  }
+
+  .ex-title {
+    font-weight: bold;
+    margin-bottom: 8px;
+  }
+
+  .explanation ul,
+  .explanation ol {
+    padding-left: 22px;
+  }
+
+  hr {
+    margin: 32px 0;
+  }
+</style>
+</head>
+<body>
+${body}
+</body>
+</html>`;
+  }
+
+  downloadHTML(
+    wrapHTML(`${topicForFilename} - Questions`, qHTML),
+    `${topicForFilename} - Questions.html`
+  );
+
+  downloadHTML(
+    wrapHTML(`${topicForFilename} - Answers`, aHTML),
+    `${topicForFilename} - Answers.html`
+  );
+
+  console.log('[DONE] Essay HTML with topic line under Question X of Y.');
+
+})();
