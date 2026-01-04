@@ -1,0 +1,196 @@
+(function () {
+
+  /* =========================
+     UTIL
+  ========================= */
+  function downloadHTML(html, filename) {
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function extractTopic(block) {
+    const span = block.querySelector('.show-question-content .watupro_num');
+    if (!span) return '';
+    const m = span.innerText.match(/\(Topic:\s*(.*?)\)/);
+    return m ? `(${m[1]})` : '';
+  }
+
+  function cleanQuestionHTML(html) {
+    return html
+      .replace(/<span[^>]*watupro_num[^>]*>.*?<\/span>/gi, '')
+      .replace(/Question ID:.*?\)/gi, '')
+      .replace(/^\s*\d+\.\s*/m, '')
+      .trim();
+  }
+
+  /* =========================
+     PROCESS EXPLANATIONS (FIXED)
+  ========================= */
+  function processExplanations(block, correctLetter) {
+    const map = {}; // { A: html, B: html, ... }
+
+    block.querySelectorAll('.watupro-choice-feedback').forEach(fb => {
+      let html = fb.innerHTML;
+
+      // buang warna
+      html = html.replace(/color:\s*(red|green);?/gi, '');
+
+      const m = html.match(/(Correct Answer Explanation|Incorrect Answer Explanation|Explanation) for ([A-D])/i);
+      if (!m) return;
+
+      const letter = m[2];
+
+      // normalisasi label
+      html = html
+        .replace(/Incorrect Answer Explanation for [A-D]:?/gi, '')
+        .replace(/Correct Answer Explanation for [A-D]:?/gi, '')
+        .replace(/Explanation for [A-D]:?/gi, '')
+        .trim();
+
+      map[letter] = html;
+    });
+
+    let result = '';
+
+    // CORRECT FIRST
+    if (map[correctLetter]) {
+      result += `
+        <div class="correct-title">
+          Correct Answer Explanation for ${correctLetter}:
+        </div>
+        <div class="ex-text">${map[correctLetter]}</div>
+      `;
+    }
+
+    // OTHERS
+    Object.keys(map)
+      .filter(l => l !== correctLetter)
+      .sort()
+      .forEach(l => {
+        result += `
+          <div class="ex-title">
+            Explanation for ${l}:
+          </div>
+          <div class="ex-text">${map[l]}</div>
+        `;
+      });
+
+    return result;
+  }
+
+  /* =========================
+     MAIN
+  ========================= */
+  const blocks = document.querySelectorAll('.watupro-choices-columns.show-question');
+  if (!blocks.length) {
+    alert('Tidak ditemukan soal.');
+    return;
+  }
+
+  const total = blocks.length;
+  const topicForFilename =
+    extractTopic(blocks[0]).replace(/^\(|\)$/g, '') || 'MCQ';
+
+  let qHTML = '';
+  let aHTML = '';
+
+  blocks.forEach((block, i) => {
+    const qNum = i + 1;
+    const topicLine = extractTopic(block);
+
+    let qContent =
+      block.querySelector('.show-question-content')?.innerHTML || '';
+    qContent = cleanQuestionHTML(qContent);
+
+    const choices = [...block.querySelectorAll('.show-question-choices li')]
+      .map(li => ({
+        text: li.innerText.replace(/\bcorrect\b|\bwrong\b/gi, '').trim(),
+        letter: li.innerText.trim().charAt(0),
+        isCorrect: li.classList.contains('correct-answer')
+      }));
+
+    const correctChoice = choices.find(c => c.isCorrect);
+    const correctLetter = correctChoice ? correctChoice.letter : null;
+
+    const explanationHTML =
+      correctLetter ? processExplanations(block, correctLetter) : '';
+
+    /* QUESTIONS */
+    qHTML += `
+      <div class="question-block">
+        <div class="q-title">Question ${qNum} of ${total}</div>
+        ${topicLine ? `<div class="q-meta">${topicLine}</div>` : ''}
+        <div class="q-text">${qContent}</div>
+        <ul class="choices">
+          ${choices.map(c => `<li>${c.text}</li>`).join('')}
+        </ul>
+      </div>
+      <hr>
+    `;
+
+    /* ANSWERS */
+    aHTML += `
+      <div class="question-block">
+        <div class="q-title">Question ${qNum} of ${total}</div>
+        ${topicLine ? `<div class="q-meta">${topicLine}</div>` : ''}
+        <div class="q-text">${qContent}</div>
+        <ul class="choices">
+          ${choices.map(c =>
+            `<li class="${c.isCorrect ? 'correct' : ''}">
+              ${c.text}${c.isCorrect ? ' ✓' : ''}
+            </li>`
+          ).join('')}
+        </ul>
+        <div class="explanation">
+          ${explanationHTML}
+        </div>
+      </div>
+      <hr>
+    `;
+  });
+
+  function wrapHTML(title, body) {
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>${title}</title>
+<style>
+  body { font-family: Arial, sans-serif; line-height: 1.6; }
+  .q-title { font-weight: bold; font-size: 1.1em; }
+  .q-meta { font-size: 0.9em; font-style: italic; margin-bottom: 8px; }
+  ul.choices { list-style: none; padding-left: 0; }
+  ul.choices li.correct { font-weight: bold; }
+  .explanation { background: #f2f2f2; padding: 14px; margin-top: 14px; }
+  .correct-title { font-weight: bold; color: green; margin-top: 10px; }
+  .ex-title { font-weight: bold; margin-top: 10px; }
+  hr { margin: 32px 0; }
+</style>
+</head>
+<body>
+${body}
+</body>
+</html>`;
+  }
+
+  downloadHTML(
+    wrapHTML(`${topicForFilename} - Questions`, qHTML),
+    `${topicForFilename} - Questions.html`
+  );
+
+  downloadHTML(
+    wrapHTML(`${topicForFilename} - Answers`, aHTML),
+    `${topicForFilename} - Answers.html`
+  );
+
+  console.log('[DONE] Correct answer explanation logic fixed (authoritative source = choices).');
+
+})();
