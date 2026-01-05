@@ -1,5 +1,8 @@
 (function () {
 
+  /* =======================
+     UTIL
+  ======================= */
   function downloadHTML(html, filename) {
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -35,6 +38,9 @@
     return wrapper.innerHTML;
   }
 
+  /* =======================
+     MAIN
+  ======================= */
   const blocks = document.querySelectorAll('.watupro-choices-columns.show-question');
   if (!blocks.length) {
     alert('Tidak ditemukan soal essay.');
@@ -52,15 +58,16 @@
 
   blocks.forEach((block, i) => {
     const qNum = i + 1;
-
     const topicLine = extractTopicLine(block);
 
+    /* ===== QUESTION CONTENT ===== */
     let content = block.querySelector('.show-question-content')?.innerHTML || '';
     content = content.replace(/<span class="watupro_num">.*?<\/span>/, '');
     content = cleanLayout(content);
 
+    /* ===== EXPLANATION (FIX UTAMA) ===== */
     let explanation =
-      block.parentElement.querySelector('.watupro-main-feedback')?.innerHTML || '';
+      block.querySelector('.watupro-main-feedback')?.innerHTML || '';
     explanation = cleanLayout(explanation);
 
     /* QUESTIONS */
@@ -88,6 +95,9 @@
     `;
   });
 
+  /* =======================
+     WRAPPER
+  ======================= */
   function wrapHTML(title, body) {
     return `
 <!DOCTYPE html>
@@ -156,6 +166,6 @@ ${body}
     `${topicForFilename} - Answers.html`
   );
 
-  console.log('[DONE] Essay HTML with topic line under Question X of Y.');
+  console.log('[DONE] Essay script fixed: explanation now mapped per question correctly.');
 
 })();
