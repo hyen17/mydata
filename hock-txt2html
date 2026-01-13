@@ -1,0 +1,276 @@
+(function () {
+
+  /* =====================================================
+     UI PANEL (TIDAK DIUBAH)
+  ===================================================== */
+  const panel = document.createElement('div');
+  panel.style.cssText = `
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    width: 360px;
+    background: #ffffff;
+    border: 2px solid #333;
+    padding: 12px;
+    font-family: Arial, sans-serif;
+    z-index: 999999;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+    max-height: 90vh;
+    overflow-y: auto;
+  `;
+
+  panel.innerHTML = `
+    <h3 style="margin:0 0 8px 0;">TXT → HTML Converter</h3>
+    <button id="uploadBtn" style="width:100%; padding:10px; font-size:14px; cursor:pointer;">
+      📁 Upload TXT File(s)
+    </button>
+    <div id="status" style="margin-top:10px; font-size:13px; white-space:pre-line;">
+      Status: menunggu file…
+    </div>
+    <div id="imageInfo" style="margin-top:10px; font-size:12px; border-top:1px solid #ccc; padding-top:8px;"></div>
+  `;
+
+  document.body.appendChild(panel);
+  const statusEl = panel.querySelector('#status');
+  const imageInfoEl = panel.querySelector('#imageInfo');
+
+  /* =====================================================
+     FILE INPUT
+  ===================================================== */
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.txt';
+  input.multiple = true;
+  input.style.display = 'none';
+  document.body.appendChild(input);
+
+  panel.querySelector('#uploadBtn').onclick = () => {
+    input.value = '';
+    input.click();
+  };
+
+  /* =====================================================
+     IMAGE TRACKER (TIDAK DIUBAH)
+  ===================================================== */
+  const imageTracker = {};
+  function registerImage(topic, qNum) {
+    if (!imageTracker[topic]) imageTracker[topic] = [];
+    if (!imageTracker[topic].includes(qNum)) imageTracker[topic].push(qNum);
+  }
+
+  function updateImageInfo() {
+    if (!Object.keys(imageTracker).length) {
+      imageInfoEl.innerHTML = '<b>📷 Image detected:</b> none';
+      return;
+    }
+    let html = '<b>📷 Image detected:</b><br>';
+    Object.entries(imageTracker).forEach(([topic, qs]) => {
+      html += `• <b>${topic}</b><br>`;
+      qs.sort((a,b)=>a-b).forEach(q => html += `&nbsp;&nbsp;– Question ${q}<br>`);
+    });
+    imageInfoEl.innerHTML = html;
+  }
+
+  /* =====================================================
+     FILE HANDLING
+  ===================================================== */
+  input.onchange = () => {
+    const files = [...input.files];
+    if (!files.length) return;
+
+    statusEl.innerText = `Status: memproses ${files.length} file…`;
+    imageInfoEl.innerHTML = '';
+    Object.keys(imageTracker).forEach(k => delete imageTracker[k]);
+
+    let done = 0;
+    files.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = e => {
+        processTXT(e.target.result);
+        done++;
+        if (done === files.length) {
+          statusEl.innerText = `✅ Selesai.\n${done} file diproses.\nSilakan upload file lain.`;
+          updateImageInfo();
+        }
+      };
+      reader.readAsText(file);
+    });
+  };
+
+  /* =====================================================
+     PROCESS TXT
+  ===================================================== */
+  function processTXT(txt) {
+    const doc = new DOMParser().parseFromString(txt, 'text/html');
+    const blocks = [...doc.querySelectorAll('.watupro-choices-columns.show-question')];
+    if (!blocks.length) return;
+
+    const topicMap = {};
+    blocks.forEach((block, idx) => {
+      const span = block.querySelector('.show-question-content .watupro_num');
+      if (!span) return;
+      const m = span.innerText.match(/\(Topic:\s*(.*?)\)/);
+      if (!m) return;
+      const topic = m[1].trim();
+      if (!topicMap[topic]) topicMap[topic] = [];
+      topicMap[topic].push({ block, qNum: idx + 1 });
+    });
+
+    Object.entries(topicMap).forEach(([topic, items]) => {
+      generateHTML(topic, items);
+    });
+  }
+
+  /* =====================================================
+     HELPERS
+  ===================================================== */
+  function cleanQuestionHTML(html) {
+    return html
+      .replace(/<span[^>]*watupro_num[^>]*>.*?<\/span>/gi, '')
+      .replace(/Question ID:.*?\)/gi, '')
+      .replace(/^\s*\d+\.\s*/m, '')
+      .trim();
+  }
+
+  function getChoiceText(li) {
+    const span = li.querySelector('span.answer');
+    if (span) return span.innerText.trim();
+    return li.innerText.replace(/\s+/g, ' ').trim();
+  }
+
+  /* =====================================================
+     GENERATE HTML
+  ===================================================== */
+  function generateHTML(topic, items) {
+    const total = items.length;
+    let qHTML = '';
+    let aHTML = '';
+
+    items.forEach((item, i) => {
+      const { block, qNum } = item;
+      const displayNum = i + 1;
+
+      let qContent = block.querySelector('.show-question-content')?.innerHTML || '';
+      qContent = cleanQuestionHTML(qContent);
+      if (qContent.includes('<img')) registerImage(topic, qNum);
+
+      const choices = [...block.querySelectorAll('.show-question-choices li')]
+        .map(li => {
+          const text = getChoiceText(li);
+          return {
+            text,
+            letter: text.charAt(0),
+            isCorrect: li.classList.contains('correct-answer')
+          };
+        });
+
+      const correct = choices.find(c => c.isCorrect);
+      const correctLetter = correct ? correct.letter : null;
+
+      const explanationMap = {};
+      block.querySelectorAll('.watupro-choice-feedback').forEach(fb => {
+        let html = fb.innerHTML.replace(/color:\s*(red|green);?/gi, '');
+        if (html.includes('<img')) registerImage(topic, qNum);
+        const m = html.match(/(Correct Answer Explanation|Incorrect Answer Explanation|Explanation) for ([A-D])/i);
+        if (!m) return;
+        const letter = m[2];
+        html = html
+          .replace(/Incorrect Answer Explanation for [A-D]:?/gi, '')
+          .replace(/Correct Answer Explanation for [A-D]:?/gi, '')
+          .replace(/Explanation for [A-D]:?/gi, '')
+          .trim();
+        explanationMap[letter] = html;
+      });
+
+      qHTML += `
+        <div class="question-block">
+          <div class="q-title">Question ${displayNum} of ${total}</div>
+          <div class="q-text">${qContent}</div>
+          <ul class="choices">${choices.map(c=>`<li>${c.text}</li>`).join('')}</ul>
+        </div><hr>`;
+
+      let expHTML = '';
+      if (correctLetter && explanationMap[correctLetter]) {
+        expHTML += `<div class="correct-title">Correct Answer Explanation for ${correctLetter}:</div><div>${explanationMap[correctLetter]}</div>`;
+      }
+      Object.keys(explanationMap).filter(l=>l!==correctLetter).sort().forEach(l=>{
+        expHTML += `<div class="ex-title">Explanation for ${l}:</div><div>${explanationMap[l]}</div>`;
+      });
+
+      aHTML += `
+        <div class="question-block">
+          <div class="q-title">Question ${displayNum} of ${total}</div>
+          <div class="q-text">${qContent}</div>
+          <ul class="choices">${choices.map(c=>`<li class="${c.isCorrect?'correct':''}">${c.text}${c.isCorrect?' ✓':''}</li>`).join('')}</ul>
+          <div class="explanation">${expHTML}</div>
+        </div><hr>`;
+    });
+
+    openHTML(`${topic} - Questions`, qHTML);
+    openHTML(`${topic} - Answers`, aHTML);
+  }
+
+  /* =====================================================
+     OPEN HTML (PAGE BREAK SAFE, STYLE RESTORED)
+  ===================================================== */
+  function openHTML(title, body) {
+    const html = `
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>${title}</title>
+<style>
+  body { font-family: Arial, sans-serif; line-height: 1.6; }
+
+  /* === PAGE BREAK CONTROL === */
+  .question-block {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  @media print {
+    .question-block {
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+  }
+
+  /* === RESTORED STYLES === */
+  .q-title {
+    font-weight: bold;
+    font-size: 1.1em;
+    margin-bottom: 6px;
+  }
+
+  ul.choices { list-style: none; padding-left: 0; }
+  ul.choices li.correct { font-weight: bold; }
+
+  .explanation {
+    background: #f2f2f2;
+    padding: 14px;
+    margin-top: 14px;
+  }
+
+  .correct-title {
+    font-weight: bold;
+    color: green;
+    margin-top: 10px;
+  }
+
+  .ex-title {
+    font-weight: bold;
+    margin-top: 10px;
+  }
+
+  hr { margin: 32px 0; }
+</style>
+</head>
+<body>
+${body}
+</body>
+</html>`;
+    const url = URL.createObjectURL(new Blob([html],{type:'text/html'}));
+    window.open(url,'_blank');
+  }
+
+})();
