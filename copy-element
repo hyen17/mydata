@@ -1,0 +1,28 @@
+document.addEventListener('copy', (e) => {
+    const selection = window.getSelection();
+    if (selection.rangeCount > 0 && !selection.isCollapsed) {
+        const range = selection.getRangeAt(0);
+        
+        // Membuat wrapper sementara untuk menampung fragmen HTML yang dipilih
+        const container = document.createElement("div");
+        container.appendChild(range.cloneContents());
+        
+        // Mengambil HTML murni dari bagian yang di-highlight
+        const htmlContent = container.innerHTML;
+        
+        // Simpan ke clipboard
+        e.clipboardData.setData('text/plain', htmlContent);
+        
+        // Notifikasi agar kamu tahu ini berhasil
+        console.log('✅ HTML Terpilih berhasil di-copy!');
+        
+        // Opsional: Munculkan alert kecil di pojok layar agar tidak mengganggu
+        const toast = document.createElement('div');
+        toast.textContent = "HTML Selection Copied!";
+        toast.style = "position:fixed; top:20px; right:20px; background:#28a745; color:white; padding:10px; z-index:9999; border-radius:5px; font-family:sans-serif;";
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 2000);
+
+        e.preventDefault();
+    }
+}, { capture: true });
