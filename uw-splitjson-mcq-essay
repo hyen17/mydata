@@ -64,13 +64,11 @@
     return String(html).replace(/type\s+your\s+response\s+here\b[.\s:]*/gi, '');
   }
 
-  // Menghapus "Question X of Y" di awal soal
   function removeEmbeddedQuestionNumbering(html) {
     if (!html) return html;
     return String(html).replace(/^\s*<p[^>]*>\s*<strong[^>]*>\s*Question\s+\d+\s+of\s+\d+\s*<\/strong>\s*<\/p>/i, '');
   }
 
-  // BARU: Menghapus artifact ##Element-1##
   function removeElementArtifacts(html) {
     if (!html) return html;
     return String(html).replace(/##Element-\d+##/gi, '');
@@ -80,7 +78,7 @@
     if (!html) return '';
     let s = String(html);
     
-    s = removeElementArtifacts(s); // Hapus ##Element-1##
+    s = removeElementArtifacts(s);
     s = removeEmbeddedQuestionNumbering(s);
     s = fixWileyMathSVG(s);
     s = cleanMathTags(s);
@@ -106,8 +104,8 @@
   `;
 
   panel.innerHTML = `
-    <div style="font-weight:700; font-size:15px; margin-bottom:8px;">JSON → HTML (Essay/TBS Supported)</div>
-    <div style="font-size:13px; margin-bottom:8px;">Mendukung Scoring Guide & Hapus JSON Choice sampah.</div>
+    <div style="font-weight:700; font-size:15px; margin-bottom:8px;">JSON → HTML (Uniform Font)</div>
+    <div style="font-size:13px; margin-bottom:8px;">Font Explanation & Sub-header disamakan. Ukuran sub-header diperkecil.</div>
 
     <input id="fileInput" type="file" accept=".json,.txt,application/json" multiple style="width:100%; margin-bottom:8px;">
 
@@ -148,7 +146,14 @@
     if (mode === 'each') extra = `.q-block{page-break-before:always;} .q-block:first-child{page-break-before:avoid;}`;
 
     return `
-      body{font-family:Inter, Arial, Helvetica, sans-serif; padding:28px; color:#111; line-height:1.45}
+      /* Font Global didefinisikan di sini */
+      body { 
+        font-family: Inter, Arial, Helvetica, sans-serif; 
+        padding: 28px; 
+        color: #111; 
+        line-height: 1.45;
+      }
+
       .q-block{margin-bottom:22px}
       .reading-block{margin-bottom:22px; page-break-before:always;}
       .reading-title{font-size:20px; font-weight:700; margin-bottom:10px;}
@@ -189,10 +194,44 @@
 
       .answer-header{ margin:8px 0 12px 36px; }
 
-      .explain-box{ background:#f3f4f6; padding:12px; border-radius:6px; margin-top:10px; }
+      /* --- EXPLANATION BOX (Style MCQ Asli) --- */
+      .explain-box { 
+        background: #f3f4f6; 
+        padding: 12px; 
+        border-radius: 6px; 
+        margin-top: 10px; 
+        font-family: inherit; /* Pastikan mewarisi font body */
+      }
       .explain-box p{ margin:8px 0 !important; padding:0 !important; }
+      
+      /* Judul Utama "Explanation:" */
+      .explain-box strong {
+         font-family: inherit; /* Pastikan sama dengan body */
+         font-size: 1em; /* Ukuran standar */
+      }
 
-      /* BARU: Styling untuk Scoring Guide */
+      /* --- SUB-HEADERS (Model Answer / Further Explanation) --- */
+      .tbsExplanationSection { margin-bottom: 16px; }
+      
+      .tbsExplanationSection .header { 
+        font-family: inherit !important; /* FORCE: Gunakan font yang SAMA dengan body */
+        font-size: 0.9em !important;     /* Ukuran lebih kecil (0.9 dari teks biasa) */
+        font-weight: 700 !important;     /* Bold */
+        color: #000 !important;          /* Hitam */
+        text-transform: none !important; /* Huruf biasa (Sentence case) */
+        
+        border-bottom: 1px solid #d1d5db !important; /* Garis horizontal */
+        
+        margin-top: 12px;
+        margin-bottom: 6px; 
+        padding-bottom: 3px;
+        display: block;
+        width: 100%;
+      }
+      
+      .tbsExplanationSection .header span { display: none; }
+
+      /* --- SCORING GUIDE --- */
       .scoring-box { 
         background: #fffbeb; 
         border: 1px solid #fcd34d; 
@@ -200,9 +239,10 @@
         padding: 12px; 
         border-radius: 6px; 
         margin-top: 15px; 
-        margin-bottom: 10px;
+        margin-bottom: 15px;
+        font-family: inherit; /* Pastikan sama */
       }
-      .scoring-title { font-weight: 700; margin-bottom: 5px; display:block; }
+      .scoring-title { font-weight: 700; margin-bottom: 5px; display:block; font-size:1.0em; }
 
       img, svg {max-width:100%; height:auto; display:block}
       
@@ -249,7 +289,7 @@
   };
 
   // =====================================================================
-  // BODY BUILDER (MODIFIED)
+  // BODY BUILDER
   // =====================================================================
   function buildBodies(questions, mode, abstracts, forceGroupMode) {
     
@@ -258,11 +298,10 @@
         const arr = q.answerChoiceList || q.answerChoice || [];
         if (!arr.length) return '';
 
-        // DETEKSI OTOMATIS: Jika pilihan pertama berbentuk JSON kompleks (Task Based),
-        // Maka JANGAN tampilkan pilihan ganda (kembalikan string kosong)
+        // DETEKSI: Jika pilihan berbentuk JSON kompleks (Essay/TBS), sembunyikan opsi
         const firstChoiceText = arr[0].choice || '';
         if (firstChoiceText.trim().startsWith('{') && firstChoiceText.includes('elementList')) {
-            return ''; // Hide choices for Essay/TBS
+            return ''; 
         }
 
         let correctLetter = null;
@@ -299,7 +338,7 @@
         return html;
     };
 
-    // 1. STANDALONE MCQ MODE (Jika tidak dipaksa grouping)
+    // 1. STANDALONE MCQ MODE
     if (!forceGroupMode) {
       let qBody = '';
       let aBody = '';
@@ -329,7 +368,10 @@
           ${answerHeader ? `<div class="answer-header">${answerHeader}</div>` : ''}
           ${choicesA}
           ${scoringGuide ? `<div class="scoring-box"><span class="scoring-title">Scoring Guide:</span>${scoringGuide}</div>` : ''}
-          <div class="explain-box"><strong>Explanation:</strong><br>${explanation || '(No explanation)'}</div>
+          <div class="explain-box">
+            <strong>Explanation:</strong><br>
+            ${explanation || '(No explanation)'}
+          </div>
         </div><hr/>`;
       }
 
@@ -419,7 +461,10 @@
             <div class="q-text">${qText}</div>
             ${choicesA}
             ${scoringGuide ? `<div class="scoring-box"><span class="scoring-title">Scoring Guide:</span>${scoringGuide}</div>` : ''}
-            <div class="explain-box"><strong>Explanation:</strong><br>${explanation || '(No explanation)'}</div>
+            <div class="explain-box">
+                <strong>Explanation:</strong><br>
+                ${explanation || '(No explanation)'}
+            </div>
           </div>
           <hr/>
         `;
