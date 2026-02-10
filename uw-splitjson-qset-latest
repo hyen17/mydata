@@ -1,0 +1,686 @@
+(() => {
+  // ---------- Config / Utils ----------
+  const letters = (n) => String.fromCharCode(64 + n); // 1->A
+
+  // ---------- Sanitizers & Math Fixers ----------
+  
+  function fixWileyMathSVG(html) {
+    if (!html) return html;
+    if (!html.includes('data-svg')) return html;
+
+    const div = document.createElement('div');
+    div.innerHTML = html;
+
+    const spans = div.querySelectorAll('span[data-svg]');
+    let changed = false;
+
+    spans.forEach(span => {
+      const svgContent = span.getAttribute('data-svg');
+      if (svgContent) {
+        const spanWrapper = document.createElement('span');
+        spanWrapper.className = 'mjx-svg-fix'; 
+        spanWrapper.style.display = 'inline-block';
+        spanWrapper.style.verticalAlign = 'middle';
+        spanWrapper.innerHTML = svgContent;
+        span.replaceWith(spanWrapper);
+        changed = true;
+      }
+    });
+
+    return changed ? div.innerHTML : html;
+  }
+
+  function removeChoicePercentSpans(html) {
+    if (!html) return html;
+    return html
+      .replace(/<span[^>]*class=["']?choice-percent["']?[^>]*>.*?<\/span>/gi, '')
+      .replace(/\(\s*\d{1,3}%\s*\)/g, '');
+  }
+
+  function cleanMathTags(html) {
+    if (!html) return html;
+    let h = String(html);
+    h = h.replace(/<\/?\w+:displayeditem[^>]*>/gi, ''); 
+    h = h.replace(/xmlns(:\w+)?="[^"]*"/gi, '');
+    return h;
+  }
+
+  function removeVideoAndEmptyP(html) {
+    if (!html) return html;
+    let h = String(html);
+    h = h.replace(/<a\b[^>]*>\s*Video\s*<\/a>/gi, '');
+    h = h.replace(/<p\b[^>]*>[\s\S]*?<\/p>/gi, (m) => {
+      if (/<img\b/i.test(m)) return m;
+      if (/<svg|data-svg/i.test(m)) return m;
+      if (/^<p[^>]*>\s*(?:&nbsp;|\s|<br\s*\/?>)*<\/p>$/i.test(m)) return '';
+      return m;
+    });
+    h = h.replace(/>\s+</g, '><');
+    return h;
+  }
+
+  function removeEssayPrompt(html) {
+    if (!html) return html;
+    return String(html).replace(/type\s+your\s+response\s+here\b[.\s:]*/gi, '');
+  }
+
+  // Menghapus "Question X of Y" di awal soal
+  function removeEmbeddedQuestionNumbering(html) {
+    if (!html) return html;
+    return String(html).replace(/^\s*<p[^>]*>\s*<strong[^>]*>\s*Question\s+\d+\s+of\s+\d+\s*<\/strong>\s*<\/p>/i, '');
+  }
+
+  function sanitizeContent(html) {
+    if (!html) return '';
+    let s = String(html);
+    
+    s = removeEmbeddedQuestionNumbering(s);
+    s = fixWileyMathSVG(s);
+    s = cleanMathTags(s);
+    s = removeChoicePercentSpans(s);
+    s = removeVideoAndEmptyP(s);
+    s = removeEssayPrompt(s);
+    
+    return s.trim();
+  }
+
+  function addTdSpacing(html) {
+    if (!html) return html;
+    return html.replace(/<\/td>/gi, '&nbsp;&nbsp;</td>');
+  }
+
+  // ---------- UI ----------
+  const panel = document.createElement('div');
+  panel.style.cssText = `
+    position:fixed; right:18px; bottom:18px; z-index:2147483647;
+    background:#1f2937; color:#fff; padding:14px; width:380px;
+    border-radius:10px; font-family:Arial, Helvetica, sans-serif;
+    box-shadow:0 8px 30px rgba(0,0,0,0.4);
+  `;
+
+  panel.innerHTML = `
+    <div style="font-weight:700; font-size:15px; margin-bottom:8px;">JSON → HTML (Print Safe + Smart Break)</div>
+    <div style="font-size:13px; margin-bottom:8px;">Mendukung Vignette & Hapus 'Question X of Y'.</div>
+
+    <input id="fileInput" type="file" accept=".json,.txt,application/json" multiple style="width:100%; margin-bottom:8px;">
+
+    <div style="margin-bottom:6px;">Output mode:</div>
+    <label style="display:block; margin-bottom:6px;"><input type="radio" name="outmode" value="separate" checked> Separate (each file → own output)</label>
+    <label style="display:block; margin-bottom:10px;"><input type="radio" name="outmode" value="join"> Join (merge all files)</label>
+
+    <div style="margin-bottom:6px;">Page-break mode:</div>
+    <label style="display:block;"><input type="radio" name="pb" value="normal" checked> HTML Normal</label>
+    <label style="display:block;"><input type="radio" name="pb" value="smart"> HTML Smart</label>
+    <label style="display:block; margin-bottom:8px;"><input type="radio" name="pb" value="each"> HTML Page-break per Question</label>
+
+    <label style="display:block; margin-bottom:10px;"><input id="pdfChk" type="checkbox"> Generate PDF (answers)</label>
+
+    <button id="genBtn" style="
+      width:100%; padding:10px; background:#10b981; color:#fff; border:none;
+      border-radius:6px; font-weight:700; cursor:pointer;
+    ">Generate HTML</button>
+
+    <label style="display:block; margin-top:10px;"><input id="autoDl" type="checkbox"> Auto Download (default: No)</label>
+
+    <div id="statusArea" style="margin-top:10px; font-size:13px; color:#d1d5db;"></div>
+  `;
+
+  document.body.appendChild(panel);
+
+  const fileInput = panel.querySelector('#fileInput');
+  const genBtn = panel.querySelector('#genBtn');
+  const statusArea = panel.querySelector('#statusArea');
+  const autoDlChk = panel.querySelector('#autoDl');
+
+  const setStatus = (t) => { statusArea.innerText = t; console.log('[gen]', t); };
+
+  // ---------- CSS ----------
+  function cssFor(mode) {
+    let extra = '';
+    if (mode === 'smart') extra = `.q-block{page-break-inside:avoid;}`;
+    if (mode === 'each') extra = `.q-block{page-break-before:always;} .q-block:first-child{page-break-before:avoid;}`;
+
+    return `
+      body{font-family:Inter, Arial, Helvetica, sans-serif; padding:28px; color:#111; line-height:1.45}
+      .q-block{margin-bottom:22px}
+      .reading-block{margin-bottom:22px; page-break-before:always;}
+      .reading-title{font-size:20px; font-weight:700; margin-bottom:10px;}
+      .reading-text{margin-bottom:12px;}
+      
+      /* New: Class for forced break transition */
+      .force-page-break { page-break-before: always; display: block; height: 1px; }
+
+      .q-header{font-weight:700; font-size:18px; margin-bottom:8px}
+      .q-text{margin-bottom:10px}
+
+      ol.choices{list-style:none; padding-left:0; margin:0}
+      ol.choices li{
+        margin:0 !important; padding:6px 4px !important;
+        line-height:1.25; display:flex; align-items:flex-start; gap:8px;
+      }
+      .letter{
+        font-weight:700;
+        margin-right:4px;
+        flex:0 0 auto;
+        white-space:nowrap;
+      }
+      .choice-content{
+        flex:1 1 auto;
+        min-width:0;
+      }
+
+      .correct{font-weight:700; background:#e6f9ea; border:1px solid #2e7d32}
+      .tick{color:#2e7d32; font-weight:700; margin-left:8px; font-size:16px}
+
+      table.table-default-style{
+        border-collapse: collapse !important; font-size:1em; margin-top:10px; max-width:900px;
+      }
+      table.table-default-style td, table.table-default-style th {
+        border:1px solid black; padding:5px !important; vertical-align:top !important;
+      }
+      table.table-default-style p{ padding:0 !important; margin:0 !important; }
+      table.table-default-style ul, table.table-default-style ol{ padding-left:20px !important; margin:0 !important; }
+
+      .answer-header{ margin:8px 0 12px 36px; }
+
+      .explain-box{ background:#f3f4f6; padding:12px; border-radius:6px; margin-top:10px; }
+      .explain-box p{ margin:8px 0 !important; padding:0 !important; }
+
+      img, svg {max-width:100%; height:auto; display:block}
+      
+      .mjx-svg-fix svg { 
+         vertical-align: middle; 
+      }
+      .mjx-svg-fix svg path, 
+      .mjx-svg-fix svg use, 
+      .mjx-svg-fix svg g { 
+         stroke-width: 0 !important; 
+         fill: currentColor !important; 
+         stroke: none !important;
+      }
+
+      hr{border:none; border-top:1px solid #e5e7eb; margin:20px 0}
+
+      ${extra}
+    `;
+  }
+
+  // ---------- JSON parsing ----------
+  function parseJsonContent(text) {
+    try { return JSON.parse(text); }
+    catch {
+      const m = text.match(/(\[.*\]|\{[\s\S]*\})/);
+      if (!m) throw new Error('Cannot parse JSON');
+      return JSON.parse(m[1]);
+    }
+  }
+
+  function normalizeQuestions(obj) {
+    if (!obj) return [];
+    if (Array.isArray(obj)) return obj;
+    if (obj.questionList) return obj.questionList;
+    if (obj.test && obj.test.questionList) return obj.test.questionList;
+    if (obj.questions) return obj.questions;
+    return [obj];
+  }
+
+  const choiceNumberToLetter = (num) => {
+    const n = parseInt(num);
+    if (!isNaN(n)) return letters(n);
+    return 'A';
+  };
+
+  // =====================================================================
+  // BODY BUILDER (MODIFIED LOGIC FOR PAGE BREAKS)
+  // =====================================================================
+  function buildBodies(questions, mode, abstracts, forceGroupMode) {
+    
+    // Helper to build MCQ choices HTML
+    const buildChoicesHtml = (q, showCorrect) => {
+        const arr = q.answerChoiceList || q.answerChoice || [];
+        if (!arr.length) return '';
+
+        let correctLetter = null;
+        if (q.correctAnswer != null) {
+          const n = parseInt(q.correctAnswer);
+          if (!isNaN(n)) correctLetter = letters(n);
+          else if (/^[A-Z]$/i.test(String(q.correctAnswer).trim())) correctLetter = String(q.correctAnswer).trim().toUpperCase();
+        }
+
+        const normalized = arr.map((ch, idx) => {
+          let html = sanitizeContent(ch.choice || '');
+          html = addTdSpacing(html);
+          html = html.replace(/^\s*[A-Z]\.\s*/i, '');
+          if (/^\s*<table/i.test(html) && !/table-default-style/.test(html)) {
+            html = html.replace(/<table([^>]*)>/i, '<table class="table-default-style"$1>');
+          }
+          const letter = ch.choiceNumber ? choiceNumberToLetter(ch.choiceNumber) : letters(idx + 1);
+          const isCorrect = correctLetter ? (letter === correctLetter) : !!(ch.isCorrect || ch.correctTaken === true);
+          return { letter, html, isCorrect };
+        });
+
+        let html = '<ol class="choices">';
+        normalized.forEach(c => {
+            if (showCorrect) {
+                html += `<li class="${c.isCorrect ? 'correct' : ''}">
+                    <span class="letter">${c.letter}.</span>
+                    <span class="choice-content">${c.html}${c.isCorrect ? ' <span class="tick">&#10004;</span>' : ''}</span>
+                  </li>`;
+            } else {
+                html += `<li><span class="letter">${c.letter}.</span><span class="choice-content">${c.html}</span></li>`;
+            }
+        });
+        html += '</ol>';
+        return html;
+    };
+
+    // 1. STANDALONE MCQ MODE (Jika tidak dipaksa grouping)
+    if (!forceGroupMode) {
+      let qBody = '';
+      let aBody = '';
+
+      for (let i = 0; i < questions.length; i++) {
+        const q = questions[i];
+        const seq = (i + 1);
+
+        let qText = sanitizeContent(q.questionText || '');
+        let explanation = sanitizeContent(q.explanationText || '');
+        let answerHeader = q.answerHeader ? sanitizeContent(addTdSpacing(q.answerHeader)) : null;
+
+        const choicesQ = buildChoicesHtml(q, false);
+        const choicesA = buildChoicesHtml(q, true);
+
+        qBody += `<div class="q-block">
+          <div class="q-header">Question ${seq} of ${questions.length}</div>
+          <div class="q-text">${qText}</div>
+          ${answerHeader ? `<div class="answer-header">${answerHeader}</div>` : ''}
+          ${choicesQ}
+        </div><hr/>`;
+
+        aBody += `<div class="q-block">
+          <div class="q-header">Question ${seq} of ${questions.length}</div>
+          <div class="q-text">${qText}</div>
+          ${answerHeader ? `<div class="answer-header">${answerHeader}</div>` : ''}
+          ${choicesA}
+          <div class="explain-box"><strong>Explanation:</strong><br>${explanation || '(No explanation)'}</div>
+        </div><hr/>`;
+      }
+
+      return { qBody, aBody };
+    }
+
+    // 2. GROUP/ESSAY/VIGNETTE MODE
+    const groups = [];
+    const groupMap = new Map();
+    for (const q of questions) {
+      // Jika soal tidak punya abstract, kita beri ID unik 'standalone_'
+      // Ini membuat setiap soal standalone menjadi grup tersendiri
+      let aid = q.abstractId ?? q.abstract?.id ?? null;
+      if (!aid) aid = 'standalone_' + (q.questionId || Math.random()); 
+      
+      const key = String(aid);
+      if (!groupMap.has(key)) {
+        groupMap.set(key, []);
+        groups.push({ abstractId: aid, questions: groupMap.get(key) });
+      }
+      groupMap.get(key).push(q);
+    }
+
+    const total = questions.length;
+    let readingIndex = 0;
+    
+    let qBody = '';
+    let aBody = '';
+
+    // TRACKER BARU: Untuk mengecek apakah grup sebelumnya adalah vignette
+    let lastGroupWasVignette = false;
+
+    for (const grp of groups) {
+      readingIndex++;
+      
+      // Cek apakah ini grup standalone atau vignette
+      const isStandaloneGroup = String(grp.abstractId).startsWith('standalone_');
+      
+      // LOGIKA PAGE BREAK BARU:
+      // Jika grup sebelumnya adalah Vignette DAN grup sekarang adalah Standalone -> BREAK
+      let injectBreak = '';
+      if (lastGroupWasVignette && isStandaloneGroup) {
+          injectBreak = `<div class="force-page-break"></div>`;
+      }
+
+      // Update tracker untuk loop berikutnya
+      // Jika sekarang Vignette (bukan standalone), maka lastGroupWasVignette jadi true
+      lastGroupWasVignette = !isStandaloneGroup;
+
+      const isRealAbstract = !isStandaloneGroup;
+      const abs = isRealAbstract && abstracts ? abstracts[String(grp.abstractId)] : null;
+      const absHtml = abs ? sanitizeContent(abs.text || abs.content || '') : '';
+      const absTitle = abs ? sanitizeContent(abs.title || 'Reading') : 'Reading';
+
+      // --- RENDER HTML ---
+      
+      // 1. Masukkan Page Break jika diperlukan (Transisi Vignette -> Standalone)
+      qBody += injectBreak;
+      aBody += injectBreak;
+
+      // 2. Render Abstract/Reading Block (Vignette)
+      // CSS .reading-block sudah punya page-break-before: always untuk antar-vignette
+      if (absHtml) {
+          const rBlock = `
+            <div class="reading-block">
+              <div class="reading-title">${absTitle}</div>
+              <div class="reading-text">${absHtml}</div>
+            </div>
+            <hr/>
+          `;
+          qBody += rBlock;
+          aBody += rBlock;
+      }
+
+      let innerIdx = 0;
+
+      for (const q of grp.questions) {
+        innerIdx++;
+        const seq = (grp.questions.length > 1) ? `${readingIndex}.${innerIdx}` : `${readingIndex}`;
+
+        const qText = sanitizeContent((q.questionText || q.question || '').replace ? (q.questionText || q.question || '') : String(q.questionText || q.question || ''));
+        const explanation = sanitizeContent((q.explanationText || q.explanation || '').replace ? (q.explanationText || q.explanation || '') : String(q.explanationText || q.explanation || ''));
+        
+        const choicesQ = buildChoicesHtml(q, false);
+        const choicesA = buildChoicesHtml(q, true);
+
+        qBody += `
+          <div class="q-block">
+            <div class="q-header">Question ${seq}</div>
+            <div class="q-text">${qText}</div>
+            ${choicesQ}
+          </div>
+          <hr/>
+        `;
+
+        aBody += `
+          <div class="q-block">
+            <div class="q-header">Question ${seq}</div>
+            <div class="q-text">${qText}</div>
+            ${choicesA}
+            <div class="explain-box"><strong>Explanation:</strong><br>${explanation || '(No explanation)'}</div>
+          </div>
+          <hr/>
+        `;
+      }
+    }
+
+    return { qBody, aBody };
+  }
+
+  // =====================================================================
+  // BASE64 IMAGE CONVERTER
+  // =====================================================================
+  async function convertImagesToBase64(htmlString) {
+    const div = document.createElement("div");
+    div.innerHTML = htmlString;
+    const imgs = div.querySelectorAll("img");
+    const failed = [];
+
+    async function imgToBase64(url) {
+      try {
+        const res = await fetch(url, { mode: "cors" });
+        const blob = await res.blob();
+        return await new Promise(resolve => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result);
+          reader.readAsDataURL(blob);
+        });
+      } catch (e) {
+        failed.push(url);
+        return null;
+      }
+    }
+
+    for (const img of imgs) {
+      const url = img.getAttribute("src");
+      if (!url) continue;
+      if (url.startsWith('data:') || url.startsWith('svg:')) continue;
+
+      const base64 = await imgToBase64(url);
+      if (base64) img.setAttribute("src", base64);
+    }
+
+    return {
+      html: div.innerHTML,
+      failed
+    };
+  }
+
+  // =====================================================================
+  // MULTIPLE FILE COLLECTOR
+  // =====================================================================
+  async function collectQuestionsFromFiles(fileList) {
+    const all = [];
+    const abstracts = {}; 
+    let isEssayFlag = false;
+    let hasAbstractReferences = false; 
+
+    for (let i = 0; i < fileList.length; i++) {
+      const f = fileList[i];
+      try {
+        const txt = await f.text();
+        let parsed;
+        try { parsed = parseJsonContent(txt); }
+        catch (e) {
+          alert('JSON Error in file: ' + f.name + ' — ' + e.message);
+          continue;
+        }
+
+        if (parsed.abstractList && Array.isArray(parsed.abstractList)) {
+          for (const a of parsed.abstractList) {
+            if (a && (a.id != null)) abstracts[String(a.id)] = a;
+          }
+        }
+        if (parsed.abstracts && Array.isArray(parsed.abstracts)) {
+          for (const a of parsed.abstracts) {
+            if (a && (a.id != null)) abstracts[String(a.id)] = a;
+          }
+        }
+        if (parsed.abstractMap && typeof parsed.abstractMap === 'object') {
+          for (const k in parsed.abstractMap) {
+            if (parsed.abstractMap[k]) abstracts[String(k)] = parsed.abstractMap[k];
+          }
+        }
+
+        const fileTestType = parsed.testTypeName || parsed.testType || (parsed.test && parsed.test.testTypeName) || null;
+        if (fileTestType === 'WC') isEssayFlag = true;
+
+        const qs = normalizeQuestions(parsed);
+        if (qs && qs.length) {
+          for (const q of qs) {
+            if (fileTestType) q._testTypeName = fileTestType;
+            if (q.abstractId && q.abstractId > 0) hasAbstractReferences = true;
+            all.push(q);
+          }
+        }
+      } catch (e) {
+        alert('Gagal membaca file: ' + f.name);
+      }
+    }
+
+    all.sort((a, b) => {
+      const sa = (a && (a.sequenceId ?? a.questionIndex ?? 0)) || 0;
+      const sb = (b && (b.sequenceId ?? b.questionIndex ?? 0)) || 0;
+      return sa - sb;
+    });
+
+    return { questions: all, abstracts, isEssayFlag, hasAbstractReferences };
+  }
+
+  // ---------- Helpers ----------
+  function getBaseName(filename) {
+    if (!filename) return 'file';
+    const name = filename.split('/').pop().split('\\').pop();
+    const dot = name.lastIndexOf('.');
+    return dot === -1 ? name : name.slice(0, dot);
+  }
+
+  function downloadBlob(blob, filename) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 1500);
+  }
+
+  // =====================================================================
+  // GENERATE (MODIFIED TO SUPPORT SPLIT SYSTEM)
+  // =====================================================================
+  async function handleFile(fileOrFiles, outMode, wantPdf) {
+    setStatus('Membaca file...');
+    const autoDownload = !!autoDlChk.checked;
+
+    let files = Array.from(fileOrFiles || []);
+    const doJoin = (outMode === 'join') || (files.length === 1);
+
+    const groupQuestionsBySystem = (questions) => {
+      const groups = {};
+      questions.forEach(q => {
+        const sysKey = (q.system && q.system.trim()) ? q.system.trim() : "DEFAULT";
+        if (!groups[sysKey]) groups[sysKey] = [];
+        groups[sysKey].push(q);
+      });
+      return groups;
+    };
+
+    // --- LOGIKA UTAMA ---
+    
+    // 1. MODE JOIN
+    if (doJoin) {
+      setStatus('Menggabungkan file...');
+      const { questions, abstracts, isEssayFlag, hasAbstractReferences } = await collectQuestionsFromFiles(files);
+      if (!questions.length) return alert('Tidak ada soal.');
+
+      const groups = groupQuestionsBySystem(questions);
+      const groupKeys = Object.keys(groups);
+
+      for (const sysName of groupKeys) {
+        const groupQs = groups[sysName];
+        
+        groupQs.sort((a, b) => ((a.sequenceId || 0) - (b.sequenceId || 0)));
+
+        const forceGroupMode = isEssayFlag || hasAbstractReferences || groupQs.some(q => q._testTypeName === 'WC' || (q.abstractId && q.abstractId > 0));
+        
+        const mode = panel.querySelector("input[name='pb']:checked").value;
+        const css = cssFor(mode);
+
+        const { qBody, aBody } = buildBodies(groupQs, mode, abstracts, forceGroupMode);
+
+        let finalTitle = sysName === "DEFAULT" ? "Questions" : sysName;
+        setStatus(`Memproses: ${finalTitle}...`);
+
+        const convQ = await convertImagesToBase64(qBody);
+        const convA = await convertImagesToBase64(aBody);
+
+        const htmlQ = wrapFullHtml(finalTitle + ' - Questions', css, convQ.html); 
+        const htmlA = wrapFullHtml(finalTitle + ' - Answers', css, convA.html);
+
+        window.open(URL.createObjectURL(new Blob([htmlQ], { type: 'text/html' })), '_blank');
+        const winA = window.open(URL.createObjectURL(new Blob([htmlA], { type: 'text/html' })), '_blank');
+
+        if (autoDownload) {
+          downloadBlob(new Blob([htmlQ], { type: 'text/html'}), `${finalTitle} - Questions.html`);
+          downloadBlob(new Blob([htmlA], { type: 'text/html'}), `${finalTitle} - Answers.html`);
+        }
+        if (wantPdf && winA) setTimeout(() => winA.print(), 1000);
+      }
+      
+      setStatus('Selesai (join & split system).');
+      return;
+    }
+
+    // 2. MODE SEPARATE
+    setStatus('Memproses file secara terpisah...');
+
+    for (let fi = 0; fi < files.length; fi++) {
+      const f = files[fi];
+      setStatus(`Membaca ${f.name} ...`);
+      
+      const { questions, abstracts, isEssayFlag, hasAbstractReferences } = await collectQuestionsFromFiles([f]);
+      
+      if (!questions.length) continue;
+
+      const groups = groupQuestionsBySystem(questions);
+      const groupKeys = Object.keys(groups);
+      const baseName = getBaseName(f.name);
+
+      for (const sysName of groupKeys) {
+        const groupQs = groups[sysName];
+        groupQs.sort((a, b) => ((a.sequenceId || 0) - (b.sequenceId || 0)));
+
+        const forceGroupMode = isEssayFlag || hasAbstractReferences || groupQs.some(q => q._testTypeName === 'WC' || (q.abstractId && q.abstractId > 0));
+        
+        const mode = panel.querySelector("input[name='pb']:checked").value;
+        const css = cssFor(mode);
+
+        const { qBody, aBody } = buildBodies(groupQs, mode, abstracts, forceGroupMode);
+
+        let finalTitle = sysName === "DEFAULT" ? baseName : sysName;
+        setStatus(`Memproses: ${finalTitle} (dari ${f.name})...`);
+
+        const convQ = await convertImagesToBase64(qBody);
+        const convA = await convertImagesToBase64(aBody);
+
+        const htmlQ = wrapFullHtml(finalTitle + ' - Questions', css, convQ.html); 
+        const htmlA = wrapFullHtml(finalTitle + ' - Answers', css, convA.html);
+
+        const urlQ = URL.createObjectURL(new Blob([htmlQ], { type: 'text/html' }));
+        window.open(urlQ, '_blank');
+        const winA = window.open(URL.createObjectURL(new Blob([htmlA], { type: 'text/html' })), '_blank');
+
+        if (autoDownload) {
+          downloadBlob(new Blob([htmlQ], {type: 'text/html'}), `${finalTitle} - Questions.html`);
+          downloadBlob(new Blob([htmlA], {type: 'text/html'}), `${finalTitle} - Answers.html`);
+        }
+        if (wantPdf && winA) setTimeout(() => winA.print(), 1000);
+      }
+    }
+
+    setStatus('Selesai (separate & split system).');
+  }
+
+  function wrapFullHtml(title, css, body) {
+    return `<!doctype html><html><head><meta charset="utf-8">
+    <title>${title}</title>
+    <style>${css}</style>
+    <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [ ['\\\\(','\\\\)'] ], 
+        displayMath: [ ['$$','$$'] ],
+        processEscapes: true
+      },
+      options: {
+        ignoreHtmlClass: 'tex2jax_ignore',
+        processHtmlClass: 'tex2jax_process'
+      }
+    };
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" id="MathJax-script" async></script>
+    </head><body>${body}</body></html>`;
+  }
+
+  // ---------- Events ----------
+  genBtn.addEventListener('click', () => {
+    const files = fileInput.files;
+    if (!files || files.length === 0) return alert('Upload JSON dulu.');
+
+    const outMode = panel.querySelector("input[name='outmode']:checked").value;
+    const wantPdf = panel.querySelector('#pdfChk').checked;
+
+    handleFile(files, outMode, wantPdf);
+  });
+
+  setStatus('Ready — upload JSON lalu klik Generate.');
+
+})();
