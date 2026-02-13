@@ -1,309 +1,188 @@
 (() => {
     // =================================================================================
-    // BAGIAN 1: SEMUA FUNGSI HELPER DAN LOGIKA EKSTRAKSI (inti kamu + perbaikan)
+    // CONFIG & SHARED HELPERS
     // =================================================================================
+    const CONFIG = { MIN_WAIT_MS: 500, LOAD_TIMEOUT_MS: 10000 };
+    const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+    const $ = (sel, root = document) => root.querySelector(sel);
+    const $all = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
+    window.isAutoAnswerRunning = false;
+
+    async function waitFor(predicate, timeoutMs = CONFIG.LOAD_TIMEOUT_MS, interval = 120) {
+        const start = performance.now();
+        while (performance.now() - start < timeoutMs) {
+            try { const v = await predicate(); if (v) return v; } catch (e) {}
+            await sleep(interval);
+        }
+        return null;
+    }
+
+    // =================================================================================
+    // BAGIAN 1: AUTO ANSWER (TIDAK BERUBAH)
+    // =================================================================================
+    async function toggleAutoAnswer() {
+        const btn = document.getElementById('quiz-answer-btn');
+        
+        if (window.isAutoAnswerRunning) {
+            window.isAutoAnswerRunning = false;
+            if (btn) {
+                btn.textContent = '🎲 Jawab Acak';
+                btn.style.backgroundColor = '#28a745';
+            }
+            console.log("🛑 Auto Answer Dihentikan Manual.");
+            return;
+        }
+
+        window.isAutoAnswerRunning = true;
+        if (btn) {
+            btn.textContent = '🛑 STOP (Klik untuk Manual)';
+            btn.style.backgroundColor = '#dc3545';
+        }
+
+        try {
+            console.log("🚀 Mulai menjawab otomatis...");
+            while (window.isAutoAnswerRunning) {
+                const questionBlocks = $all('[data-id="question-content"]');
+                let answersClicked = 0;
+
+                for (const block of questionBlocks) {
+                    if (!window.isAutoAnswerRunning) break;
+                    const radios = Array.from(block.querySelectorAll('input[type="radio"]'));
+                    if (radios.length > 0 && !radios.some(r => r.checked)) {
+                        const randomIdx = Math.floor(Math.random() * radios.length);
+                        radios[randomIdx].click();
+                        answersClicked++;
+                        await sleep(200); 
+                    }
+                }
+
+                if (!window.isAutoAnswerRunning) break;
+                if (answersClicked > 0) await sleep(500);
+
+                let nextBtn = $('[data-test-id="runnner-footer-nextskip-button"]') || 
+                              $('[data-test-id="attempt-review-footer-nextattempt"]') ||
+                              $('.RunFooter-module__rightButton--gMXAV'); 
+
+                if (!nextBtn) {
+                     nextBtn = Array.from(document.querySelectorAll('button')).find(b => {
+                        const txt = (b.innerText || '').trim().toLowerCase();
+                        return (txt === 'next' || txt === 'skip' || b.querySelector('img[src*="right-arrow"]'));
+                     });
+                }
+
+                let submitBtn = $('[data-test-id="runnner-footer-submit-button"]');
+                if (!submitBtn) {
+                     submitBtn = Array.from(document.querySelectorAll('button')).find(b => (b.innerText || '').trim().toLowerCase() === 'submit');
+                }
+
+                if (nextBtn && !nextBtn.disabled) {
+                    const anyUnchecked = questionBlocks.some(block => {
+                        const rs = Array.from(block.querySelectorAll('input[type="radio"]'));
+                        return rs.length > 0 && !rs.some(r => r.checked);
+                    });
+
+                    if (!anyUnchecked) {
+                        const currentId = ($('[data-id="question-content"]')?.closest('[id^="question_"]'))?.id || document.body.innerText.length;
+                        nextBtn.click();
+                        await waitFor(() => {
+                            const newId = ($('[data-id="question-content"]')?.closest('[id^="question_"]'))?.id || document.body.innerText.length;
+                            return newId !== currentId;
+                        }, 5000);
+                        await sleep(800);
+                    } else {
+                        await sleep(1000);
+                    }
+                } 
+                else if (submitBtn && !submitBtn.disabled) {
+                    submitBtn.click();
+                    window.isAutoAnswerRunning = false;
+                    if (btn) { btn.textContent = 'Selesai'; btn.style.backgroundColor = '#6c757d'; }
+                    break;
+                } 
+                else {
+                    await sleep(1000);
+                }
+            }
+        } catch (e) {
+            console.error(e);
+            alert("Error Auto Answer: " + e.message);
+        } finally {
+            if (window.isAutoAnswerRunning && btn) {
+                window.isAutoAnswerRunning = false;
+                btn.textContent = '🎲 Jawab Acak';
+                btn.style.backgroundColor = '#28a745';
+            }
+        }
+    }
+
+    // =================================================================================
+    // BAGIAN 2: EKSTRAK QUIZ (CSS FONT DIPERKUAT)
+    // =================================================================================
     async function jalankanProsesEkstraksi() {
+        window.isAutoAnswerRunning = false;
+        const btnAuto = document.getElementById('quiz-answer-btn');
+        if (btnAuto) { btnAuto.textContent = '🎲 Jawab Acak'; btnAuto.style.backgroundColor = '#28a745'; }
+
         const btn = document.getElementById('quiz-extractor-btn');
         if (btn) { btn.textContent = '⏳ Memproses...'; btn.disabled = true; }
 
         try {
-            /***********************
-             * CONFIG & UTILITIES  *
-             ***********************/
-            const CONFIG = { MIN_WAIT_MS: 300, LOAD_TIMEOUT_MS: 10000 };
-            const sleep = (ms) => new Promise(res => setTimeout(res, ms));
-            async function waitFor(predicate, timeoutMs = CONFIG.LOAD_TIMEOUT_MS, interval = 120) {
-                const start = performance.now();
-                while (performance.now() - start < timeoutMs) {
-                    try { const v = await predicate(); if (v) return v; } catch (e) {}
-                    await sleep(interval);
-                }
-                return null;
-            }
-            const $ = (sel, root = document) => root.querySelector(sel);
-            const $all = (sel, root = document) => Array.from(root.querySelectorAll(sel));
             const esc = (s) => s ? s.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])) : '';
-            function sanitizeHTML(html) {
-                if (!html) return '';
-                const tpl = document.createElement('template');
-                tpl.innerHTML = html;
-                const walker = document.createTreeWalker(tpl.content, NodeFilter.SHOW_ELEMENT, null);
-                const toRemove = [];
-                while (walker.nextNode()) {
-                    const el = walker.currentNode;
-                    const tag = el.tagName ? el.tagName.toLowerCase() : '';
-                    if (tag === 'script') { toRemove.push(el); continue; }
-                    [...el.attributes].forEach(attr => {
-                        const name = attr.name.toLowerCase();
-                        const val = (attr.value || '').trim();
-                        if (name.startsWith('on')) el.removeAttribute(attr.name);
-                        if ((name === 'href' || name === 'src') && /^javascript:/i.test(val)) el.removeAttribute(attr.name);
-                    });
-                }
-                toRemove.forEach(n => n.remove());
-                return tpl.innerHTML;
-            }
-
-            /***********************
-             * TITLE (SHORT)       *
-             ***********************/
+            function sanitizeHTML(html) { if (!html) return ''; const tpl = document.createElement('template'); tpl.innerHTML = html; const walker = document.createTreeWalker(tpl.content, NodeFilter.SHOW_ELEMENT, null); const toRemove = []; while (walker.nextNode()) { const el = walker.currentNode; const tag = el.tagName ? el.tagName.toLowerCase() : ''; if (tag === 'script') { toRemove.push(el); continue; } [...el.attributes].forEach(attr => { const name = attr.name.toLowerCase(); const val = (attr.value || '').trim(); if (name.startsWith('on')) el.removeAttribute(attr.name); if ((name === 'href' || name === 'src') && /^javascript:/i.test(val)) el.removeAttribute(attr.name); }); } toRemove.forEach(n => n.remove()); return tpl.innerHTML; }
             function pickText(el) { return el ? (el.textContent || el.innerText || '').trim() : ''; }
-            function getFullCourseTitleImmediate() {
-                const el =
-                    $('h1.CourseNodeHeader-module__courseTitleHeadingTwo--RL41B[data-test-id="course-module-name"]')
-                    || $('h1[data-test-id="course-module-name"]')
-                    || $('h1[class*="courseTitleHeadingTwo"]')
-                    || $('[class*="CourseNodeHeader-module__wrapper"] h1')
-                    || $('h1');
-                return pickText(el) || 'Quiz';
+            function getFullCourseTitleImmediate() { const el = $('h1.CourseNodeHeader-module__courseTitleHeadingTwo--RL41B[data-test-id="course-module-name"]') || $('h1[data-test-id="course-module-name"]') || $('h1[class*="courseTitleHeadingTwo"]') || $('[class*="CourseNodeHeader-module__wrapper"] h1') || $('h1'); return pickText(el) || 'Quiz'; }
+            async function getFullCourseTitle() { const now = getFullCourseTitleImmediate(); if (now !== 'Quiz') return now; const el = await waitFor(() => $('h1[data-test-id="course-module-name"]') || $('h1[class*="courseTitleHeadingTwo"]') || null, 2000, 120); return el ? pickText(el) : 'Quiz'; }
+            
+            function toShortModuleTitle(fullTitle) { 
+                const m = fullTitle.match(/(Module\s+\d+(?:\.\d+)*)(?::|$)/i); 
+                if (m) return m[1]; 
+                const beforeColon = fullTitle.split(':')[0].trim(); 
+                return beforeColon; 
             }
-            async function getFullCourseTitle() {
-                const now = getFullCourseTitleImmediate();
-                if (now !== 'Quiz') return now;
-                const el = await waitFor(() =>
-                    $('h1[data-test-id="course-module-name"]')
-                    || $('h1[class*="courseTitleHeadingTwo"]')
-                    || $('[class*="CourseNodeHeader-module__wrapper"] h1')
-                    || null, 2000, 120);
-                return el ? pickText(el) : 'Quiz';
-            }
-            function toShortModuleTitle(fullTitle) {
-                const m = fullTitle.match(/(Module\s+\d+(?:\.\d+)*)(?::|$)/i);
-                if (m) return `${m[1]} Quiz`;
-                const beforeColon = fullTitle.split(':')[0].trim();
-                if (/Module/i.test(beforeColon)) return `${beforeColon} Quiz`;
-                return 'Quiz';
-            }
+            
+            function parseQNumFromIndexText(s) { if (!s) return null; const m = s.match(/Question(?:\s*#)?\s*(\d+)/i); return m ? parseInt(m[1], 10) : null; }
+            function getNextAriaNumber() { const btn = $('[data-test-id="attempt-review-footer-nextattempt"]') || $('button[class*="__nextbtn"]') || $('.RunFooter-module__rightButton--gMXAV'); if (!btn) return null; const aria = btn.getAttribute('aria-label') || ''; const m = aria.match(/Next item question #(\d+)/i); return m ? parseInt(m[1], 10) : null; }
+            function getTotalQuestionsFromNav() { const table = $('table[data-test-id="exam-review-results"]') || $('.css-19cszzt'); if (!table) return null; const rows = $all('tbody tr', table); if (rows.length) return rows.length; const rowsById = $all('tbody tr[id^="exam-review-table-row-"]', table); if (rowsById.length) return rowsById.length; const nums = $all('tbody tr td:first-child span', table).map(s => parseInt((s.textContent || '').trim(), 10)).filter(n => Number.isFinite(n)); return nums.length ? Math.max(...nums) : null; }
+            
+            function extractFromContainer(root, readingHTML) { const content = $('[data-id="question-content"]', root) || root; const idxEl = $('.QuestionBody-module__questionOrder--kNol4,[class*="questionOrder"]', root); const indexText = idxEl ? idxEl.innerText.trim() : ($('[data-test-id="attempt-review-question-index"]')?.innerText?.trim() || ($('[data-id="runner-header-question-index"]')?.innerText?.trim()) || null); const qEl = $('.QuestionBody-module__questionText--mVV91,[class*="QuestionBody-module__questionText"]', root) || content; const questionHTML = qEl.innerHTML; const questionText = qEl.innerText.trim(); const group = $('[role="radiogroup"]', root) || root; const blocks = $all('[data-id="question-body-container"]', group); const makeChoice = (container, idx) => { const letterEl = $('[class*="alphaOrdinal"]', container); const textEl = $('[class*="optionText"]', container) || container; const correctImg = $('img[alt="Correct Answer"]', container) || $('img[src*="check-icon"]', container); const letter = (letterEl ? letterEl.innerText : String.fromCharCode(65 + idx)).replace(/[)\.]/g, '').trim(); const choiceHTML = (textEl.innerHTML || '').trim(); const choiceText = (textEl.innerText || '').trim(); return { letter, text: choiceText, html: choiceHTML, isCorrect: !!correctImg }; }; const choices = blocks.length ? blocks.map(makeChoice) : $all('label[class*="e1bppr3n2"], label', group).map(makeChoice); let expWrap = $('[id^="question-explanation-"]', root); if (!expWrap) { const secs = $all('section', root); expWrap = secs.find(s => s.querySelector('b')) || secs[0] || null; } let explanationHTML = '', explanationText = '', explanationHasLabel = false; if (expWrap) { const clone = expWrap.cloneNode(true); explanationHasLabel = !!$('b', clone); explanationHTML = clone.innerHTML.trim(); explanationText = clone.innerText.trim(); } const idEl = content.closest('[id^="question_"]') || content; const qId = idEl.id || null; const correct = choices.find(c => c.isCorrect) || null; return { id: qId, indexText, questionHTML, questionText, choices, correct, explanationHTML, explanationText, explanationHasLabel, readingHTML: readingHTML || null }; }
+            function collectAllQuestionsOnPage() { const results = []; const setContainer = $('.AttemptReview-module__questionSetContainer--k2LgH') || $('[data-question-target="overview"]')?.closest('.AttemptReview-module__questionSetContainer--k2LgH') || $('.Runner-module__questionSetContainer--ovz6k'); if (setContainer) { const readingEl = $('.QuestionSet-module__questionText--e_VDw', setContainer) || $('[data-question-target="overview"]', setContainer); const readingHTML = readingEl ? readingEl.innerHTML : null; const qBodies = $all('.QuestionSet-module__questionSetBodyContainer--N7Atb', setContainer).map(span => $('.QuestionBody-module__questionContainer--wi5XU', span) || span).filter(Boolean); qBodies.forEach(root => { const rec = extractFromContainer(root, readingHTML); results.push(rec); }); return { records: results, pageMaxQNum: getMaxQNumFromRecords(results) }; } const wrap = $('[data-id="question-content"]'); if (wrap) { const rec = extractFromContainer(wrap, null); return { records: [rec], pageMaxQNum: parseQNumFromIndexText(rec.indexText) || null }; } return { records: [], pageMaxQNum: null }; }
+            function getMaxQNumFromRecords(recs) { let max = null; recs.forEach(r => { const n = parseQNumFromIndexText(r.indexText); if (Number.isFinite(n)) max = max == null ? n : Math.max(max, n); }); return max; }
 
-            /***********************
-             * HELPERS (NUMBERS)   *
-             ***********************/
-            function parseQNumFromIndexText(s) {
-                if (!s) return null;
-                const m = s.match(/Question(?:\s*#)?\s*(\d+)/i);
-                return m ? parseInt(m[1], 10) : null;
-            }
-            function getNextAriaNumber() {
-                const btn = $('[data-test-id="attempt-review-footer-nextattempt"], button[class*="__nextbtn"]');
-                if (!btn) return null;
-                const aria = btn.getAttribute('aria-label') || '';
-                const m = aria.match(/Next item question #(\d+)/i);
-                return m ? parseInt(m[1], 10) : null;
-            }
-            function getTotalQuestionsFromNav() {
-                const table = $('table[data-test-id="exam-review-results"]');
-                if (!table) return null;
-                const rows = $all('tbody tr[data-test-id="exam-review-answer"]', table);
-                if (rows.length) return rows.length;
-                const rowsById = $all('tbody tr[id^="exam-review-table-row-"]', table);
-                if (rowsById.length) return rowsById.length;
-                const nums = $all('tbody tr td:first-child span', table)
-                    .map(s => parseInt((s.textContent || '').trim(), 10))
-                    .filter(n => Number.isFinite(n));
-                return nums.length ? Math.max(...nums) : null;
-            }
-
-            /***********************
-             * SINGLE Q EXTRACT    *
-             ***********************/
-            function extractFromContainer(root, readingHTML) {
-                const content = $('[data-id="question-content"]', root) || root;
-                const idxEl = $('.QuestionBody-module__questionOrder--kNol4,[class*="questionOrder"]', root);
-                const indexText = idxEl
-                    ? idxEl.innerText.trim()
-                    : ($('[data-test-id="attempt-review-question-index"]')?.innerText?.trim() || null);
-
-                const qEl = $('.QuestionBody-module__questionText--mVV91,[class*="QuestionBody-module__questionText"]', root) || content;
-                const questionHTML = qEl.innerHTML;
-                const questionText = qEl.innerText.trim();
-
-                const group = $('[role="radiogroup"]', root) || root;
-                const blocks = $all('[data-id="question-body-container"]', group);
-
-                const makeChoice = (container, idx) => {
-                    const letterEl = $('[class*="alphaOrdinal"]', container);
-                    const textEl = $('[class*="optionText"]', container) || container;
-                    const correctImg = $('img[alt="Correct Answer"]', container);
-                    const letter = (letterEl ? letterEl.innerText : String.fromCharCode(65 + idx)).replace(/[)\.]/g, '').trim();
-                    const choiceHTML = (textEl.innerHTML || '').trim();
-                    const choiceText = (textEl.innerText || '').trim();
-                    return { letter, text: choiceText, html: choiceHTML, isCorrect: !!correctImg };
-                };
-
-                const choices = blocks.length
-                    ? blocks.map(makeChoice)
-                    : $all('label[class*="e1bppr3n2"], label', group).map(makeChoice);
-
-                // Explanation: ambil HTML + computed font-size basis
-                let expWrap = $('[id^="question-explanation-"]', root);
-                if (!expWrap) {
-                    const secs = $all('section', root);
-                    expWrap = secs.find(s => s.querySelector('b')) || secs[0] || null;
-                }
-                let explanationHTML = '', explanationText = '', explanationHasLabel = false, explanationBaseFont = null;
-                if (expWrap) {
-                    const clone = expWrap.cloneNode(true);
-                    explanationHasLabel = !!$('b', clone);
-                    explanationHTML = clone.innerHTML.trim();
-                    explanationText = clone.innerText.trim();
-                    try {
-                        explanationBaseFont = getComputedStyle(expWrap).fontSize || null; // << basis ukuran
-                    } catch(_) {}
-                }
-
-                // Simpan juga basis font-size untuk stem/question jika perlu (optional)
-                let stemBaseFont = null;
-                try { stemBaseFont = getComputedStyle(qEl).fontSize || null; } catch(_) {}
-
-                const idEl = content.closest('[id^="question_"]') || content;
-                const qId = idEl.id || null;
-                const correct = choices.find(c => c.isCorrect) || null;
-
-                return {
-                    id: qId,
-                    indexText,
-                    questionHTML,
-                    questionText,
-                    choices,
-                    correct,
-                    explanationHTML,
-                    explanationText,
-                    explanationHasLabel,
-                    explanationBaseFont, // << simpan basis font
-                    stemBaseFont,        // << simpan basis font stem
-                    readingHTML: readingHTML || null
-                };
-            }
-
-            /*******************************
-             * PAGE EXTRACT (WITH READING) *
-             *******************************/
-            function collectAllQuestionsOnPage() {
-                const results = [];
-
-                const setContainer = $('.AttemptReview-module__questionSetContainer--k2LgH')
-                    || $('[data-question-target="overview"]')?.closest('.AttemptReview-module__questionSetContainer--k2LgH');
-
-                if (setContainer) {
-                    const readingEl = $('.QuestionSet-module__questionText--e_VDw[data-question-target="overview"]', setContainer);
-                    const readingHTML = readingEl ? readingEl.innerHTML : null;
-                    let readingBaseFont = null;
-                    if (readingEl) {
-                        try { readingBaseFont = getComputedStyle(readingEl).fontSize || null; } catch(_) {}
-                    }
-
-                    const qBodies = $all('.QuestionSet-module__questionSetBodyContainer--N7Atb', setContainer)
-                        .map(span => $('.QuestionBody-module__questionContainer--wi5XU', span) || span)
-                        .filter(Boolean);
-
-                    qBodies.forEach(root => {
-                        const rec = extractFromContainer(root, readingHTML);
-                        // sisipkan basis font reading pada record pertama setiap blok baru via readingHTML wrapper di render
-                        rec._readingBaseFont = readingBaseFont || null;
-                        results.push(rec);
-                    });
-
-                    return { records: results, pageMaxQNum: getMaxQNumFromRecords(results) };
-                }
-
-                const wrap = $('[data-id="question-content"]');
-                if (wrap) {
-                    const rec = extractFromContainer(wrap, null);
-                    return { records: [rec], pageMaxQNum: parseQNumFromIndexText(rec.indexText) || null };
-                }
-
-                return { records: [], pageMaxQNum: null };
-            }
-
-            function getMaxQNumFromRecords(recs) {
-                let max = null;
-                recs.forEach(r => {
-                    const n = parseQNumFromIndexText(r.indexText);
-                    if (Number.isFinite(n)) max = max == null ? n : Math.max(max, n);
-                });
-                return max;
-            }
-
-            /**********************
-             * FLOW: CAPTURE ALL  *
-             **********************/
             async function captureAll() {
-                await waitFor(() => $('[data-id="question-content"]') || $('.AttemptReview-module__questionSetContainer--k2LgH'));
-
+                await waitFor(() => $('[data-id="question-content"]') || $('.AttemptReview-module__questionSetContainer--k2LgH') || $('.Runner-module__questionSetContainer--ovz6k'));
                 let prevFirstId = ($('[data-id="question-content"]')?.closest('[id^="question_"]') || $('[data-id="question-content"]'))?.id || null;
                 const totalFromNav = getTotalQuestionsFromNav();
-
                 const all = [];
                 const seen = new Set();
-
                 while (true) {
                     const { records: pageRecs, pageMaxQNum } = collectAllQuestionsOnPage();
-
                     for (const rec of pageRecs) {
                         const key = rec.id || (rec.indexText + '|' + rec.questionText.slice(0, 40));
-                        if (!seen.has(key)) {
-                            seen.add(key);
-                            all.push(rec);
-                        }
+                        if (!seen.has(key)) { seen.add(key); all.push(rec); }
                     }
-
                     if (totalFromNav && pageMaxQNum && pageMaxQNum >= totalFromNav) break;
-
-                    const nextBtn = $('[data-test-id="attempt-review-footer-nextattempt"], button[class*="__nextbtn"]');
+                    const nextBtn = $('[data-test-id="attempt-review-footer-nextattempt"]') || $('button[class*="__nextbtn"]') || $('[data-test-id="runnner-footer-nextskip-button"]') || $('.RunFooter-module__rightButton--gMXAV'); 
                     if (!nextBtn || nextBtn.disabled) break;
-
                     const nextNum = getNextAriaNumber();
                     if (pageMaxQNum != null && nextNum != null && nextNum <= pageMaxQNum) break;
                     if (totalFromNav && nextNum > totalFromNav) break;
-
                     nextBtn.click();
-
-                    const changed = await waitFor(() => {
-                        const nowId = ($('[data-id="question-content"]')?.closest('[id^="question_"]') || $('[data-id="question-content"]'))?.id || null;
-                        return (nowId && nowId !== prevFirstId) ? nowId : null;
-                    }, CONFIG.LOAD_TIMEOUT_MS, 120);
-
+                    const changed = await waitFor(() => { const nowId = ($('[data-id="question-content"]')?.closest('[id^="question_"]') || $('[data-id="question-content"]'))?.id || null; return (nowId && nowId !== prevFirstId) ? nowId : null; }, CONFIG.LOAD_TIMEOUT_MS, 120);
                     if (!changed) break;
                     prevFirstId = changed;
                 }
                 return all;
             }
 
-            /**********************
-             * RENDER 2 WINDOWS   *
-             **********************/
-            function gatherOriginalHead() {
-                let headBits = ['<meta charset="utf-8">', '<meta name="viewport" content="width=device-width, initial-scale=1">'];
-                document.querySelectorAll('link[rel="stylesheet"], style, head script').forEach(el => {
-                    headBits.push(el.outerHTML);
-                });
-                return headBits.join("\n");
-            }
-
-            function getPageTemplate(title, originalHeadHTML, bodyHTML) {
-                // Konfigurasi MathJax: jangan ubah scale (biar sama), hanya stabilkan height
-                const mjxCfg = `
-  <script>
-    window.MathJax = window.MathJax || {};
-    MathJax.chtml = Object.assign({ matchFontHeight: false }, MathJax.chtml || {});
-  </script>`;
-
-                // Samakan base font root dengan halaman asal
-                const baseFont = getComputedStyle(document.documentElement).fontSize || '16px';
-                const normalize = `
-  <style>
-    html { font-size: ${baseFont}; }
-    /* Jangan memaksa ukuran MathJax; biarkan relatif ke kontainer yang kita set di bawah */
-    /* Cetak tetap aman */
-    @media print {
-      .qc-reading.qc-break { page-break-before: always; break-before: page; }
-      .qc-item { page-break-inside: avoid; break-inside: avoid; }
-      body { padding:0 20px; }
-    }
-  </style>`;
-
-                const quizStyles = `<style>
+            function gatherOriginalHead() { let headBits = ['<meta charset="utf-8">', '<meta name="viewport" content="width=device-width, initial-scale=1">']; document.querySelectorAll('link[rel="stylesheet"], style, head script').forEach(el => { headBits.push(el.outerHTML); }); return headBits.join("\n"); }
+            function getPageTemplate(title, originalHeadHTML, bodyHTML) { 
+                const mjxCfg = `<script>window.MathJax = window.MathJax || {}; MathJax.chtml = Object.assign({ matchFontHeight: false }, MathJax.chtml || {});</script>`; 
+                // Paksa root font size ke 16px
+                const normalize = `<style>html { font-size: 16px !important; } @media print { .qc-reading.qc-break { page-break-before: always; break-before: page; } .qc-item { page-break-inside: avoid; break-inside: avoid; } body { padding:0 20px; } }</style>`; 
+                
+                const quizStyles = `
+<style>
 :root { --qc-maxw: 900px; --qc-pad: 16px; --qc-gray: #f3f4f6; --qc-reading:#f9fafb; }
 html, body { background:#fff; }
 body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding:24px; }
@@ -311,117 +190,76 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
 .qc-title { font-size:20px; font-weight:700; margin:0 0 12px; }
 .qc-reading { padding:12px; background: var(--qc-reading); border:1px solid #e5e7eb; border-radius:8px; margin: 16px 0; }
 .qc-breakMarker { height:0; border:none; margin:0; }
-.qc-item { padding:12px 8px; margin-bottom:12px; border-radius:8px; border:1px solid #f0f0f0; background:#fff;
-  break-inside: avoid; page-break-inside: avoid; }
+.qc-item { padding:12px 8px; margin-bottom:12px; border-radius:8px; border:1px solid #f0f0f0; background:#fff; break-inside: avoid; page-break-inside: avoid; }
 .qc-item h3 { margin:0 0 6px; font-size:16px; font-weight:700; }
-.qc-stem { margin:4px 0 10px; line-height:1.5; }
+
+/* PERBAIKAN UTAMA: Gunakan !important pada setiap elemen teks */
+.qc-stem, .qc-stem * { font-size: 16px !important; line-height: 1.5 !important; }
+.qc-choices, .qc-choices * { font-size: 16px !important; line-height: 1.5 !important; }
+
 .qc-choices { margin:8px 0 0 0; padding:0; list-style:none; }
-.qc-choice { margin:6px 0; display:flex; gap:8px; line-height:1.45; }
+.qc-choice { margin:6px 0; display:flex; gap:8px; }
 .qc-letter { font-weight:700; min-width:22px; }
 .qc-correct .qc-text { font-weight:700; }
 .qc-tick { font-weight:700; margin-left:6px; }
 .qc-answer-block { border-top:1px dashed #e5e7eb; margin-top:10px; padding:10px; background: var(--qc-gray); border-radius:8px; }
-</style>`;
 
-                return '<!doctype html><html><head><title>' + esc(title) + '</title>'
-                    + mjxCfg + originalHeadHTML + quizStyles + normalize
-                    + '</head><body>' + bodyHTML + '</body></html>';
+/* MENIMPA CSS BAWAAN WEBSITE (NUCLEAR OPTION) */
+.qc-expl, 
+.qc-expl p, 
+.qc-expl div, 
+.qc-expl span, 
+.qc-expl section,
+.qc-expl li {
+    font-size: 16px !important;
+    line-height: 1.5 !important;
+}
+</style>`; 
+                return '<!doctype html><html><head><title>' + esc(title) + '</title>' + mjxCfg + originalHeadHTML + quizStyles + normalize + '</head><body>' + bodyHTML + '</body></html>'; 
             }
-
-            function renderListHTML(records, title, mode) {
-                let html = '<div class="qc-container"><h1 class="qc-title">' + esc(title) + '</h1>';
-                let lastReadingKey = null;
-                let firstBlock = true;
-                let currentReadingBase = null;
-
-                records.forEach((rec, i) => {
-                    // Jika ada reading baru, render dengan base font yang disalin dari sumber
-                    if (rec.readingHTML && rec.readingHTML !== lastReadingKey) {
-                        const readingClass = firstBlock ? 'qc-reading' : 'qc-reading qc-break';
-                        const baseStyle = rec._readingBaseFont ? ` style="font-size:${esc(rec._readingBaseFont)}"` : '';
-                        html += (firstBlock ? '' : '<hr class="qc-breakMarker">')
-                            + `<section class="${readingClass}"${baseStyle}>${rec.readingHTML}</section>`;
-                        lastReadingKey = rec.readingHTML;
-                        currentReadingBase = rec._readingBaseFont || null;
-                        firstBlock = false;
-                    }
-
-                    const idxText = rec.indexText || ('Question ' + (i + 1));
-                    const choiceLis = rec.choices.map(ch => {
-                        const core = (ch.html && ch.html.length) ? ch.html : esc(ch.text);
-                        const tick = (mode === 'A' && ch.isCorrect) ? '<span class="qc-tick">✓</span>' : '';
-                        const base = '<span class="qc-letter">' + esc(ch.letter) + ')</span>'
-                            + '<span class="qc-text">' + core + tick + '</span>';
-                        return '<li class="qc-choice ' + ((mode === 'A' && ch.isCorrect) ? 'qc-correct' : '') + '">' + base + '</li>';
-                    }).join('');
-
-                    // stem dengan basis font sumber
-                    const stemStyle = rec.stemBaseFont ? ` style="font-size:${esc(rec.stemBaseFont)}"` : '';
-                    // >>> PERUBAHAN SATU-SATUNYA: samakan font-size choices dengan stem
-                    const choicesStyle = rec.stemBaseFont ? ` style="font-size:${esc(rec.stemBaseFont)}"` : '';
-
-                    html += ''
-                        + '<article class="qc-item" data-qid="' + esc(rec.id || ('q-' + (i + 1))) + '">'
-                        + '<h3>' + esc(idxText) + '</h3>'
-                        + `<div class="qc-stem"${stemStyle}>` + (rec.questionHTML || esc(rec.questionText)) + '</div>'
-                        + `<ul class="qc-choices"${choicesStyle}>` + choiceLis + '</ul>';
-
-                    if (mode === 'A') {
-                        const explBase = rec.explanationBaseFont || currentReadingBase || null;
-                        const explStyle = explBase ? ` style="font-size:${esc(explBase)}"` : '';
-                        html += '<div class="qc-answer-block">'
-                            + (rec.explanationHTML
-                                ? (rec.explanationHasLabel
-                                    ? `<div class="qc-expl"${explStyle}>` + rec.explanationHTML + '</div>'
-                                    : `<div class="qc-expl"${explStyle}><b>Explanation:</b> ` + rec.explanationHTML + '</div>')
-                                : '<div class="qc-expl"><b>Explanation:</b> <em>No explanation found.</em></div>')
-                            + '</div>';
-                    }
-
-                    html += '</article>';
-                    firstBlock = false;
-                });
-
-                html += '</div>';
-                return html;
+            
+            function renderListHTML(records, title, mode) { 
+                let html = '<div class="qc-container"><h1 class="qc-title">' + esc(title) + '</h1>'; 
+                let lastReadingKey = null, firstBlock = true; 
+                records.forEach((rec, i) => { 
+                    if (rec.readingHTML && rec.readingHTML !== lastReadingKey) { 
+                        const readingClass = firstBlock ? 'qc-reading' : 'qc-reading qc-break'; 
+                        html += (firstBlock ? '' : '<hr class="qc-breakMarker">') + `<section class="${readingClass}">${rec.readingHTML}</section>`; 
+                        lastReadingKey = rec.readingHTML; firstBlock = false; 
+                    } 
+                    const idxText = rec.indexText || ('Question ' + (i + 1)); 
+                    const choiceLis = rec.choices.map(ch => { 
+                        const core = (ch.html && ch.html.length) ? ch.html : esc(ch.text); 
+                        const tick = (mode === 'A' && ch.isCorrect) ? '<span class="qc-tick">✓</span>' : ''; 
+                        const base = '<span class="qc-letter">' + esc(ch.letter) + ')</span>' + '<span class="qc-text">' + core + tick + '</span>'; 
+                        return '<li class="qc-choice ' + ((mode === 'A' && ch.isCorrect) ? 'qc-correct' : '') + '">' + base + '</li>'; 
+                    }).join(''); 
+                    
+                    html += `<article class="qc-item" data-qid="${esc(rec.id || ('q-' + (i + 1)))}"><h3>${esc(idxText)}</h3><div class="qc-stem">${(rec.questionHTML || esc(rec.questionText))}</div><ul class="qc-choices">${choiceLis}</ul>`; 
+                    
+                    if (mode === 'A') { 
+                        html += '<div class="qc-answer-block">' + (rec.explanationHTML ? (rec.explanationHasLabel ? `<div class="qc-expl">` + rec.explanationHTML + '</div>' : `<div class="qc-expl"><b>Explanation:</b> ` + rec.explanationHTML + '</div>') : '<div class="qc-expl"><b>Explanation:</b> <em>No explanation found.</em></div>') + '</div>'; 
+                    } 
+                    html += '</article>'; firstBlock = false; 
+                }); 
+                html += '</div>'; return html; 
             }
+            
+            function openTabWith(docHTML) { const win = window.open('', '_blank'); if (!win) { alert('Popup diblokir. Izinkan pop-up untuk situs ini.'); return; } const doc = win.document; doc.open(); doc.write(docHTML); doc.close(); try { if (win.MathJax && win.MathJax.typesetPromise) { win.MathJax.typesetPromise(); } } catch (_) {} }
 
-            function openTabWith(docHTML) {
-                const win = window.open('', '_blank');
-                if (!win) { alert('Popup diblokir. Izinkan pop-up untuk situs ini.'); return; }
-                const doc = win.document;
-                doc.open();
-                doc.write(docHTML);
-                doc.close();
-                try {
-                    if (win.MathJax && win.MathJax.typesetPromise) {
-                        win.MathJax.typesetPromise();
-                    }
-                } catch (_) {}
-            }
-
-            /**********************
-             * MAIN
-             **********************/
             const fullTitle = await getFullCourseTitle();
             const shortTitle = toShortModuleTitle(fullTitle);
-
             const records = await captureAll();
             if (!records || !records.length) { alert('Tidak ada pertanyaan yang tertangkap.'); return; }
-
             const originalHead = gatherOriginalHead();
-
+            
             const questionsTitle = shortTitle + ' - Questions';
             const questionsBody = renderListHTML(records, questionsTitle, 'Q');
-            const questionsPage = getPageTemplate(questionsTitle, originalHead, questionsBody);
-            openTabWith(questionsPage);
-
+            openTabWith(getPageTemplate(questionsTitle, originalHead, questionsBody));
             await sleep(200);
-
             const answersTitle = shortTitle + ' - Answers';
             const answersBody = renderListHTML(records, answersTitle, 'A');
-            const answersPage = getPageTemplate(answersTitle, originalHead, answersBody);
-            openTabWith(answersPage);
+            openTabWith(getPageTemplate(answersTitle, originalHead, answersBody));
 
         } catch (err) {
             console.error(err);
@@ -433,36 +271,40 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
     }
 
     // =================================================================================
-    // BAGIAN 2: TOMBOL
+    // UI: PANEL TOMBOL
     // =================================================================================
-    function buatTombolEkstraktor() {
-        if (document.getElementById('quiz-extractor-btn')) { console.log('Tombol ekstraktor sudah ada.'); return; }
-        const a = 1;
-        const button = document.createElement('button');
-        button.id = 'quiz-extractor-btn';
-        button.innerHTML = '🖨️ Ekstrak Quiz';
-        button.addEventListener('click', jalankanProsesEkstraksi);
-        Object.assign(button.style, {
-            position: 'fixed',
-            bottom: '20px',
-            right: '20px',
-            zIndex: '9999',
-            padding: '10px 15px',
-            fontSize: '14px',
-            fontWeight: 'bold',
-            color: 'white',
-            backgroundColor: '#007bff',
-            border: 'none',
-            borderRadius: '5px',
-            cursor: 'pointer',
-            boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
+    function buatPanelTombol() {
+        if (document.getElementById('quiz-tools-panel')) return;
+        const panel = document.createElement('div');
+        panel.id = 'quiz-tools-panel';
+        Object.assign(panel.style, {
+            position: 'fixed', bottom: '20px', right: '20px', zIndex: '99999',
+            display: 'flex', flexDirection: 'column', gap: '10px'
         });
-        document.body.appendChild(button);
+
+        const btnAnswer = document.createElement('button');
+        btnAnswer.id = 'quiz-answer-btn';
+        btnAnswer.innerHTML = '🎲 Jawab Acak';
+        btnAnswer.onclick = toggleAutoAnswer;
+        Object.assign(btnAnswer.style, {
+            padding: '10px 15px', fontSize: '14px', fontWeight: 'bold',
+            color: 'white', backgroundColor: '#28a745', border: 'none',
+            borderRadius: '5px', cursor: 'pointer', boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
+        });
+
+        const btnExtract = document.createElement('button');
+        btnExtract.id = 'quiz-extractor-btn';
+        btnExtract.innerHTML = '🖨️ Ekstrak Quiz';
+        btnExtract.onclick = jalankanProsesEkstraksi;
+        Object.assign(btnExtract.style, {
+            padding: '10px 15px', fontSize: '14px', fontWeight: 'bold',
+            color: 'white', backgroundColor: '#007bff', border: 'none',
+            borderRadius: '5px', cursor: 'pointer', boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
+        });
+
+        panel.appendChild(btnAnswer);
+        panel.appendChild(btnExtract);
+        document.body.appendChild(panel);
     }
-
-    // =================================================================================
-    // BAGIAN 3: RUN
-    // =================================================================================
-    buatTombolEkstraktor();
-
+    buatPanelTombol();
 })();
