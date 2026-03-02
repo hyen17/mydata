@@ -1,20 +1,38 @@
 [
   {
     "c": "New York",
-    "s": "NY",
+    "s": "New York (NY)",
     "z": "10001",
     "p": "212",
-    "fn": ["James", "John", "Robert", "Michael", "William"],
-    "ln": ["Smith", "Johnson", "Williams", "Brown", "Jones"],
-    "st": ["7th Ave", "Broadway", "W 42nd St", "Madison Ave"]
+    "fn": ["James", "Robert", "John"],
+    "ln": ["Smith", "Brown", "Jones"],
+    "st": ["1250 Broadway", "350 5th Ave", "11 Penn Plaza"]
   },
   {
     "c": "Los Angeles",
-    "s": "CA",
+    "s": "California (CA)",
     "z": "90001",
     "p": "213",
-    "fn": ["Mary", "Patricia", "Linda", "Barbara", "Elizabeth"],
-    "ln": ["Garcia", "Martinez", "Rodriguez", "Hernandez", "Lopez"],
-    "st": ["Sunset Blvd", "Figueroa St", "Hollywood Blvd", "Santa Monica Blvd"]
+    "fn": ["Michael", "David", "William"],
+    "ln": ["Garcia", "Miller", "Davis"],
+    "st": ["1330 E 83rd St", "1545 E 85th St", "8300 Graham Ave"]
+  },
+  {
+    "c": "Chicago",
+    "s": "Illinois (IL)",
+    "z": "60601",
+    "p": "312",
+    "fn": ["Mary", "Linda", "Susan"],
+    "ln": ["Rodriguez", "Martinez", "Hernandez"],
+    "st": ["205 N Michigan Ave", "150 N Michigan Ave", "180 N Stetson Ave"]
+  },
+  {
+    "c": "Houston",
+    "s": "Texas (TX)",
+    "z": "77002",
+    "p": "713",
+    "fn": ["Joseph", "Thomas", "Charles"],
+    "ln": ["Lopez", "Gonzalez", "Wilson"],
+    "st": ["1001 McKinney St", "1221 McKinney St", "914 Main St"]
   }
 ]
