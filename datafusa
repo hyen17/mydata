@@ -6,16 +6,16 @@
     "p": "212",
     "fn": ["James", "Robert", "John"],
     "ln": ["Smith", "Brown", "Jones"],
-    "st": ["1250 Broadway", "350 5th Ave", "11 Penn Plaza"]
+    "st": ["252 7th Ave", "245 7th Ave", "265 W 30th St"]
   },
   {
     "c": "Los Angeles",
     "s": "California (CA)",
-    "z": "90001",
+    "z": "90077",
     "p": "213",
     "fn": ["Michael", "David", "William"],
     "ln": ["Garcia", "Miller", "Davis"],
-    "st": ["1330 E 83rd St", "1545 E 85th St", "8300 Graham Ave"]
+    "st": ["939 N Beverly Glen Blvd", "607 Siena Way", "10950 Bellagio Rd"]
   },
   {
     "c": "Chicago",
@@ -24,7 +24,7 @@
     "p": "312",
     "fn": ["Mary", "Linda", "Susan"],
     "ln": ["Rodriguez", "Martinez", "Hernandez"],
-    "st": ["205 N Michigan Ave", "150 N Michigan Ave", "180 N Stetson Ave"]
+    "st": ["205 N Michigan Ave", "200 N Dearborn St Unit 4407", "211 N Harbor Dr #2209"]
   },
   {
     "c": "Houston",
@@ -33,6 +33,15 @@
     "p": "713",
     "fn": ["Joseph", "Thomas", "Charles"],
     "ln": ["Lopez", "Gonzalez", "Wilson"],
-    "st": ["1001 McKinney St", "1221 McKinney St", "914 Main St"]
+    "st": ["2006 Helena St", "1221 McKinney St", "120 Pierce St"]
+  }
+  {
+    "c": "Cassopolis",
+    "s": "Michigan (MI)",
+    "z": "49031",
+    "p": "713",
+    "fn": ["Alex", "Garry", "Linda"],
+    "ln": ["Becker", "Carey", "Koeman"],
+    "st": ["22279 Loupee Dr", "23803 Evan St", "64374 Mullen Rd"]
   }
 ]
