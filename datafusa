@@ -1,4 +1,20 @@
 [
-  {"c":"New York", "z":"10001", "p":"212", "fn":["James", "John", "Robert"], "ln":["Smith", "Johnson", "Williams"]},
-  {"c":"Los Angeles", "z":"90001", "p":"213", "fn":["Mary", "Patricia", "Linda"], "ln":["Brown", "Jones", "Garcia"]}
+  {
+    "c": "New York",
+    "s": "NY",
+    "z": "10001",
+    "p": "212",
+    "fn": ["James", "John", "Robert", "Michael", "William"],
+    "ln": ["Smith", "Johnson", "Williams", "Brown", "Jones"],
+    "st": ["7th Ave", "Broadway", "W 42nd St", "Madison Ave"]
+  },
+  {
+    "c": "Los Angeles",
+    "s": "CA",
+    "z": "90001",
+    "p": "213",
+    "fn": ["Mary", "Patricia", "Linda", "Barbara", "Elizabeth"],
+    "ln": ["Garcia", "Martinez", "Rodriguez", "Hernandez", "Lopez"],
+    "st": ["Sunset Blvd", "Figueroa St", "Hollywood Blvd", "Santa Monica Blvd"]
+  }
 ]
