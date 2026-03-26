@@ -1,0 +1,345 @@
+(() => {
+  const EXISTING_ID = "__mj_print_detector_ui__";
+  const OLD = document.getElementById(EXISTING_ID);
+  if (OLD) OLD.remove();
+
+  document.querySelectorAll("[data-mj-print-detector]").forEach(el => {
+    el.style.outline = "";
+    el.style.background = "";
+    el.removeAttribute("data-mj-print-detector");
+  });
+
+  const MM_TO_PX = 96 / 25.4;
+  const config = {
+    paper: "A4",
+    orientation: "portrait",
+    marginMm: 12,
+    tolerancePx: 12,
+    maxItemsInList: 50
+  };
+
+  const paperSizes = {
+    A4: { portrait: { w: 210, h: 297 }, landscape: { w: 297, h: 210 } },
+    Letter: { portrait: { w: 216, h: 279 }, landscape: { w: 279, h: 216 } }
+  };
+
+  const page = paperSizes[config.paper][config.orientation];
+  const printableWidthPx = (page.w - config.marginMm * 2) * MM_TO_PX;
+
+  const state = {
+    items: [],
+    current: -1
+  };
+
+  function isVisible(el) {
+    const cs = getComputedStyle(el);
+    if (cs.display === "none" || cs.visibility === "hidden") return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }
+
+  function getMathJaxCandidates() {
+    const selectors = [
+      "mjx-container",
+      ".MathJax",
+      ".MathJax_Display",
+      '[class*="MathJax"]',
+      'svg[role="img"]'
+    ];
+
+    const set = new Set();
+
+    selectors.forEach(sel => {
+      document.querySelectorAll(sel).forEach(el => {
+        let target = el;
+
+        if (el.tagName.toLowerCase() === "svg" && el.closest("mjx-container")) {
+          target = el.closest("mjx-container");
+        }
+
+        if (target && isVisible(target)) set.add(target);
+      });
+    });
+
+    return [...set];
+  }
+
+  function shortText(el) {
+    const txt = (el.innerText || el.textContent || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    return txt.length > 120 ? txt.slice(0, 120) + "..." : txt;
+  }
+
+  function getPath(el) {
+    const parts = [];
+    let node = el;
+    let depth = 0;
+    while (node && node.nodeType === 1 && depth < 5) {
+      let part = node.tagName.toLowerCase();
+      if (node.id) {
+        part += "#" + node.id;
+        parts.unshift(part);
+        break;
+      }
+      if (node.classList && node.classList.length) {
+        part += "." + [...node.classList].slice(0, 2).join(".");
+      }
+      parts.unshift(part);
+      node = node.parentElement;
+      depth++;
+    }
+    return parts.join(" > ");
+  }
+
+  function getMeasure(el) {
+    const rect = el.getBoundingClientRect();
+    const scrollWidth = el.scrollWidth || rect.width;
+
+    let inlineMath = false;
+    let displayMath = false;
+
+    const cls = (el.className || "").toString();
+    if (/MathJax_Display/.test(cls)) displayMath = true;
+    if (el.tagName.toLowerCase() === "mjx-container") {
+      const disp = el.getAttribute("display");
+      if (disp === "true" || disp === "block") displayMath = true;
+      else inlineMath = true;
+    }
+
+    const style = getComputedStyle(el);
+    if (style.display === "block") displayMath = true;
+
+    const width = Math.max(rect.width, scrollWidth);
+    const overflow = width - printableWidthPx;
+
+    return {
+      el,
+      width,
+      rectWidth: rect.width,
+      scrollWidth,
+      overflow,
+      displayMath,
+      inlineMath,
+      snippet: shortText(el),
+      path: getPath(el)
+    };
+  }
+
+  function scan() {
+    state.items.forEach(item => {
+      item.el.style.outline = "";
+      item.el.style.background = "";
+      item.el.removeAttribute("data-mj-print-detector");
+    });
+
+    const candidates = getMathJaxCandidates();
+    const results = candidates
+      .map(getMeasure)
+      .filter(x => x.overflow > config.tolerancePx)
+      .sort((a, b) => b.overflow - a.overflow);
+
+    results.forEach((item, idx) => {
+      item.index = idx;
+      item.el.setAttribute("data-mj-print-detector", "1");
+      item.el.style.outline = "2px solid rgba(220, 38, 38, 0.9)";
+      item.el.style.outlineOffset = "2px";
+      item.el.style.background = "rgba(255, 235, 59, 0.12)";
+    });
+
+    state.items = results;
+    state.current = results.length ? 0 : -1;
+    render();
+    focusCurrent(false);
+  }
+
+  function focusCurrent(scroll = true) {
+    state.items.forEach((item, idx) => {
+      if (idx === state.current) {
+        item.el.style.outline = "4px solid rgba(37, 99, 235, 0.95)";
+        item.el.style.background = "rgba(59, 130, 246, 0.15)";
+      } else {
+        item.el.style.outline = "2px solid rgba(220, 38, 38, 0.9)";
+        item.el.style.background = "rgba(255, 235, 59, 0.12)";
+      }
+    });
+
+    const current = state.items[state.current];
+    if (!current) return;
+
+    if (scroll) {
+      current.el.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+        inline: "nearest"
+      });
+    }
+
+    const active = ui.querySelector(".mjpd-item.active");
+    if (active) active.scrollIntoView({ block: "nearest" });
+    updateHeader();
+  }
+
+  function next() {
+    if (!state.items.length) return;
+    state.current = (state.current + 1) % state.items.length;
+    renderList();
+    focusCurrent(true);
+  }
+
+  function prev() {
+    if (!state.items.length) return;
+    state.current = (state.current - 1 + state.items.length) % state.items.length;
+    renderList();
+    focusCurrent(true);
+  }
+
+  function jump(i) {
+    if (i < 0 || i >= state.items.length) return;
+    state.current = i;
+    renderList();
+    focusCurrent(true);
+  }
+
+  const ui = document.createElement("div");
+  ui.id = EXISTING_ID;
+  ui.style.cssText = `
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    width: 420px;
+    max-height: 80vh;
+    z-index: 2147483647;
+    background: #111827;
+    color: #f9fafb;
+    font: 12px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Arial,sans-serif;
+    border: 1px solid #374151;
+    border-radius: 12px;
+    box-shadow: 0 12px 30px rgba(0,0,0,.35);
+    overflow: hidden;
+  `;
+
+  ui.innerHTML = `
+    <div style="padding:10px 12px; border-bottom:1px solid #374151; display:flex; gap:8px; align-items:center; justify-content:space-between;">
+      <div>
+        <div style="font-weight:700; font-size:13px;">MathJax Print Detector</div>
+        <div id="mjpd-summary" style="color:#cbd5e1; margin-top:2px;">Scanning...</div>
+      </div>
+      <button id="mjpd-close" style="background:#374151;color:#fff;border:0;border-radius:8px;padding:6px 10px;cursor:pointer;">Close</button>
+    </div>
+
+    <div style="padding:10px 12px; border-bottom:1px solid #374151; display:flex; gap:8px; flex-wrap:wrap;">
+      <button id="mjpd-prev" style="background:#1f2937;color:#fff;border:1px solid #4b5563;border-radius:8px;padding:6px 10px;cursor:pointer;">Prev</button>
+      <button id="mjpd-next" style="background:#2563eb;color:#fff;border:0;border-radius:8px;padding:6px 10px;cursor:pointer;">Next</button>
+      <button id="mjpd-rescan" style="background:#1f2937;color:#fff;border:1px solid #4b5563;border-radius:8px;padding:6px 10px;cursor:pointer;">Rescan</button>
+      <button id="mjpd-clear" style="background:#1f2937;color:#fff;border:1px solid #4b5563;border-radius:8px;padding:6px 10px;cursor:pointer;">Clear highlight</button>
+    </div>
+
+    <div id="mjpd-current" style="padding:10px 12px; border-bottom:1px solid #374151; color:#e5e7eb;">
+      Tidak ada item.
+    </div>
+
+    <div id="mjpd-list" style="max-height:45vh; overflow:auto; padding:8px;"></div>
+  `;
+
+  document.body.appendChild(ui);
+
+  function updateHeader() {
+    const summary = ui.querySelector("#mjpd-summary");
+    const currentBox = ui.querySelector("#mjpd-current");
+
+    if (!state.items.length) {
+      summary.textContent = `0 rumus melebihi area print ${printableWidthPx.toFixed(1)}px`;
+      currentBox.innerHTML = `Tidak ditemukan rumus MathJax yang melewati lebar print.`;
+      return;
+    }
+
+    const cur = state.items[state.current];
+    summary.textContent = `${state.items.length} rumus panjang terdeteksi | printable width ≈ ${printableWidthPx.toFixed(1)}px`;
+
+    currentBox.innerHTML = `
+      <div><b>Item ${state.current + 1}/${state.items.length}</b></div>
+      <div style="margin-top:4px;">Lebar: <b>${cur.width.toFixed(1)}px</b></div>
+      <div>Overflow: <b style="color:#fca5a5;">+${cur.overflow.toFixed(1)}px</b></div>
+      <div>Tipe: <b>${cur.displayMath ? "display" : "inline"}</b></div>
+      <div style="margin-top:6px; color:#cbd5e1; word-break:break-word;">${escapeHtml(cur.snippet || "(tidak ada teks terbaca)")}</div>
+      <div style="margin-top:6px; color:#94a3b8;">${escapeHtml(cur.path)}</div>
+    `;
+  }
+
+  function renderList() {
+    const list = ui.querySelector("#mjpd-list");
+    list.innerHTML = "";
+
+    if (!state.items.length) {
+      list.innerHTML = `<div style="padding:10px; color:#cbd5e1;">Tidak ada rumus panjang yang terdeteksi.</div>`;
+      return;
+    }
+
+    state.items.slice(0, config.maxItemsInList).forEach((item, i) => {
+      const row = document.createElement("div");
+      row.className = "mjpd-item" + (i === state.current ? " active" : "");
+      row.style.cssText = `
+        padding:8px 10px;
+        margin-bottom:8px;
+        border-radius:10px;
+        cursor:pointer;
+        border:1px solid ${i === state.current ? "#60a5fa" : "#374151"};
+        background:${i === state.current ? "rgba(37,99,235,.18)" : "#111827"};
+      `;
+      row.innerHTML = `
+        <div style="display:flex; justify-content:space-between; gap:8px;">
+          <div style="font-weight:700;">#${i + 1}</div>
+          <div style="color:#fca5a5;">+${item.overflow.toFixed(1)}px</div>
+        </div>
+        <div style="margin-top:4px; color:#e5e7eb; word-break:break-word;">${escapeHtml(item.snippet || "(tidak ada teks terbaca)")}</div>
+        <div style="margin-top:4px; color:#94a3b8;">${escapeHtml(item.path)}</div>
+      `;
+      row.addEventListener("click", () => jump(i));
+      list.appendChild(row);
+    });
+
+    if (state.items.length > config.maxItemsInList) {
+      const more = document.createElement("div");
+      more.style.cssText = "padding:8px 10px; color:#94a3b8;";
+      more.textContent = `Menampilkan ${config.maxItemsInList} dari ${state.items.length} item. Tetap bisa pakai Next/Prev untuk semua item.`;
+      list.appendChild(more);
+    }
+  }
+
+  function render() {
+    updateHeader();
+    renderList();
+  }
+
+  function clearHighlight() {
+    state.items.forEach(item => {
+      item.el.style.outline = "";
+      item.el.style.background = "";
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  ui.querySelector("#mjpd-next").addEventListener("click", next);
+  ui.querySelector("#mjpd-prev").addEventListener("click", prev);
+  ui.querySelector("#mjpd-rescan").addEventListener("click", scan);
+  ui.querySelector("#mjpd-clear").addEventListener("click", clearHighlight);
+  ui.querySelector("#mjpd-close").addEventListener("click", () => ui.remove());
+
+  window.__mjPrintDetector = {
+    scan,
+    next,
+    prev,
+    jump,
+    state,
+    printableWidthPx
+  };
+
+  scan();
+})();
