@@ -1,0 +1,531 @@
+(() => {
+  const EXISTING_ID = "mock-exam-html-converter-ui";
+  const old = document.getElementById(EXISTING_ID);
+  if (old) old.remove();
+
+  const ui = document.createElement("div");
+  ui.id = EXISTING_ID;
+  ui.innerHTML = `
+    <div style="
+      position:fixed; top:16px; right:16px; z-index:999999;
+      width:430px; max-width:calc(100vw - 32px);
+      background:#fff; border:1px solid #ccc; border-radius:12px;
+      box-shadow:0 10px 28px rgba(0,0,0,.18); font-family:Arial,sans-serif;
+      color:#222; overflow:hidden;
+    ">
+      <div style="padding:12px 14px; background:#111; color:#fff; display:flex; justify-content:space-between; align-items:center;">
+        <div style="font-weight:700;">Mock Exam JSON → HTML</div>
+        <button id="meh-close" style="border:none; background:transparent; color:#fff; font-size:18px; cursor:pointer;">×</button>
+      </div>
+      <div style="padding:14px;">
+        <div style="font-size:13px; line-height:1.45; margin-bottom:10px;">
+          Pilih file <b>.txt</b> atau <b>.json</b> (bisa multiple).
+        </div>
+
+        <input id="meh-files" type="file" accept=".txt,.json,application/json,text/plain" multiple
+          style="display:block; width:100%; margin-bottom:10px;" />
+
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+          <button id="meh-process" style="padding:9px 12px; border:none; border-radius:8px; background:#2563eb; color:#fff; cursor:pointer; font-weight:700;">
+            Process Files
+          </button>
+          <button id="meh-pick" style="padding:9px 12px; border:1px solid #ccc; border-radius:8px; background:#f8f8f8; cursor:pointer;">
+            Pilih File
+          </button>
+        </div>
+
+        <label style="display:flex; align-items:flex-start; gap:8px; font-size:13px; margin-bottom:10px;">
+          <input id="meh-autodownload" type="checkbox" checked />
+          <span>Auto-download HTML selain buka tab baru</span>
+        </label>
+
+        <div id="meh-status" style="
+          font-size:12px; white-space:pre-wrap; background:#f6f6f6;
+          border:1px solid #e5e5e5; border-radius:8px; padding:10px;
+          max-height:220px; overflow:auto;
+        ">Ready.</div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(ui);
+
+  const $ = (sel) => ui.querySelector(sel);
+  const fileInput = $("#meh-files");
+  const statusEl = $("#meh-status");
+  const autoDownloadEl = $("#meh-autodownload");
+
+  $("#meh-close").onclick = () => ui.remove();
+  $("#meh-pick").onclick = () => fileInput.click();
+
+  function log(msg) {
+    statusEl.textContent += `\n${msg}`;
+    statusEl.scrollTop = statusEl.scrollHeight;
+  }
+
+  function resetLog() {
+    statusEl.textContent = "";
+  }
+
+  function escapeHtml(str) {
+    return String(str ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function normalizeText(str) {
+    return String(str ?? "")
+      .replace(/^\uFEFF/, "")
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n");
+  }
+
+  function stripCalcBlocks(text) {
+    return normalizeText(text)
+      .replace(/\[\[calc:[\s\S]*?\]\]/gi, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
+  function cleanExplanationPrefix(text) {
+    // Menghapus kata-kata awalan yang umum di explanation
+    return stripCalcBlocks(text)
+      .replace(/^\s*(Correct|Incorrect|Well done|Excellent|Exactly|Yes|Not quite|Not really|Quite right|Good answer|Very good)[\s!.,-]*\s*/i, "")
+      .trim();
+  }
+
+  function extractExamNumber(filename) {
+    const base = String(filename || "").replace(/\.[^.]+$/, "");
+    const m = base.match(/(\d{2})(?!.*\d)/);
+    if (m) return String(parseInt(m[1], 10));
+    const any = base.match(/(\d+)(?!.*\d)/);
+    if (any) return String(parseInt(any[1], 10));
+    return "0";
+  }
+
+  function getSafeItems(data) {
+    const items = Array.isArray(data?.exam_session_items) ? data.exam_session_items : [];
+    const sections = Array.isArray(data?.exam_session_sections) ? data.exam_session_sections : [];
+
+    const sectionOrder = new Map();
+    sections.forEach((sec, idx) => {
+      sectionOrder.set(sec?.id, Number(sec?.position ?? idx + 1));
+    });
+
+    return items
+      .map((item) => ({
+        ...item,
+        __sectionPosition: sectionOrder.get(item?.exam_session_section_id) ?? 9999,
+        __itemPosition: Number(item?.position ?? 9999)
+      }))
+      .sort((a, b) => {
+        if (a.__sectionPosition !== b.__sectionPosition) {
+          return a.__sectionPosition - b.__sectionPosition;
+        }
+        return a.__itemPosition - b.__itemPosition;
+      });
+  }
+
+  function parseQuestions(data) {
+    const items = getSafeItems(data);
+    const total = items.length || Number(data?.exam_session?.questions_total || 0);
+
+    return items.map((item, idx) => {
+      const d = item?.content_unit?.data || {};
+      const steps = Array.isArray(d.steps) ? d.steps : [];
+      const responses = Array.isArray(d.responses) ? d.responses : [];
+
+      const rootStep = steps.find((s) => s?.is_root) || steps[0] || {};
+      const questionText = stripCalcBlocks(rootStep?.prompt || "");
+
+      const choices = responses.map((r) => ({
+        value: stripCalcBlocks(r?.value || ""),
+        isCorrect: !!r?.is_correct,
+        nextStepId: r?.next_step_id
+      }));
+
+      const correctChoice = choices.find((c) => c.isCorrect) || null;
+      const explanationStep = correctChoice
+        ? steps.find((s) => Number(s?.id) === Number(correctChoice.nextStepId))
+        : null;
+
+      const explanationText = cleanExplanationPrefix(explanationStep?.prompt || "");
+
+      return {
+        index: idx + 1,
+        total,
+        questionText,
+        choices,
+        explanationText
+      };
+    });
+  }
+
+  function buildHtml(title, questions, includeAnswers) {
+    const payload = { title, questions };
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>${escapeHtml(title)}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <script>
+    window.__MOCK_EXAM_DATA__ = ${JSON.stringify(payload)};
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+  <!-- MathJax v2.7.9 -->
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        // Menghapus '$' tunggal agar tidak bentrok dengan harga mata uang, hanya menggunakan '$$' dan '\\('
+        inlineMath: [['\\\\(','\\\\)'], ['$$','$$']],
+        displayMath: [['\\\\\\[','\\\\\\]']],
+        processEscapes: true
+      },
+      "HTML-CSS": { linebreaks: { automatic: true } },
+      CommonHTML: { linebreaks: { automatic: true } },
+      SVG: { linebreaks: { automatic: true } }
+    });
+  </script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.9/MathJax.js?config=TeX-AMS_CHTML"></script>
+
+  <style>
+    @page {
+      size: A4;
+      margin: 14mm 12mm;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #fff;
+      color: #111;
+      font-family: Georgia, "Times New Roman", serif;
+      line-height: 1.5;
+      font-size: 13.5pt;
+      overflow-wrap: break-word; /* Mencegah pelebaran halaman akibat teks/rumus panjang */
+      word-wrap: break-word;
+    }
+
+    body {
+      padding: 16px;
+    }
+
+    .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: #fff;
+      border-bottom: 1px solid #ddd;
+      padding: 10px 0 12px;
+      margin-bottom: 14px;
+      font-family: Arial, sans-serif;
+    }
+
+    .toolbar button {
+      border: 1px solid #bbb;
+      background: #f8f8f8;
+      border-radius: 6px;
+      padding: 8px 12px;
+      cursor: pointer;
+      margin-right: 8px;
+    }
+
+    .doc-title {
+      font-family: Arial, sans-serif;
+      font-size: 19pt;
+      font-weight: 700;
+      margin: 0 0 16px 0;
+    }
+
+    .question-block {
+      break-inside: avoid-page;
+      page-break-inside: avoid;
+      margin: 0 0 12px 0;
+    }
+
+    .q-header {
+      font-family: Arial, sans-serif;
+      font-weight: 700;
+      font-size: 15.5pt;
+      margin: 0 0 8px 0;
+    }
+
+    .question-text {
+      margin-bottom: 10px;
+    }
+
+    .choices-list {
+      margin: 0 0 8px 28px;
+      padding: 0;
+      list-style-type: upper-alpha;
+    }
+
+    .choice-item {
+      margin: 0 0 8px 0;
+      padding-left: 4px;
+    }
+
+    .choice-item::marker {
+      font-weight: 700;
+    }
+
+    .choice-line {
+      display: inline;
+    }
+
+    /* Paksa bold di keseluruhan konten choice yang correct */
+    .choice-line.correct, .choice-line.correct * {
+      font-weight: 700 !important;
+    }
+
+    .explanation-box {
+      background: #f2f2f2;
+      border: 1px solid #d8d8d8;
+      border-radius: 4px;
+      padding: 12px 14px;
+      margin-top: 10px;
+    }
+
+    .explanation-title {
+      font-family: Arial, sans-serif;
+      font-weight: 700;
+      margin: 0 0 8px 0;
+    }
+
+    .question-separator {
+      border: none;
+      border-top: 1px solid #ccc;
+      margin: 24px 0;
+    }
+
+    p { margin: 0 0 8px 0; }
+    ul, ol { margin-top: 0; margin-bottom: 8px; }
+
+    table {
+      border-collapse: collapse;
+      width: auto;
+      max-width: 100%;
+      margin: 8px 0;
+      font-size: 1em;
+    }
+    th, td {
+      border: 1px solid #bbb;
+      padding: 6px 8px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th { background: #f3f3f3; font-weight: 700; }
+    img { max-width: 100%; height: auto; display: block; margin: 8px 0; }
+
+    /* Ini membuat math display block tidak maksa pindah baris jika posisinya di dalam kalimat */
+    .MathJax_Display {
+      display: inline-block !important;
+      margin: 0 !important;
+      text-align: left !important;
+    }
+
+    @media print {
+      body { padding: 0; }
+      .toolbar { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <button onclick="window.print()">Print</button>
+    <button onclick="downloadThisHtml()">Download HTML</button>
+  </div>
+
+  <div class="doc-title">${escapeHtml(title)}</div>
+  <div id="content">Rendering...</div>
+
+  <script>
+    const INCLUDE_ANSWERS = ${includeAnswers ? "true" : "false"};
+
+    function protectMath(text) {
+      let s = String(text || "");
+      const store = [];
+      const save = (m) => {
+        const key = '@@MATH_' + store.length + '@@';
+        store.push(m);
+        return key;
+      };
+
+      /* Regex aman untuk melindungi math agar tidak rusak oleh marked.js */
+      s = s.replace(/\\$\\$[\\s\\S]+?\\$\\$/g, save);
+      s = s.replace(/\\\\\\[[\\s\\S]+?\\\\\\]/g, save);
+      s = s.replace(/\\\\\\([\\s\\S]+?\\\\\\)/g, save);
+
+      return { text: s, store };
+    }
+
+    function restoreMath(html, store) {
+      return html.replace(/@@MATH_(\\d+)@@/g, function(_, i) {
+        return store[Number(i)] || '';
+      });
+    }
+
+    function renderMarkdownWithMath(raw) {
+      const protectedData = protectMath(raw);
+      marked.setOptions({ gfm: true, breaks: true });
+      let html = marked.parse(protectedData.text);
+      html = restoreMath(html, protectedData.store);
+      return html;
+    }
+
+    function makeChoiceHtml(choice) {
+      const inner = renderMarkdownWithMath(choice.value);
+      if (INCLUDE_ANSWERS && choice.isCorrect) {
+        return '<li class="choice-item"><span class="choice-line correct">' + inner + '</span></li>';
+      }
+      return '<li class="choice-item"><span class="choice-line">' + inner + '</span></li>';
+    }
+
+    function makeQuestionBlock(q) {
+      const questionHtml = renderMarkdownWithMath(q.questionText);
+      const choicesHtml = q.choices.map(makeChoiceHtml).join('');
+
+      const explanationHtml = INCLUDE_ANSWERS
+        ? '<div class="explanation-box">' +
+            '<div class="explanation-title">Explanation:</div>' +
+            '<div class="explanation-body">' + renderMarkdownWithMath(q.explanationText || '-') + '</div>' +
+          '</div>'
+        : '';
+
+      return '' +
+        '<section class="question-block">' +
+          '<div class="q-header">Question ' + q.index + ' of ' + q.total + '</div>' +
+          '<div class="question-text">' + questionHtml + '</div>' +
+          '<ol class="choices-list">' + choicesHtml + '</ol>' +
+          explanationHtml +
+        '</section>' +
+        '<hr class="question-separator" />';
+    }
+
+    function renderAll() {
+      const root = document.getElementById("content");
+      const data = window.__MOCK_EXAM_DATA__;
+      root.innerHTML = data.questions.map(makeQuestionBlock).join("");
+
+      if (window.MathJax) {
+        MathJax.Hub.Queue(["Typeset", MathJax.Hub, root]);
+      }
+    }
+
+    function downloadThisHtml() {
+      const html = document.documentElement.outerHTML;
+      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = ${JSON.stringify(title + ".html")};
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+
+    renderAll();
+  </script>
+</body>
+</html>`;
+  }
+
+  async function readTextFile(file) {
+    return await file.text();
+  }
+
+  function parseJson(text, fileName) {
+    try {
+      return JSON.parse(normalizeText(text));
+    } catch (e) {
+      throw new Error("Gagal parse JSON: " + fileName);
+    }
+  }
+
+  function validateParsedData(data, fileName) {
+    if (!Array.isArray(data?.exam_session_items)) {
+      throw new Error("File " + fileName + " tidak punya exam_session_items.");
+    }
+  }
+
+  function openHtmlInNewTab(html) {
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const win = window.open(url, "_blank");
+    if (!win) {
+      alert("Popup diblokir browser. Izinkan popups lalu jalankan lagi.");
+      return;
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+
+  function downloadHtml(html, filename) {
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  $("#meh-process").onclick = async () => {
+    resetLog();
+
+    const files = Array.from(fileInput.files || []);
+    if (!files.length) {
+      log("Belum ada file dipilih.");
+      return;
+    }
+
+    log("Memproses " + files.length + " file...");
+
+    for (const file of files) {
+      try {
+        log("\n[START] " + file.name);
+
+        const text = await readTextFile(file);
+        const data = parseJson(text, file.name);
+        validateParsedData(data, file.name);
+
+        const examNumber = extractExamNumber(file.name);
+        const questions = parseQuestions(data);
+
+        if (!questions.length) {
+          throw new Error("Tidak ada soal ditemukan di " + file.name);
+        }
+
+        const questionTitle = "Mock Exam " + examNumber + " - Questions";
+        const answerTitle = "Mock Exam " + examNumber + " - Answers";
+
+        const questionHtml = buildHtml(questionTitle, questions, false);
+        const answerHtml = buildHtml(answerTitle, questions, true);
+
+        openHtmlInNewTab(questionHtml);
+        openHtmlInNewTab(answerHtml);
+
+        if (autoDownloadEl.checked) {
+          downloadHtml(questionHtml, questionTitle + ".html");
+          downloadHtml(answerHtml, answerTitle + ".html");
+        }
+
+        log("[OK] " + file.name + " → selesai");
+      } catch (err) {
+        console.error(err);
+        log("[ERROR] " + file.name + ": " + err.message);
+      }
+    }
+
+    log("\nSelesai.");
+  };
+})();
