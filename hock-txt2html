@@ -242,8 +242,21 @@
     margin-bottom: 6px;
   }
 
-  ul.choices { list-style: none; padding-left: 0; }
-  ul.choices li.correct { font-weight: bold; }
+  ul.choices {
+  list-style: none;
+  padding-left: 0;
+  margin-left: 0;
+}
+
+ul.choices li {
+  padding-left: 22px;
+  text-indent: -22px;
+  margin-bottom: 6px;
+}
+
+ul.choices li.correct {
+  font-weight: bold;
+}
 
   .explanation {
     background: #f2f2f2;
