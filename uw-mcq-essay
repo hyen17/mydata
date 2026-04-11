@@ -1,0 +1,1306 @@
+(() => {
+  // ---------- Config / Utils ----------
+  const letters = (n) => String.fromCharCode(64 + n); // 1->A
+
+  // ---------- Sanitizers & Math Fixers ----------
+  
+  // FIX: Menambahkan class wrapper dan CSS khusus untuk mencegah font tebal/hitam
+  function fixWileyMathSVG(html) {
+    if (!html) return html;
+    if (!html.includes('data-svg')) return html;
+
+    const div = document.createElement('div');
+    div.innerHTML = html;
+
+    const spans = div.querySelectorAll('span[data-svg]');
+    let changed = false;
+
+    spans.forEach(span => {
+      const svgContent = span.getAttribute('data-svg');
+      if (svgContent) {
+        const spanWrapper = document.createElement('span');
+        // Tambahkan class khusus untuk CSS targeting
+        spanWrapper.className = 'mjx-svg-fix'; 
+        spanWrapper.style.display = 'inline-block';
+        spanWrapper.style.verticalAlign = 'middle';
+        
+        // innerHTML akan otomatis mendekode entities di dalam string SVG
+        spanWrapper.innerHTML = svgContent;
+        
+        span.replaceWith(spanWrapper);
+        changed = true;
+      }
+    });
+
+    return changed ? div.innerHTML : html;
+  }
+
+  function removeChoicePercentSpans(html) {
+    if (!html) return html;
+    return html
+      .replace(/<span[^>]*class=["']?choice-percent["']?[^>]*>.*?<\/span>/gi, '')
+      .replace(/\(\s*\d{1,3}%\s*\)/g, '');
+  }
+
+  function cleanMathTags(html) {
+    if (!html) return html;
+    let h = String(html);
+    h = h.replace(/<\/?\w+:displayeditem[^>]*>/gi, ''); 
+    h = h.replace(/xmlns(:\w+)?="[^"]*"/gi, '');
+    return h;
+  }
+
+  function removeVideoAndEmptyP(html) {
+    if (!html) return html;
+    let h = String(html);
+
+    h = h.replace(/<a\b[^>]*>\s*Video\s*<\/a>/gi, '');
+
+    h = h.replace(/<p\b[^>]*>[\s\S]*?<\/p>/gi, (m) => {
+      if (/<img\b/i.test(m)) return m;
+      if (/<svg|data-svg/i.test(m)) return m;
+      if (/^<p[^>]*>\s*(?:&nbsp;|\s|<br\s*\/?>)*<\/p>$/i.test(m)) return '';
+      return m;
+    });
+
+    h = h.replace(/>\s+</g, '><');
+    return h;
+  }
+
+  function removeEssayPrompt(html) {
+    if (!html) return html;
+    return String(html).replace(/type\s+your\s+response\s+here\b[.\s:]*/gi, '');
+  }
+
+  function removeInternalLinks(html) {
+  if (!html) return html;
+
+  const div = document.createElement('div');
+  div.innerHTML = html;
+
+  const links = div.querySelectorAll('a[href]');
+
+  links.forEach(a => {
+    const href = (a.getAttribute('href') || '').trim();
+
+    const isExternalLink =
+      /^(https?:)?\/\//i.test(href) ||
+      /^mailto:/i.test(href) ||
+      /^tel:/i.test(href) ||
+      /^#/i.test(href);
+
+    const isInternalLink =
+      /^\d+$/.test(href) ||
+      href === '' ||
+      (!isExternalLink && !/[./:?#]/.test(href));
+
+    if (isInternalLink) {
+      a.replaceWith(document.createTextNode(a.textContent || ''));
+    }
+  });
+
+  return div.innerHTML;
+}
+
+  function sanitizeContent(html) {
+    if (!html) return '';
+    let s = String(html);
+    
+    s = fixWileyMathSVG(s);
+    s = cleanMathTags(s);
+    s = removeChoicePercentSpans(s);
+    s = removeVideoAndEmptyP(s);
+    s = removeEssayPrompt(s);
+    s = removeInternalLinks(s);
+s = applySmartTableClasses(s);
+    
+    return s.trim();
+  }
+
+  function addTdSpacing(html) {
+    if (!html) return html;
+    return html.replace(/<\/td>/gi, '&nbsp;&nbsp;</td>');
+  }
+
+  function applySmartTableClasses(html) {
+  if (!html) return html;
+
+  const div = document.createElement('div');
+  div.innerHTML = html;
+
+  const tables = div.querySelectorAll('table');
+
+  tables.forEach(table => {
+    const classAttr = table.getAttribute('class') || '';
+    const borderAttr = (table.getAttribute('border') || '').trim();
+    const styleAttr = (table.getAttribute('style') || '').toLowerCase();
+
+    const hasAnyKnownTableClass =
+      /table-default-style|table-No-Border|table-header-footer-style|table-header-subheader-footer-style|table-remove-header-borders-style|table-remove-footer-borders-style|table-custom-style|table-custom-style2|table-footer-only-style|table-CFA-|gr-table-|border_outer_none/.test(classAttr);
+
+    const hasDefaultLikeClass =
+      /table-default-style|table-custom-style|table-CFA-default-style|gr-table-default-style/.test(classAttr);
+
+    // Kalau belum punya class table styling, beri table-default-style
+    if (!hasDefaultLikeClass) {
+      table.classList.add('table-default-style');
+    }
+
+    // Kalau tabel aslinya tanpa border, tambahkan table-No-Border
+    const isOriginallyNoBorder =
+      borderAttr === '0' ||
+      /\bborder_outer_none\b/.test(classAttr) ||
+      /border\s*:\s*none/.test(styleAttr);
+
+    if (isOriginallyNoBorder) {
+      table.classList.add('table-No-Border');
+    }
+  });
+
+  return div.innerHTML;
+}
+
+  // ---------- UI ----------
+  const panel = document.createElement('div');
+  panel.style.cssText = `
+    position:fixed; right:18px; bottom:18px; z-index:2147483647;
+    background:#1f2937; color:#fff; padding:14px; width:380px;
+    border-radius:10px; font-family:Arial, Helvetica, sans-serif;
+    box-shadow:0 8px 30px rgba(0,0,0,0.4);
+  `;
+
+  panel.innerHTML = `
+    <div style="font-weight:700; font-size:15px; margin-bottom:8px;">JSON → HTML (Print Safe Math)</div>
+    <div style="font-size:13px; margin-bottom:8px;">Upload JSON. Script akan memperbaiki tampilan rumus agar jelas saat diprint.</div>
+
+    <input id="fileInput" type="file" accept=".json,.txt,application/json" multiple style="width:100%; margin-bottom:8px;">
+
+    <div style="margin-bottom:6px;">Output mode:</div>
+    <label style="display:block; margin-bottom:6px;"><input type="radio" name="outmode" value="separate" checked> Separate (each file → own output)</label>
+    <label style="display:block; margin-bottom:10px;"><input type="radio" name="outmode" value="join"> Join (merge all files)</label>
+
+    <div style="margin-bottom:6px;">Page-break mode:</div>
+    <label style="display:block;"><input type="radio" name="pb" value="normal" checked> HTML Normal</label>
+    <label style="display:block;"><input type="radio" name="pb" value="smart"> HTML Smart</label>
+    <label style="display:block; margin-bottom:8px;"><input type="radio" name="pb" value="each"> HTML Page-break per Question</label>
+
+    <label style="display:block; margin-bottom:10px;"><input id="pdfChk" type="checkbox"> Generate PDF (answers)</label>
+
+    <button id="genBtn" style="
+      width:100%; padding:10px; background:#10b981; color:#fff; border:none;
+      border-radius:6px; font-weight:700; cursor:pointer;
+    ">Generate HTML</button>
+
+    <label style="display:block; margin-top:10px;"><input id="autoDl" type="checkbox"> Auto Download (default: No)</label>
+
+    <div id="statusArea" style="margin-top:10px; font-size:13px; color:#d1d5db;"></div>
+  `;
+
+  document.body.appendChild(panel);
+
+  const fileInput = panel.querySelector('#fileInput');
+  const genBtn = panel.querySelector('#genBtn');
+  const statusArea = panel.querySelector('#statusArea');
+  const autoDlChk = panel.querySelector('#autoDl');
+
+  const setStatus = (t) => { statusArea.innerText = t; console.log('[gen]', t); };
+
+  // ---------- CSS ----------
+  function cssFor(mode) {
+    let extra = '';
+    if (mode === 'smart') extra = `.q-block{page-break-inside:avoid;}`;
+    if (mode === 'each') extra = `.q-block{page-break-before:always;} .q-block:first-child{page-break-before:avoid;}`;
+
+    return `
+      body{font-family:Inter, Arial, Helvetica, sans-serif; padding:28px; color:#111; line-height:1.45}
+      .q-block{margin-bottom:22px}
+      .reading-block{margin-bottom:22px; page-break-before:always;}
+      .reading-title{font-size:20px; font-weight:700; margin-bottom:10px;}
+      .reading-text{margin-bottom:12px;}
+
+      .q-header{font-weight:700; font-size:18px; margin-bottom:8px}
+      .q-text{margin-bottom:10px}
+
+      ol.choices{list-style:none; padding-left:0; margin:0}
+      ol.choices li{
+        margin:0 !important; padding:6px 4px !important;
+        line-height:1.25; display:flex; align-items:flex-start; gap:8px;
+      }
+      .letter{
+        font-weight:700;
+        margin-right:4px;
+        flex:0 0 auto;
+        white-space:nowrap;
+      }
+      .choice-content{
+        flex:1 1 auto;
+        min-width:0;
+      }
+
+      .correct{font-weight:700; background:#e6f9ea; border:1px solid #2e7d32}
+      .tick{color:#2e7d32; font-weight:700; margin-left:8px; font-size:16px}
+
+            /*table-default-style - start*/
+      .table-default-style{
+          border-collapse: collapse !important;
+          font-size:1em;
+          margin-top:10px;
+          max-width:900px;
+      }
+
+      .table-default-style td, .table-default-style th, .table-default-style td[rowspan] {
+          border: solid 1px black;
+          vertical-align: top !important;
+      }
+
+      .table-default-style *{
+          -webkit-transform:none !important;
+      }
+
+      .table-default-style th,.table-default-style td {
+          padding:5px !important;
+      }
+
+      .table-default-style p {
+          padding:0px !important;
+          margin:0px !important;
+      }
+
+      .table-default-style ul, .table-default-style ol {
+          padding-left: 20px !important;
+          margin: 0px !important;
+      }
+
+      .table-default-style ul ul, .table-default-style ul ol, .table-default-style ol ol, .table-default-style ol ul {
+          padding-left: 20px !important;
+          margin: 0px !important;
+      }
+      /*table-default-style - end*/
+
+      /*table-No-Border - start*/
+      .table-No-Border td, .table-No-Border th, .table-No-Border td[rowspan] {
+          border: none;
+      }
+      /*table-No-Border - end*/
+
+      /*table-header-footer-style - start*/
+      .table-header-footer-style tr:first-child{
+          font-size:1.2em;
+          font-weight:600;
+      }
+
+      .table-header-footer-style tr:first-child strong{
+          font-weight:600;
+      }
+
+      .table-header-footer-style tr:last-child td{
+          font-size: 0.9em !important;
+          border:none;
+      }
+      /*table-header-footer-style - end*/
+
+      /*table-header-subheader-footer-style - start*/
+      .table-header-subheader-footer-style tr:nth-child(2) {
+          font-size:1em;
+          font-weight:600;
+      }
+
+      .table-header-subheader-footer-style tr:nth-child(2) strong{
+          font-weight:600;
+      }
+      /*table-header-subheader-footer-style - end*/
+
+      /* table-remove-header-borders-style - start */
+      .table-remove-header-borders-style tr:first-child td {
+          border: none !important;
+          text-align: center !important;
+          font-weight: 600 !important;
+      }
+      /* table-remove-header-borders-style - end */
+
+      /*table-remove-footer-borders-style - start*/
+      .table-remove-footer-borders-style tr:last-child td {
+          border: none !important;
+          font-size: 0.9em;
+      }
+      /*table-remove-footer-borders-style - end*/
+
+      .psgexrpt {
+        background-color: lightgray;
+      }
+
+      .drsexrpt {
+        margin-bottom: 10px;
+        padding: 10px 10px 5px 20px;
+        border: 1px solid #eee;
+        border-left-width: 5px;
+        border-radius: 3px;
+        border-left-color: #1b809e;
+        background-color: #F3F3F4;
+      }
+
+      /*table-custom-style - start*/
+      .table-custom-style {
+          border-collapse: collapse;
+          font-size:1em;
+      }
+
+      .table-custom-style, .table-custom-style td,  .table-custom-style th {
+          border: solid 1px !important;
+      }
+
+      .table-custom-style th,.table-custom-style td {
+          padding:5px !important;
+      }
+
+      .table-custom-style p {
+          padding:0px !important;
+          margin:0px !important;
+      }
+      /*table-custom-style - end*/
+
+      /*table-custom-style2 - start*/
+      .table-custom-style2 tr:first-child, .table-custom-style2 tr:last-child {
+          font-weight:bold;
+          font-size:1.1em;
+      }
+      /*table-custom-style2 - end*/
+
+      /*table-footer-only-style - start*/
+      .table-footer-only-style tr:first-child {
+          font-size: 1em;
+          font-weight: normal;
+      }
+
+      .table-footer-only-style tr:first-child strong {
+          font-weight: 600;
+      }
+
+      .table-footer-only-style tr:last-child td {
+          font-size: 0.9em !important;
+          border: none;
+      }
+      /*table-footer-only-style - end*/
+
+      /*These styles used mainly in clients - Start*/
+      #questionText table, #explanation table, #questionAbstract table,#hintBox table, .exhibit table, #collegeprepHintPopup table {
+          margin-left: auto;
+          margin-right: auto;
+      }
+
+      #questionText table tr td, #explanation table tr td, #questionAbstract table tr td, #hintBox table tr td, .exhibit table tr td, #collegeprepHintPopup table tr td {
+          padding: 5px 10px;
+      }
+
+      #questionText img, #explanation img, #questionAbstract img, .collegeprep #hintBox img, .exhibit img, #collegeprepHintPopup img {
+          margin-left: auto;
+          margin-right: auto;
+          display: block;
+      }
+
+      @media all and (max-width: 767px) {
+          .equation-scroll {
+              overflow-x:auto;
+              padding:5px;
+              background-color: #f1f1f5;
+              color:black !important;
+          }
+
+          .equation-scroll table{
+              color:black !important;
+          }
+      }
+
+      .symbol-column{
+          text-align:center;
+          width:25px;
+      }
+      /*These are used mainly in clients - End*/
+
+      /*This class used for the message that is appended for the short explanation questions in NCLEX   - Start*/
+      .short-explanation-msg{
+          margin-bottom:10px;
+          padding: 10px 10px 5px 20px;
+          border: 1px solid #eee;
+          border-left-width: 5px;
+          border-radius: 3px;
+          border-left-color: #1b809e;
+          background-color: #F3F3F4;
+      }
+      /*This class used for the message that is appended for the short explanation questions in NCLEX   - End*/
+
+      /* This class is to remove indentation before each paragraph and add space below each stanza in a poem for AP Lit -> Unit = Poetry and FRQ Types = Poetry Analysis START*/
+      .para-ap-literature-styling{
+          margin-bottom: 10px;
+          text-indent:0em !important;
+      }
+      /* This class is to remove indentation before each paragraph and add space below each stanza in a poem for AP Lit -> Unit = Poetry and FRQ Types = Poetry Analysis END*/
+
+      /*This class is used for the AP Lit Poetry Passages to give line breaks between Stanzas. This class will be a replacement of '.para-ap-literature-styling'. Used by CMS, LP and B2C Platforms. This new style name is for making it generic so that it can be used for other products as well. - Start*/
+      .no-line-number-between-paragraphs {
+          margin-bottom: 10px;
+          text-indent: 0em !important;
+      }
+      /*This class is used for the AP Lit Poetry Passages to give line breaks between Stanzas. This class will be a replacement of '.para-ap-literature-styling'. Used by CMS, LP and B2C Platforms. This new style name is for making it generic so that it can be used for other products as well. - end*/
+
+      .TableCellHighlight {
+          background-color: #e5e5e5;
+      }
+
+      /*This class used for the message that is shown on top of each question in ACT Reading   - Start*/
+      .question-depends-on{
+          margin-bottom: 10px;
+          padding: 5px 10px 5px 10px;
+          border: 1px solid black;
+          border-radius: 3px;
+          text-align: center;
+      }
+      /*This class used for the message that is shown on top of each question in ACT Reading   - End*/
+
+      /*This class used for the message that is shown on top of ACT English Passage   - Start*/
+      .passage-header {
+         margin-top:10px;
+         margin-bottom: 10px;
+         padding: 5px 10px 5px 10px;
+         border: 1px solid black;
+         border-radius: 3px;
+         text-align: left;
+      }
+      /*This class used for the message that is shown on top of ACT English Passage   - END*/
+
+      /*This class used to give a border around exhibit headers in AP English - Start*/
+      .FRQ-Exhibit-Header {
+         border: solid 1px;
+         width:70%;
+         padding:5px;
+         margin:auto;
+         text-align:center;
+      }
+      /*This class used to give a border around exhibit headers in AP English - End*/
+
+      /*This class used for the answer choice header tables which has border set as 1px. This adds padding to the whole table   - Start*/
+      .AnswerChoiceTablePadding > tbody > tr > td {
+          padding-left: 5px;
+          padding-right: 5px;
+      }
+      /*This class used for the answer choice header tables which has border set as 1px. This adds padding to the whole table   - END*/
+
+      /* class to underline column header in answer choices - Start*/
+      .underlineColumnHeader{
+          border-bottom: solid 1px black;
+      }
+      /* class to underline column header in answer choices - End*/
+
+      /* Class to show calculator icon in Calculus & AP Stats - Start*/
+      .calc-icon {
+          display: inline-block;
+          height: 22px;
+          width: 22px;
+          background-image: url("https://www.uworld.com/media/L43000.png");
+          margin-right: 10px;
+      }
+      /* Class to show calculator icon in Calculus & AP Stats - End*/
+
+      /* Class to show chem icon in AP Stats - Start*/
+      .chem-icon {
+          display: inline-block;
+          height: 30px;
+          width: 30px;
+          background-image: url("https://www.uworld.com/media/L63517.png");
+          margin-right: 10px;
+      }
+      /* Class to show chem icon in AP Stats - End*/
+
+      /* Use this class to show background color on USMLE Set Question's Header Message - Start*/
+      #vignettedescriptor {
+          background-color: #c0c0c0;
+      }
+      /* Use this class to show background color on USMLE Set Question's Header Message - End*/
+
+      /* Use this class to show border to the underline tag in SAT Writing - Start*/
+      u.replaceUnderline{
+          text-decoration:none !important;
+          border-bottom:1px solid !important;
+      }
+      /* Use this class to show border to the underline tag in SAT Writing - End*/
+
+      /* Using these classes to force left/right in TBS DRS questions - End*/
+      .forceleft{
+          margin-left: inherit !important;
+      }
+
+      .forceright{
+          margin-right: inherit !important;
+      }
+      /* Using these classes to force left/right in TBS DRS questions - End*/
+
+      .footnoteStyle {
+          font-size: 85%;
+          font-style:italic;
+      }
+
+      /*table styles used by CFA only - start*/
+      .table-CFA-default-style {
+          border-collapse: collapse !important;
+          font-size: 1em;
+          margin-top: 10px;
+          max-width: 900px;
+      }
+
+      .table-CFA-default-style * {
+          -webkit-transform: none !important;
+      }
+
+      .table-CFA-default-style th, .table-CFA-default-style td {
+          padding: 5px !important;
+      }
+
+      .table-CFA-default-style p {
+          padding: 0px !important;
+          margin: 0px !important;
+      }
+
+      .table-CFA-default-style ul, .table-CFA-default-style ol {
+          padding-left: 20px !important;
+          margin: 0px !important;
+      }
+
+      .table-CFA-default-style ul ul, .table-CFA-default-style ul ol, .table-CFA-default-style ol ol, .table-CFA-default-style ol ul {
+          padding-left: 20px !important;
+          margin: 0px !important;
+      }
+
+      .table-CFA-Style-0 {
+          border-collapse: collapse !important;
+      }
+
+      .table-CFA-Style-0 > tbody > tr:first-child {
+          font-weight: bold;
+          border-top: 2pt solid black;
+          border-bottom: 2pt solid black;
+      }
+
+      .table-CFA-Style-0 > tbody > tr:last-child {
+          border-bottom: 2pt solid black;
+      }
+
+      .table-CFA-Style-0 > tbody > tr:first-child > td:not(:first-child),
+      .table-CFA-Style-0 > tbody > tr:not(:first-child) > td:not(:first-child) {
+          text-align: center;
+      }
+
+      .table-CFA-Style-0 > tbody > tr:not(:first-child) > td:first-child {
+          text-align: left;
+      }
+
+      .table-CFA-Style-1 > tbody > tr:first-child > td:first-child {
+          text-align: left;
+      }
+
+      .table-CFA-Style-2 > tbody > tr:first-child > td:first-child {
+          text-align: center;
+      }
+
+      .table-CFA-Style-3 {
+          border-collapse: collapse !important;
+      }
+
+      .table-CFA-Style-3 > tbody > tr:first-child {
+          border-top: 2pt solid black;
+      }
+
+      .table-CFA-Style-3 > tbody > tr:last-child {
+          border-bottom: 2pt solid black;
+      }
+
+      .table-CFA-Style-3 > tbody > tr > td:not(:first-child) {
+          text-align: center;
+      }
+
+      .table-CFA-Style-3 > tbody > tr > td:first-child {
+          text-align: left;
+      }
+
+      .table-CFA-Style-4 {
+          border-collapse: collapse !important;
+      }
+
+      .table-CFA-Style-4 > tbody > tr:first-child {
+          font-weight: bold;
+          border-top: 2pt solid black;
+      }
+
+      .table-CFA-Style-4 > tbody > tr:first-child > td:not(:first-child) {
+          border-bottom: 1pt solid black;
+          text-align: center;
+      }
+
+      .table-CFA-Style-4 > tbody > tr:nth-child(2) {
+          font-weight: bold;
+          border-bottom: 2pt solid black;
+      }
+
+      .table-CFA-Style-4 > tbody > tr:last-child {
+          border-bottom: 2pt solid black;
+      }
+
+      .table-CFA-Style-4 > tbody > tr:not(:first-child) > td:not(:first-child) {
+          text-align: center;
+      }
+
+      .table-CFA-Style-4 > tbody > tr:not(:first-child) > td:first-child {
+          text-align: left;
+      }
+
+      .table-CFA-Style-4 > tbody > tr:first-child > td:first-child {
+          text-align: center;
+      }
+
+      .table-CFA-Style-5 {
+          border-collapse: collapse!important;
+      }
+
+      .table-CFA-Style-5 > tbody > tr:first-child {
+          font-weight: bold;
+          border-top: 2pt solid black;
+      }
+
+      .table-CFA-Style-5 > tbody > tr:first-child > td:not(:nth-child(-n+2)) {
+          border-bottom: 1pt solid black;
+      }
+
+      .table-CFA-Style-5 > tbody > tr:nth-child(2) {
+          font-weight: bold;
+          border-bottom: 2pt solid black;
+      }
+
+      .table-CFA-Style-5 > tbody > tr:last-child {
+          border-bottom: 2pt solid black;
+      }
+
+      .table-CFA-Style-5 > tbody > tr:first-child > td:not(:first-child),
+      .table-CFA-Style-5 > tbody > tr:not(:first-child) > td:not(:first-child) {
+          text-align: center;
+      }
+
+      .table-CFA-Style-5 > tbody > tr:not(:first-child) > td:first-child {
+          text-align: left;
+      }
+
+      .table-CFA-Style-5 > tbody > tr:first-child > td:first-child {
+          text-align: center;
+      }
+      /*table styles used by CFA only - end*/
+
+      /*iBank Highres Image Project - start*/
+      .anschs_ekg_img {
+          max-width: 700px !important;
+      }
+
+      .anschs_non_ekg_img {
+          max-width: 300px !important;
+      }
+
+      .imgWidthHelper {
+          max-width: 700px !important;
+      }
+      /*iBank Highres Image Project - end*/
+
+      /*gr-table-remove-header-borders-style - start*/
+      .gr-table-remove-header-borders-style tr:first-child td {
+          border: none !important;
+          text-align: center !important;
+          font-weight: 600 !important;
+      }
+      /*gr-table-remove-header-borders-style - end*/
+
+      /*gr-table-remove-footer-borders-style - start*/
+      .gr-table-remove-footer-borders-style tr:last-child td {
+          border: none !important;
+          font-size: 0.9em;
+      }
+      /*gr-table-remove-footer-borders-style - end*/
+
+      /*gr-table-default-style - start*/
+      .gr-table-default-style {
+          border-collapse: collapse !important;
+          font-size: 1em;
+          margin-top: 10px;
+          max-width: 900px;
+      }
+
+      .gr-table-default-style td, .gr-table-default-style th, .gr-table-default-style td[rowspan] {
+          border: solid 1px #DDDDDD;
+      }
+
+      .gr-table-default-style * {
+          -webkit-transform: none !important;
+      }
+
+      .gr-table-default-style th, .gr-table-default-style td {
+          padding: 5px !important;
+      }
+
+      .gr-table-default-style p {
+          padding: 0px !important;
+          margin: 0px !important;
+      }
+
+      .gr-table-default-style ul, .gr-table-default-style ol {
+          padding-left: 20px !important;
+          margin: 0px !important;
+      }
+
+      .gr-table-default-style ul ul, .gr-table-default-style ul ol, .gr-table-default-style ol ol, .gr-table-default-style ol ul {
+          padding-left: 20px !important;
+          margin: 0px !important;
+      }
+      /*gr - table-default-style - end*/
+
+      /*gr-table-No-Border - start*/
+      .gr-table-No-Border td, .gr-table-No-Border th, .gr-table-No-Border td[rowspan] {
+          border: none;
+      }
+      /*gr-table-No-Border - end*/
+
+      /*gr-table-header-footer-style - start*/
+      .gr-table-header-footer-style tr:first-child {
+          font-size: 1.2em;
+          font-weight: 600;
+      }
+
+      .gr-table-header-footer-style tr:first-child strong {
+          font-weight: 600;
+      }
+
+      .gr-table-header-footer-style tr:last-child td {
+          font-size: 0.9em !important;
+          border: none;
+      }
+      /*gr-table-header-footer-style - end*/
+
+      /*gr-table-header-subheader-footer-style - start*/
+      .gr-table-header-subheader-footer-style tr:nth-child(2) {
+          font-size: 1em;
+          font-weight: 600;
+      }
+
+      .gr-table-header-subheader-footer-style tr:nth-child(2) strong {
+          font-weight: 600;
+      }
+      /*gr-table-header-subheader-footer-style - end*/
+
+      /*gr-table-footer-only-style - start*/
+      .gr-table-footer-only-style tr:first-child {
+          font-size: 1em;
+          font-weight: normal;
+      }
+
+      .gr-table-footer-only-style tr:first-child strong {
+          font-weight: 600;
+      }
+
+      .gr-table-footer-only-style tr:last-child td {
+          font-size: 0.9em !important;
+          border: none;
+      }
+      /*gr-table-footer-only-style - end*/
+
+      .answer-header{ margin:8px 0 12px 36px; }
+
+      .explain-box{ background:#f3f4f6; padding:12px; border-radius:6px; margin-top:10px; }
+      .explain-box p{ margin:8px 0 !important; padding:0 !important; }
+
+      img, svg {max-width:100%; height:auto; display:block}
+      
+      /* FIX MATHJAX SVG PRINTING */
+      .mjx-svg-fix svg { 
+         vertical-align: middle; 
+         /* Biarkan width/height sesuai atribut svg (ex units) agar skala benar */
+      }
+      /* Paksa path/use di dalam svg agar tidak punya stroke (garis tepi) */
+      /* Ini yang menyebabkan huruf terlihat tebal/hitam blok */
+      .mjx-svg-fix svg path, 
+      .mjx-svg-fix svg use, 
+      .mjx-svg-fix svg g { 
+         stroke-width: 0 !important; 
+         fill: currentColor !important; 
+         stroke: none !important;
+      }
+
+      hr{border:none; border-top:1px solid #e5e7eb; margin:20px 0}
+
+      ${extra}
+    `;
+  }
+
+  // ---------- JSON parsing ----------
+  function parseJsonContent(text) {
+    try { return JSON.parse(text); }
+    catch {
+      const m = text.match(/(\[.*\]|\{[\s\S]*\})/);
+      if (!m) throw new Error('Cannot parse JSON');
+      return JSON.parse(m[1]);
+    }
+  }
+
+  function normalizeQuestions(obj) {
+    if (!obj) return [];
+    if (Array.isArray(obj)) return obj;
+    if (obj.questionList) return obj.questionList;
+    if (obj.test && obj.test.questionList) return obj.test.questionList;
+    if (obj.questions) return obj.questions;
+    return [obj];
+  }
+
+  const choiceNumberToLetter = (num) => {
+    const n = parseInt(num);
+    if (!isNaN(n)) return letters(n);
+    return 'A';
+  };
+
+  // =====================================================================
+  // ESSAY + MCQ BUILDER
+  // =====================================================================
+  function buildBodies(questions, mode, abstracts, isEssay) {
+    if (!isEssay) {
+      let qBody = '';
+      let aBody = '';
+
+      for (let i = 0; i < questions.length; i++) {
+        const q = questions[i];
+        const seq = (i + 1);
+
+        let qText = sanitizeContent(q.questionText || '');
+        let explanation = sanitizeContent(q.explanationText || '');
+        let answerHeader = q.answerHeader ? sanitizeContent(addTdSpacing(q.answerHeader)) : null;
+
+        const arr = q.answerChoiceList || q.answerChoice || [];
+
+        let correctLetter = null;
+        if (q.correctAnswer != null) {
+          const n = parseInt(q.correctAnswer);
+          if (!isNaN(n)) correctLetter = letters(n);
+          else if (/^[A-Z]$/i.test(String(q.correctAnswer).trim())) correctLetter = String(q.correctAnswer).trim().toUpperCase();
+        }
+
+        const normalized = arr.map((ch, idx) => {
+          let html = sanitizeContent(ch.choice || '');
+          html = addTdSpacing(html);
+          html = html.replace(/^\s*[A-Z]\.\s*/i, '');
+          if (/^\s*<table/i.test(html)) {
+  html = applySmartTableClasses(html);
+}
+          const letter = ch.choiceNumber ? choiceNumberToLetter(ch.choiceNumber) : letters(idx + 1);
+          const isCorrect = correctLetter ? (letter === correctLetter) : !!(ch.isCorrect || ch.correctTaken === true);
+          return { letter, html, isCorrect };
+        });
+
+        qBody += `<div class="q-block">
+          <div class="q-header">Question ${seq} of ${questions.length}</div>
+          <div class="q-text">${qText}</div>
+          ${answerHeader ? `<div class="answer-header">${answerHeader}</div>` : ''}
+          <ol class="choices">`;
+
+        normalized.forEach(c => {
+          qBody += `<li><span class="letter">${c.letter}.</span><span class="choice-content">${c.html}</span></li>`;
+        });
+
+        qBody += `</ol></div><hr/>`;
+
+        aBody += `<div class="q-block">
+          <div class="q-header">Question ${seq} of ${questions.length}</div>
+          <div class="q-text">${qText}</div>
+          ${answerHeader ? `<div class="answer-header">${answerHeader}</div>` : ''}
+          <ol class="choices">`;
+
+        normalized.forEach(c => {
+          aBody += `<li class="${c.isCorrect ? 'correct' : ''}">
+            <span class="letter">${c.letter}.</span>
+            <span class="choice-content">${c.html}${c.isCorrect ? ' <span class="tick">&#10004;</span>' : ''}</span>
+          </li>`;
+        });
+
+        aBody += `</ol>
+          <div class="explain-box"><strong>Explanation:</strong><br>${explanation || '(No explanation)'}</div>
+        </div><hr/>`;
+      }
+
+      return { qBody, aBody };
+    }
+
+    // ESSAY MODE
+    const groups = [];
+    const groupMap = new Map();
+    for (const q of questions) {
+      const aid = q.abstractId ?? q.abstract?.id ?? null;
+      const key = String(aid);
+      if (!groupMap.has(key)) {
+        groupMap.set(key, []);
+        groups.push({ abstractId: aid, questions: groupMap.get(key) });
+      }
+      groupMap.get(key).push(q);
+    }
+
+    const total = questions.length;
+    let readingIndex = 0;
+    
+    let qBody = '';
+    let aBody = '';
+
+    for (const grp of groups) {
+      readingIndex++;
+
+      const abs = abstracts ? abstracts[String(grp.abstractId)] : null;
+      const absHtml = abs ? sanitizeContent(abs.text || abs.content || '') : '';
+      const absTitle = abs ? sanitizeContent(abs.title || 'Reading') : 'Reading';
+
+      qBody += `
+        <div class="reading-block">
+          <div class="reading-title">${absTitle}</div>
+          <div class="reading-text">${absHtml}</div>
+        </div>
+        <hr/>
+      `;
+
+      aBody += `
+        <div class="reading-block">
+          <div class="reading-title">${absTitle}</div>
+          <div class="reading-text">${absHtml}</div>
+        </div>
+        <hr/>
+      `;
+
+      let innerIdx = 0;
+
+      for (const q of grp.questions) {
+        innerIdx++;
+        const seq = `${readingIndex}.${innerIdx}`;
+
+        const qText = sanitizeContent((q.questionText || q.question || '').replace ? (q.questionText || q.question || '') : String(q.questionText || q.question || ''));
+        const explanation = sanitizeContent((q.explanationText || q.explanation || '').replace ? (q.explanationText || q.explanation || '') : String(q.explanationText || q.explanation || ''));
+
+        qBody += `
+          <div class="q-block">
+            <div class="q-header">Question ${seq} of ${total}</div>
+            <div class="q-text">${qText}</div>
+          </div>
+          <hr/>
+        `;
+
+        aBody += `
+          <div class="q-block">
+            <div class="q-header">Question ${seq} of ${total}</div>
+            <div class="q-text">${qText}</div>
+            <div class="explain-box"><strong>Explanation:</strong><br>${explanation || '(No explanation)'}</div>
+          </div>
+          <hr/>
+        `;
+      }
+    }
+
+    return { qBody, aBody };
+  }
+
+  // =====================================================================
+  // BASE64 IMAGE CONVERTER
+  // =====================================================================
+  async function convertImagesToBase64(htmlString) {
+    const div = document.createElement("div");
+    div.innerHTML = htmlString;
+    const imgs = div.querySelectorAll("img");
+    const failed = [];
+
+    async function imgToBase64(url) {
+      try {
+        const res = await fetch(url, { mode: "cors" });
+        const blob = await res.blob();
+        return await new Promise(resolve => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result);
+          reader.readAsDataURL(blob);
+        });
+      } catch (e) {
+        failed.push(url);
+        return null;
+      }
+    }
+
+    for (const img of imgs) {
+      const url = img.getAttribute("src");
+      if (!url) continue;
+      if (url.startsWith('data:') || url.startsWith('svg:')) continue;
+
+      const base64 = await imgToBase64(url);
+      if (base64) img.setAttribute("src", base64);
+    }
+
+    return {
+      html: div.innerHTML,
+      failed
+    };
+  }
+
+  // =====================================================================
+  // MULTIPLE FILE COLLECTOR
+  // =====================================================================
+  async function collectQuestionsFromFiles(fileList) {
+    const all = [];
+    const abstracts = {}; 
+    let isEssayFlag = false;
+
+    for (let i = 0; i < fileList.length; i++) {
+      const f = fileList[i];
+      try {
+        const txt = await f.text();
+        let parsed;
+        try { parsed = parseJsonContent(txt); }
+        catch (e) {
+          alert('JSON Error in file: ' + f.name + ' — ' + e.message);
+          continue;
+        }
+
+        if (parsed.abstractList && Array.isArray(parsed.abstractList)) {
+          for (const a of parsed.abstractList) {
+            if (a && (a.id != null)) abstracts[String(a.id)] = a;
+          }
+        }
+        if (parsed.abstracts && Array.isArray(parsed.abstracts)) {
+          for (const a of parsed.abstracts) {
+            if (a && (a.id != null)) abstracts[String(a.id)] = a;
+          }
+        }
+        if (parsed.abstractMap && typeof parsed.abstractMap === 'object') {
+          for (const k in parsed.abstractMap) {
+            if (parsed.abstractMap[k]) abstracts[String(k)] = parsed.abstractMap[k];
+          }
+        }
+
+        const fileTestType = parsed.testTypeName || parsed.testType || (parsed.test && parsed.test.testTypeName) || null;
+        if (fileTestType === 'WC') isEssayFlag = true;
+
+        const qs = normalizeQuestions(parsed);
+        if (qs && qs.length) {
+          for (const q of qs) {
+            if (fileTestType) q._testTypeName = fileTestType;
+            all.push(q);
+          }
+        }
+      } catch (e) {
+        alert('Gagal membaca file: ' + f.name);
+      }
+    }
+
+    all.sort((a, b) => {
+      const sa = (a && (a.sequenceId ?? a.questionIndex ?? 0)) || 0;
+      const sb = (b && (b.sequenceId ?? b.questionIndex ?? 0)) || 0;
+      return sa - sb;
+    });
+
+    return { questions: all, abstracts, isEssayFlag };
+  }
+
+  // ---------- Helpers ----------
+  function getBaseName(filename) {
+    if (!filename) return 'file';
+    const name = filename.split('/').pop().split('\\').pop();
+    const dot = name.lastIndexOf('.');
+    return dot === -1 ? name : name.slice(0, dot);
+  }
+
+  function downloadBlob(blob, filename) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 1500);
+  }
+
+  // =====================================================================
+  // GENERATE
+  // =====================================================================
+async function handleFile(fileOrFiles, outMode, wantPdf) {
+  setStatus('Membaca file...');
+  const autoDownload = !!autoDlChk.checked;
+
+  let files = Array.from(fileOrFiles || []);
+  const doJoin = (outMode === 'join') || (files.length === 1);
+
+  // Group soal berdasarkan nama system
+  const groupQuestionsBySystem = (questions) => {
+    const groups = {};
+    questions.forEach(q => {
+      const sysKey = (q.system && String(q.system).trim()) ? String(q.system).trim() : 'DEFAULT';
+      if (!groups[sysKey]) groups[sysKey] = [];
+      groups[sysKey].push(q);
+    });
+    return groups;
+  };
+
+  // =========================================================
+  // JOIN MODE: gabung semua file dulu, lalu split per system
+  // =========================================================
+  if (doJoin) {
+    setStatus('Menggabungkan file...');
+    const { questions, abstracts, isEssayFlag } = await collectQuestionsFromFiles(files);
+    if (!questions.length) return alert('Tidak ada soal.');
+
+    const groups = groupQuestionsBySystem(questions);
+    const groupKeys = Object.keys(groups);
+
+    for (const sysName of groupKeys) {
+      const groupQs = groups[sysName];
+
+      groupQs.sort((a, b) => {
+        const sa = (a && (a.sequenceId ?? a.questionIndex ?? 0)) || 0;
+        const sb = (b && (b.sequenceId ?? b.questionIndex ?? 0)) || 0;
+        return sa - sb;
+      });
+
+      const isEssay = isEssayFlag || groupQs.some(q => q._testTypeName === 'WC');
+      const mode = panel.querySelector("input[name='pb']:checked").value;
+      const css = cssFor(mode);
+
+      const { qBody, aBody } = buildBodies(groupQs, mode, abstracts, isEssay);
+
+      const finalTitle = sysName === 'DEFAULT' ? 'Questions' : sysName;
+      setStatus(`Memproses: ${finalTitle}...`);
+
+      const convQ = await convertImagesToBase64(qBody);
+      const convA = await convertImagesToBase64(aBody);
+
+      const htmlQ = wrapFullHtml(finalTitle + ' - Questions', css, convQ.html);
+      const htmlA = wrapFullHtml(finalTitle + ' - Answers', css, convA.html);
+
+      window.open(URL.createObjectURL(new Blob([htmlQ], { type: 'text/html' })), '_blank');
+      const winA = window.open(URL.createObjectURL(new Blob([htmlA], { type: 'text/html' })), '_blank');
+
+      if (autoDownload) {
+        downloadBlob(new Blob([htmlQ], { type: 'text/html' }), `${finalTitle} - Questions.html`);
+        downloadBlob(new Blob([htmlA], { type: 'text/html' }), `${finalTitle} - Answers.html`);
+      }
+
+      if (wantPdf && winA) setTimeout(() => winA.print(), 1000);
+    }
+
+    setStatus('Selesai (join & split system).');
+    return;
+  }
+
+  // =========================================================
+  // SEPARATE MODE: per file, lalu split lagi per system
+  // =========================================================
+  setStatus('Memproses file secara terpisah...');
+
+  for (let fi = 0; fi < files.length; fi++) {
+    const f = files[fi];
+    setStatus(`Membaca ${f.name} ...`);
+
+    let parsed;
+    try {
+      const text = await f.text();
+      parsed = parseJsonContent(text);
+    } catch (e) {
+      alert('JSON Error: ' + f.name);
+      continue;
+    }
+
+    const questions = normalizeQuestions(parsed);
+    if (!questions.length) continue;
+
+    const isEssayGlobal = (parsed.testTypeName === 'WC') || questions.some(q => q._testTypeName === 'WC');
+
+    const absMap = {};
+    if (parsed.abstractList && Array.isArray(parsed.abstractList)) {
+      parsed.abstractList.forEach(a => { if (a && a.id != null) absMap[String(a.id)] = a; });
+    }
+    if (parsed.abstracts && Array.isArray(parsed.abstracts)) {
+      parsed.abstracts.forEach(a => { if (a && a.id != null) absMap[String(a.id)] = a; });
+    }
+    if (parsed.abstractMap && typeof parsed.abstractMap === 'object') {
+      for (const k in parsed.abstractMap) absMap[String(k)] = parsed.abstractMap[k];
+    }
+
+    const groups = groupQuestionsBySystem(questions);
+    const groupKeys = Object.keys(groups);
+    const baseName = getBaseName(f.name);
+
+    for (const sysName of groupKeys) {
+      const groupQs = groups[sysName];
+
+      groupQs.sort((a, b) => {
+        const sa = (a && (a.sequenceId ?? a.questionIndex ?? 0)) || 0;
+        const sb = (b && (b.sequenceId ?? b.questionIndex ?? 0)) || 0;
+        return sa - sb;
+      });
+
+      const isEssay = isEssayGlobal || groupQs.some(q => q._testTypeName === 'WC');
+      const mode = panel.querySelector("input[name='pb']:checked").value;
+      const css = cssFor(mode);
+
+      const { qBody, aBody } = buildBodies(groupQs, mode, absMap, isEssay);
+
+      const finalTitle = sysName === 'DEFAULT' ? baseName : sysName;
+      setStatus(`Memproses: ${finalTitle} (dari ${f.name})...`);
+
+      const convQ = await convertImagesToBase64(qBody);
+      const convA = await convertImagesToBase64(aBody);
+
+      const htmlQ = wrapFullHtml(finalTitle + ' - Questions', css, convQ.html);
+      const htmlA = wrapFullHtml(finalTitle + ' - Answers', css, convA.html);
+
+      const urlQ = URL.createObjectURL(new Blob([htmlQ], { type: 'text/html' }));
+      window.open(urlQ, '_blank');
+      const winA = window.open(URL.createObjectURL(new Blob([htmlA], { type: 'text/html' })), '_blank');
+
+      if (autoDownload) {
+        downloadBlob(new Blob([htmlQ], { type: 'text/html' }), `${finalTitle} - Questions.html`);
+        downloadBlob(new Blob([htmlA], { type: 'text/html' }), `${finalTitle} - Answers.html`);
+      }
+
+      if (wantPdf && winA) setTimeout(() => winA.print(), 1000);
+    }
+  }
+
+  setStatus('Selesai (separate & split system).');
+}
+
+  function wrapFullHtml(title, css, body) {
+    return `<!doctype html><html><head><meta charset="utf-8">
+    <title>${title}</title>
+    <style>${css}</style>
+    <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [ ['\\\\(','\\\\)'] ], 
+        displayMath: [ ['$$','$$'] ],
+        processEscapes: true
+      },
+      options: {
+        ignoreHtmlClass: 'tex2jax_ignore',
+        processHtmlClass: 'tex2jax_process'
+      }
+    };
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" id="MathJax-script" async></script>
+    </head><body>${body}</body></html>`;
+  }
+
+  // ---------- Events ----------
+  genBtn.addEventListener('click', () => {
+    const files = fileInput.files;
+    if (!files || files.length === 0) return alert('Upload JSON dulu.');
+
+    const outMode = panel.querySelector("input[name='outmode']:checked").value;
+    const wantPdf = panel.querySelector('#pdfChk').checked;
+
+    handleFile(files, outMode, wantPdf);
+  });
+
+  setStatus('Ready — upload JSON lalu klik Generate.');
+
+})();
