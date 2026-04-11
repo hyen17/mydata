@@ -191,7 +191,9 @@ s = applySmartTableClasses(s);
       border-radius:6px; font-weight:700; cursor:pointer;
     ">Generate HTML</button>
 
-    <label style="display:block; margin-top:10px;"><input id="autoDl" type="checkbox"> Auto Download (default: No)</label>
+   <label style="display:block; margin-top:10px;"><input id="splitBySystem" type="checkbox"> Split by System/Topic</label>
+
+<label style="display:block; margin-top:10px;"><input id="autoDl" type="checkbox"> Auto Download (default: No)</label>
 
     <div id="statusArea" style="margin-top:10px; font-size:13px; color:#d1d5db;"></div>
   `;
@@ -199,9 +201,10 @@ s = applySmartTableClasses(s);
   document.body.appendChild(panel);
 
   const fileInput = panel.querySelector('#fileInput');
-  const genBtn = panel.querySelector('#genBtn');
-  const statusArea = panel.querySelector('#statusArea');
-  const autoDlChk = panel.querySelector('#autoDl');
+const genBtn = panel.querySelector('#genBtn');
+const statusArea = panel.querySelector('#statusArea');
+const autoDlChk = panel.querySelector('#autoDl');
+const splitBySystemChk = panel.querySelector('#splitBySystem');
 
   const setStatus = (t) => { statusArea.innerText = t; console.log('[gen]', t); };
 
@@ -1126,11 +1129,11 @@ s = applySmartTableClasses(s);
 async function handleFile(fileOrFiles, outMode, wantPdf) {
   setStatus('Membaca file...');
   const autoDownload = !!autoDlChk.checked;
+  const splitBySystem = !!splitBySystemChk.checked;
 
   let files = Array.from(fileOrFiles || []);
   const doJoin = (outMode === 'join') || (files.length === 1);
 
-  // Group soal berdasarkan nama system
   const groupQuestionsBySystem = (questions) => {
     const groups = {};
     questions.forEach(q => {
@@ -1142,7 +1145,101 @@ async function handleFile(fileOrFiles, outMode, wantPdf) {
   };
 
   // =========================================================
-  // JOIN MODE: gabung semua file dulu, lalu split per system
+  // MODE NORMAL = perilaku script pertama biasa
+  // =========================================================
+  if (!splitBySystem) {
+    if (doJoin) {
+      setStatus('Menggabungkan file (join mode)...');
+      const { questions, abstracts, isEssayFlag } = await collectQuestionsFromFiles(files);
+      if (!questions.length) return alert('Tidak ada soal.');
+
+      const isEssay = isEssayFlag || questions.some(q => q._testTypeName === 'WC');
+      const mode = panel.querySelector("input[name='pb']:checked").value;
+      const { qBody, aBody } = buildBodies(questions, mode, abstracts, isEssay);
+      const css = cssFor(mode);
+
+      setStatus('Mengonversi gambar ke base64...');
+      const convQ = await convertImagesToBase64(qBody);
+      const convA = await convertImagesToBase64(aBody);
+
+      const htmlQ = wrapFullHtml('Questions', css, convQ.html);
+      const htmlA = wrapFullHtml('Answers', css, convA.html);
+
+      window.open(URL.createObjectURL(new Blob([htmlQ], { type: 'text/html' })), '_blank');
+      const winA = window.open(URL.createObjectURL(new Blob([htmlA], { type: 'text/html' })), '_blank');
+
+      if (autoDownload) {
+        downloadBlob(new Blob([htmlQ], { type: 'text/html'}), 'Questions.html');
+        downloadBlob(new Blob([htmlA], { type: 'text/html'}), 'Answers.html');
+      }
+
+      if (wantPdf && winA) setTimeout(() => winA.print(), 1000);
+
+      setStatus('Selesai (join).');
+      return;
+    }
+
+    setStatus('Memproses file secara terpisah...');
+
+    for (let fi = 0; fi < files.length; fi++) {
+      const f = files[fi];
+      setStatus(`Membaca ${f.name} ...`);
+      let parsed;
+      try {
+        const text = await f.text();
+        parsed = parseJsonContent(text);
+      } catch (e) {
+        alert('JSON Error: ' + f.name);
+        continue;
+      }
+
+      const questions = normalizeQuestions(parsed);
+      if (!questions.length) continue;
+
+      const isEssay = (parsed.testTypeName === "WC") || questions.some(q => q._testTypeName === 'WC');
+
+      const absMap = {};
+      if (parsed.abstractList && Array.isArray(parsed.abstractList)) {
+        parsed.abstractList.forEach(a => { if (a && a.id != null) absMap[String(a.id)] = a; });
+      }
+      if (parsed.abstracts && Array.isArray(parsed.abstracts)) {
+        parsed.abstracts.forEach(a => { if (a && a.id != null) absMap[String(a.id)] = a; });
+      }
+      if (parsed.abstractMap && typeof parsed.abstractMap === 'object') {
+        for (const k in parsed.abstractMap) absMap[String(k)] = parsed.abstractMap[k];
+      }
+
+      const mode = panel.querySelector("input[name='pb']:checked").value;
+      const { qBody, aBody } = buildBodies(questions, mode, absMap, isEssay);
+      const css = cssFor(mode);
+
+      setStatus(`Mengonversi gambar di ${f.name} ...`);
+      const convQ = await convertImagesToBase64(qBody);
+      const convA = await convertImagesToBase64(aBody);
+
+      const htmlQ = wrapFullHtml('Questions', css, convQ.html);
+      const htmlA = wrapFullHtml('Answers', css, convA.html);
+
+      const urlQ = URL.createObjectURL(new Blob([htmlQ], { type: 'text/html' }));
+      window.open(urlQ, '_blank');
+      const winA = window.open(URL.createObjectURL(new Blob([htmlA], { type: 'text/html' })), '_blank');
+
+      const base = getBaseName(f.name);
+
+      if (autoDownload) {
+        downloadBlob(new Blob([htmlQ], {type: 'text/html'}), `${base} - Questions.html`);
+        downloadBlob(new Blob([htmlA], {type: 'text/html'}), `${base} - Answers.html`);
+      }
+
+      if (wantPdf && winA) setTimeout(() => winA.print(), 1000);
+    }
+
+    setStatus('Selesai (separate).');
+    return;
+  }
+
+  // =========================================================
+  // MODE SPLIT BY SYSTEM
   // =========================================================
   if (doJoin) {
     setStatus('Menggabungkan file...');
@@ -1191,9 +1288,6 @@ async function handleFile(fileOrFiles, outMode, wantPdf) {
     return;
   }
 
-  // =========================================================
-  // SEPARATE MODE: per file, lalu split lagi per system
-  // =========================================================
   setStatus('Memproses file secara terpisah...');
 
   for (let fi = 0; fi < files.length; fi++) {
@@ -1234,7 +1328,7 @@ async function handleFile(fileOrFiles, outMode, wantPdf) {
 
       groupQs.sort((a, b) => {
         const sa = (a && (a.sequenceId ?? a.questionIndex ?? 0)) || 0;
-        const sb = (b && (b.sequenceId ?? b.questionIndex ?? 0)) || 0;
+        const sb = (b && (b.sequenceId ?? a.questionIndex ?? 0)) || 0;
         return sa - sb;
       });
 
@@ -1304,3 +1398,5 @@ async function handleFile(fileOrFiles, outMode, wantPdf) {
   setStatus('Ready — upload JSON lalu klik Generate.');
 
 })();
+
+
