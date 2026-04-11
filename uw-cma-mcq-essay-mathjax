@@ -72,6 +72,36 @@
     return String(html).replace(/type\s+your\s+response\s+here\b[.\s:]*/gi, '');
   }
 
+  function removeInternalLinks(html) {
+  if (!html) return html;
+
+  const div = document.createElement('div');
+  div.innerHTML = html;
+
+  const links = div.querySelectorAll('a[href]');
+
+  links.forEach(a => {
+    const href = (a.getAttribute('href') || '').trim();
+
+    const isExternalLink =
+      /^(https?:)?\/\//i.test(href) ||
+      /^mailto:/i.test(href) ||
+      /^tel:/i.test(href) ||
+      /^#/i.test(href);
+
+    const isInternalLink =
+      /^\d+$/.test(href) ||
+      href === '' ||
+      (!isExternalLink && !/[./:?#]/.test(href));
+
+    if (isInternalLink) {
+      a.replaceWith(document.createTextNode(a.textContent || ''));
+    }
+  });
+
+  return div.innerHTML;
+}
+
   function sanitizeContent(html) {
     if (!html) return '';
     let s = String(html);
@@ -82,6 +112,7 @@
     s = removeVideoAndEmptyP(s);
     s = removeEssayPrompt(s);
     s = applySmartTableClasses(s);
+    s = removeInternalLinks(s);
     
     return s.trim();
   }
