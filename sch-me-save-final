@@ -32,34 +32,40 @@
              * FUNGSI PEMBERSIH (HARD DELETE BERDASARKAN SCRIPT 2)     *
              ***********************************************************/
             function performHardClean(domElement) {
-                if (!domElement) return;
+    if (!domElement) return;
 
-                // 1. HAPUS VIDEO PLAYER
-                // Target: #VideoPlayerContainer
-                const videos = domElement.querySelectorAll('#VideoPlayerContainer');
-                videos.forEach(video => {
-                    // Logic untuk menghapus SPASI (br) dan PARAGRAF KOSONG (p) setelah video
-                    // Sesuai selector CSS: #VideoPlayerContainer + br + p
-                    const sibling1 = video.nextElementSibling;
-                    if (sibling1 && sibling1.tagName === 'BR') {
-                        const sibling2 = sibling1.nextElementSibling;
-                        // Hapus <p> jika kosong
-                        if (sibling2 && sibling2.tagName === 'P' && sibling2.innerText.trim() === '') {
-                            sibling2.remove();
-                        }
-                        // Hapus <br>
-                        sibling1.remove();
-                    }
-                    // Hapus Video Player itu sendiri
-                    video.remove();
-                });
-
-                // 2. HAPUS RELATED MATERIAL
-                // Target: section.QuestionBody-module__item--oc5Wf:last-child
-                // Kita gunakan selector yang sama persis dengan yang Anda konfirmasi bekerja
-                const relatedItems = domElement.querySelectorAll('section.QuestionBody-module__item--oc5Wf:last-child');
-                relatedItems.forEach(item => item.remove());
+    // 1. HAPUS VIDEO PLAYER
+    const videos = domElement.querySelectorAll('#VideoPlayerContainer');
+    videos.forEach(video => {
+        const sibling1 = video.nextElementSibling;
+        if (sibling1 && sibling1.tagName === 'BR') {
+            const sibling2 = sibling1.nextElementSibling;
+            if (sibling2 && sibling2.tagName === 'P' && sibling2.innerText.trim() === '') {
+                sibling2.remove();
             }
+            sibling1.remove();
+        }
+        video.remove();
+    });
+
+    // 2. HAPUS HANYA BLOK "RELATED MATERIAL", JANGAN HAPUS "EXPLANATION"
+    const sections = domElement.querySelectorAll('section.QuestionBody-module__item--oc5Wf');
+
+    sections.forEach(section => {
+        const boldEl = section.querySelector('b');
+        const title = boldEl ? boldEl.innerText.trim().toLowerCase() : '';
+
+        // Hapus hanya jika judulnya benar-benar related material / related resources
+        if (
+            title === 'related material' ||
+            title === 'related materials' ||
+            title === 'related resource' ||
+            title === 'related resources'
+        ) {
+            section.remove();
+        }
+    });
+}
 
             /***********************
              * TITLE (SHORT)       *
@@ -99,7 +105,7 @@
                 const choices = blocks.length ? blocks.map(makeChoice) : $all('label[class*="e1bppr3n2"], label', group).map(makeChoice); 
                 
                 // --- PENGAMBILAN PENJELASAN DENGAN PEMBERSIHAN ---
-                const expWrap = $('[id^="question-explanation-"]', root) || $('section:has(> b), section', root); 
+                const expWrap = $('[id^="question-explanation-"]', root);
                 let explanationHTML = '', explanationText = '', explanationHasLabel = false; 
                 if (expWrap) { 
                     const clone = expWrap.cloneNode(true); 
