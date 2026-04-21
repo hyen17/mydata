@@ -159,6 +159,14 @@ label.correct .radio-dot {
     margin-bottom: 18px;
 }
 
+.question-code {
+    color: #666;
+    font-size: 13px;
+    font-weight: 500;
+    margin-top: -10px;
+    margin-bottom: 16px;
+}
+
 .answer-extra {
     margin-top: 15px;
     padding: 18px;
@@ -360,7 +368,7 @@ body {
           <div class="mm-quiz">
             <div class="mm-question">
               <div class="mm-question-number">Question ${index + 1} of ${items.length}</div>
-
+              <div class="question-code">${item.question_code || ""}</div>
               <div class="mm-question-content">
                 ${item.question || ""}
               </div>
