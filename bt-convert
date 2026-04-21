@@ -1,0 +1,571 @@
+(() => {
+  if (window.__quizJsonToHtmlUI) {
+    alert("UI converter sudah terbuka.");
+    return;
+  }
+
+  const STYLE_SOURCE = `
+.mm-quiz {
+    margin-top: 20px;
+    color: #000;
+}
+
+.mm-quiz .mm-question-content {
+    margin: 0;
+    padding: 20px 15px;
+    font-size: 18px;
+    line-height: 1.45;
+    color: #000;
+}
+
+.mm-quiz .mm-question-content p,
+.mm-quiz .mm-question-content li,
+.mm-quiz .mm-question-content td,
+.mm-quiz .mm-question-content th {
+    color: #000;
+    font-size: 18px;
+    line-height: 1.45;
+}
+
+.mm-quiz .mm-question-content p {
+    margin-bottom: 20px;
+}
+
+.mm-quiz .mm-question-content p:last-child {
+    margin-bottom: 0;
+}
+
+.mm-quiz .mm-question-content img,
+.answer-extra img {
+    max-width: 100%;
+    height: auto;
+}
+
+.mm-quiz .mm-question-content table,
+.answer-extra table {
+    max-width: 100%;
+    border-collapse: collapse;
+    display: table;
+}
+
+.mm-quiz .mm-question-content ul,
+.mm-quiz .mm-question-content ol,
+.answer-extra ul,
+.answer-extra ol {
+    margin: 0 0 18px 22px;
+}
+
+.mm-quiz .mm-question-responses {
+    background-color: #f5f5f5;
+    border: 1px solid #ccc;
+    padding: 10px;
+}
+
+.mm-quiz .mm-question-responses label {
+    display: flex;
+    align-items: flex-start;
+    border-radius: 5px;
+    margin-bottom: 16px;
+    padding: 14px 10px 14px 0;
+    font-size: 15px;
+    line-height: 1.4;
+    background-color: #fff;
+    border: 2px solid #c3cad2;
+    color: #000;
+}
+
+.mm-quiz .mm-question-responses label:last-child {
+    margin-bottom: 0;
+}
+
+.mm-quiz label.correct {
+    background-color: #afdbb2;
+    color: #000;
+}
+
+.mm-quiz .mm-answer-label {
+    margin: 0 8px;
+    font-weight: 700;
+    color: #000;
+}
+
+.mm-quiz .mm-answer-label::after {
+    content: ".";
+}
+
+.mm-quiz .mm-question-responses label > div:last-child,
+.mm-quiz .mm-question-responses label > div:last-child p,
+.mm-quiz .mm-question-responses label > div:last-child li,
+.mm-quiz .mm-question-responses label > div:last-child td,
+.mm-quiz .mm-question-responses label > div:last-child th {
+    color: #000;
+    font-size: 15px;
+    line-height: 1.4;
+}
+
+.mm-quiz .mm-question-responses label > div:last-child p {
+    margin: 0 0 8px;
+}
+
+.mm-quiz .mm-question-responses label > div:last-child p:last-child {
+    margin-bottom: 0;
+}
+
+.radio-wrap {
+    width: 28px;
+    min-width: 28px;
+    display: flex;
+    justify-content: center;
+    padding-top: 2px;
+}
+
+.radio-dot {
+    width: 14px;
+    height: 14px;
+    border: 2px solid #777;
+    border-radius: 50%;
+    display: inline-block;
+    position: relative;
+    box-sizing: border-box;
+    background: #fff;
+}
+
+label.correct .radio-dot {
+    border-color: #060;
+}
+
+.radio-dot.checked::after {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #060;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+
+.mm-question {
+    margin-bottom: 50px;
+    overflow: visible;
+}
+
+.mm-question-number {
+    color: #000;
+    font-size: 28px;
+    font-weight: 700;
+    text-transform: none;
+    margin-bottom: 18px;
+}
+
+.answer-extra {
+    margin-top: 15px;
+    padding: 18px;
+    background: #fafafa;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    color: #000;
+    font-size: 15px;
+    line-height: 1.45;
+}
+
+.answer-extra h4 {
+    margin: 0 0 10px;
+    font-size: 16px;
+    color: #000;
+}
+
+.answer-extra p,
+.answer-extra li,
+.answer-extra td,
+.answer-extra th {
+    color: #000;
+    font-size: 15px;
+    line-height: 1.45;
+}
+
+body {
+  font-family: Arial, sans-serif;
+  color: #000;
+  background: #fff;
+  margin: 0;
+  padding: 24px;
+}
+
+.print-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 9999;
+  background: #fff;
+  padding: 10px 0 16px;
+  border-bottom: 1px solid #ddd;
+  margin-bottom: 20px;
+}
+
+.print-toolbar button {
+  background: #da5c01;
+  border: none;
+  color: white;
+  padding: 10px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-right: 8px;
+  font-size: 14px;
+}
+
+.print-toolbar button.secondary {
+  background: #666;
+}
+
+.question-block {
+  page-break-inside: avoid;
+  break-inside: avoid-page;
+  margin-bottom: 28px;
+}
+
+.question-block.force-page-break {
+  page-break-before: always;
+  break-before: page;
+}
+
+@media print {
+  .print-toolbar {
+    display: none !important;
+  }
+
+  body {
+    padding: 18px;
+    margin: 0;
+    color: #000 !important;
+  }
+
+  .question-block {
+    page-break-inside: avoid !important;
+    break-inside: avoid-page !important;
+  }
+
+  .question-block.force-page-break {
+    page-break-before: always !important;
+    break-before: page !important;
+  }
+
+  .radio-dot,
+  .radio-dot.checked::after {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+}
+`;
+
+  const state = {
+    items: [],
+    categories: []
+  };
+
+  function cleanExplanationHtml(html) {
+    const wrap = document.createElement("div");
+    wrap.innerHTML = String(html || "");
+
+    [...wrap.querySelectorAll("p")].forEach(p => {
+      if (/Discuss here in the forum/i.test(p.textContent || "")) {
+        p.remove();
+      }
+    });
+
+    return wrap.innerHTML.trim();
+  }
+
+  function getLevel3Category(item) {
+    return Array.isArray(item?.category) ? (item.category[2] || "") : "";
+  }
+
+  function validateItem(item) {
+    return item && typeof item === "object" && Array.isArray(item.options) && item.question;
+  }
+
+  async function readJsonFiles(files) {
+    const all = [];
+    for (const file of files) {
+      const text = await file.text();
+      let parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new Error(`File ${file.name} bukan JSON valid.`);
+      }
+
+      if (Array.isArray(parsed)) {
+        all.push(...parsed);
+      } else if (parsed && typeof parsed === "object") {
+        all.push(parsed);
+      }
+    }
+    return all;
+  }
+
+  function prepareItems(items) {
+    const cleaned = items
+      .filter(validateItem)
+      .map(item => ({
+        question_code: String(item.question_code || "").trim(),
+        category: Array.isArray(item.category) ? item.category : [],
+        question: String(item.question || "").trim(),
+        options: (item.options || []).map(opt => ({
+          label: String(opt?.label || "").trim(),
+          text: String(opt?.text || "").trim()
+        })),
+        correct_answer: item.correct_answer
+          ? {
+              label: String(item.correct_answer.label || "").trim(),
+              text: String(item.correct_answer.text || "").trim()
+            }
+          : null,
+        explanation: cleanExplanationHtml(item.explanation || "")
+      }));
+
+  
+
+    return cleaned;
+  }
+
+  function buildCategoryList(items) {
+    return [...new Set(items.map(getLevel3Category).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  }
+
+  function renderOptions(options, correctAnswer, mode) {
+    const correctLabel = correctAnswer?.label || "";
+    return `
+      <div class="mm-question-responses">
+        ${options.map(opt => {
+          const isCorrect = mode === "answers" && opt.label === correctLabel;
+          return `
+            <label class="${isCorrect ? "correct" : ""}">
+              <div class="radio-wrap">
+                <span class="radio-dot ${isCorrect ? "checked" : ""}"></span>
+              </div>
+              <div><span class="mm-answer-label">${opt.label || ""}</span></div>
+              <div>${opt.text || ""}</div>
+            </label>
+          `;
+        }).join("")}
+      </div>
+    `;
+  }
+
+  function buildDocHtml({ items, mode }) {
+    const blocks = items.map((item, index) => {
+      return `
+        <section class="question-block ${index > 0 ? "force-page-break" : ""}">
+          <div class="mm-quiz">
+            <div class="mm-question">
+              <div class="mm-question-number">Question ${index + 1} of ${items.length}</div>
+
+              <div class="mm-question-content">
+                ${item.question || ""}
+              </div>
+
+              ${renderOptions(item.options || [], item.correct_answer, mode)}
+
+              ${
+                mode === "answers"
+                  ? `
+                    <div class="answer-extra">
+                      <h4>Explanation</h4>
+                      <div>${item.explanation || ""}</div>
+                    </div>
+                  `
+                  : ""
+              }
+            </div>
+          </div>
+        </section>
+      `;
+    }).join("");
+
+    return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>${mode === "answers" ? "Answers" : "Questions"}</title>
+  <style>${STYLE_SOURCE}</style>
+</head>
+<body>
+  <div class="print-toolbar">
+    <button onclick="window.print()">Print</button>
+    <button class="secondary" onclick="window.close()">Close</button>
+  </div>
+  ${blocks}
+</body>
+</html>
+    `;
+  }
+
+  function openHtmlInNewWindow(html) {
+    const win = window.open("", "_blank");
+    if (!win) {
+      alert("Popup diblokir browser. Izinkan popup dulu.");
+      return;
+    }
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+  }
+
+  const panel = document.createElement("div");
+  panel.id = "__quizJsonToHtmlUI";
+  panel.style.cssText = `
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    width: 420px;
+    max-height: calc(100vh - 24px);
+    overflow: auto;
+    z-index: 999999;
+    background: #111;
+    color: #fff;
+    border: 1px solid #444;
+    border-radius: 12px;
+    box-shadow: 0 10px 28px rgba(0,0,0,.35);
+    padding: 16px;
+    font: 13px/1.5 Arial, sans-serif;
+  `;
+
+  panel.innerHTML = `
+    <div style="font-size:18px;font-weight:bold;margin-bottom:12px;">JSON to Printable HTML</div>
+
+    <div style="margin-bottom:12px;">
+      <label style="display:block;margin-bottom:6px;">Upload JSON file(s)</label>
+      <input id="qjh_files" type="file" accept=".json,application/json" multiple
+        style="width:100%;padding:8px;border:1px solid #555;border-radius:6px;background:#222;color:#fff;">
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <button id="qjh_load" style="padding:9px 12px;border:0;border-radius:6px;cursor:pointer;">Load JSON</button>
+      <button id="qjh_questions" style="padding:9px 12px;border:0;border-radius:6px;cursor:pointer;">Open Questions</button>
+      <button id="qjh_answers" style="padding:9px 12px;border:0;border-radius:6px;cursor:pointer;">Open Answers</button>
+      <button id="qjh_both" style="padding:9px 12px;border:0;border-radius:6px;cursor:pointer;">Open Both</button>
+      <button id="qjh_close" style="padding:9px 12px;border:0;border-radius:6px;cursor:pointer;">Close</button>
+    </div>
+
+    <div style="margin-bottom:12px;">
+      <label style="display:block;margin-bottom:6px;">Kategori level 3</label>
+      <select id="qjh_category"
+        style="width:100%;padding:9px;border:1px solid #555;border-radius:6px;background:#222;color:#fff;">
+        <option value="">Belum ada kategori</option>
+      </select>
+    </div>
+
+    <div id="qjh_info" style="background:#1b1b1b;border-radius:8px;padding:10px;min-height:58px;">
+      Belum ada data JSON.
+    </div>
+  `;
+
+  document.body.appendChild(panel);
+
+  const fileInput = panel.querySelector("#qjh_files");
+  const loadBtn = panel.querySelector("#qjh_load");
+  const questionsBtn = panel.querySelector("#qjh_questions");
+  const answersBtn = panel.querySelector("#qjh_answers");
+  const bothBtn = panel.querySelector("#qjh_both");
+  const closeBtn = panel.querySelector("#qjh_close");
+  const categorySelect = panel.querySelector("#qjh_category");
+  const infoBox = panel.querySelector("#qjh_info");
+
+  function updateInfo() {
+    const cat = categorySelect.value;
+    const filtered = state.items.filter(x => getLevel3Category(x) === cat);
+    infoBox.innerHTML = `
+      Total soal gabungan: <strong>${state.items.length}</strong><br>
+      Total kategori level 3: <strong>${state.categories.length}</strong><br>
+      Soal kategori terpilih: <strong>${filtered.length}</strong>
+    `;
+  }
+
+  function updateCategoryList() {
+    categorySelect.innerHTML = "";
+    if (!state.categories.length) {
+      categorySelect.innerHTML = `<option value="">Belum ada kategori</option>`;
+      infoBox.textContent = "Belum ada data JSON.";
+      return;
+    }
+
+    state.categories.forEach(cat => {
+      const opt = document.createElement("option");
+      opt.value = cat;
+      opt.textContent = cat;
+      categorySelect.appendChild(opt);
+    });
+
+    updateInfo();
+  }
+
+  loadBtn.onclick = async () => {
+    try {
+      if (!fileInput.files || !fileInput.files.length) {
+        alert("Pilih minimal 1 file JSON.");
+        return;
+      }
+
+      infoBox.textContent = "Membaca file JSON...";
+      const files = [...fileInput.files].sort((a, b) => a.name.localeCompare(b.name, undefined, {
+  numeric: true,
+  sensitivity: "base"
+}));
+const rawItems = await readJsonFiles(files);
+      state.items = prepareItems(rawItems);
+      state.categories = buildCategoryList(state.items);
+      updateCategoryList();
+
+      if (!state.items.length) {
+        infoBox.textContent = "Tidak ada item valid yang ditemukan.";
+      }
+    } catch (err) {
+      alert(err.message || String(err));
+      infoBox.textContent = "Gagal memuat JSON.";
+    }
+  };
+
+  categorySelect.onchange = updateInfo;
+
+  function getSelectedItems() {
+    const cat = categorySelect.value;
+    if (!cat) {
+      alert("Pilih kategori dulu.");
+      return [];
+    }
+    const items = state.items.filter(x => getLevel3Category(x) === cat);
+    if (!items.length) {
+      alert("Tidak ada soal pada kategori ini.");
+      return [];
+    }
+    return items;
+  }
+
+  questionsBtn.onclick = () => {
+    const items = getSelectedItems();
+    if (!items.length) return;
+    openHtmlInNewWindow(buildDocHtml({ items, mode: "questions" }));
+  };
+
+  answersBtn.onclick = () => {
+    const items = getSelectedItems();
+    if (!items.length) return;
+    openHtmlInNewWindow(buildDocHtml({ items, mode: "answers" }));
+  };
+
+  bothBtn.onclick = () => {
+    const items = getSelectedItems();
+    if (!items.length) return;
+    openHtmlInNewWindow(buildDocHtml({ items, mode: "questions" }));
+    openHtmlInNewWindow(buildDocHtml({ items, mode: "answers" }));
+  };
+
+  closeBtn.onclick = () => {
+    panel.remove();
+    delete window.__quizJsonToHtmlUI;
+  };
+
+  window.__quizJsonToHtmlUI = true;
+})();
