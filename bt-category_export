@@ -1,0 +1,298 @@
+(() => {
+  if (window.__quizCategoryExporterUI) {
+    alert("UI exporter sudah terbuka.");
+    return;
+  }
+
+  const state = {
+    items: [],
+    categories: [],
+    categoryMap: new Map()
+  };
+
+  function getLevel3Category(item) {
+    return Array.isArray(item?.category) ? (item.category[2] || "") : "";
+  }
+
+  function validateItem(item) {
+    return item && typeof item === "object" && Array.isArray(item.category);
+  }
+
+  function safeFileName(name) {
+    return String(name || "category")
+      .replace(/[\\/:*?"<>|]+/g, "_")
+      .replace(/\s+/g, "_")
+      .trim();
+  }
+
+  function downloadFile(filename, content, mimeType = "application/json") {
+    const blob = new Blob([content], { type: mimeType });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }
+
+  async function readJsonFiles(files) {
+    const all = [];
+    for (const file of files) {
+      const text = await file.text();
+      let parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new Error(`File ${file.name} bukan JSON valid.`);
+      }
+
+      if (Array.isArray(parsed)) {
+        all.push(...parsed);
+      } else if (parsed && typeof parsed === "object") {
+        all.push(parsed);
+      }
+    }
+    return all;
+  }
+
+  function prepareData(items) {
+    const validItems = items.filter(validateItem);
+
+    const categoryMap = new Map();
+
+    for (const item of validItems) {
+      const cat = getLevel3Category(item);
+      if (!cat) continue;
+
+      if (!categoryMap.has(cat)) {
+        categoryMap.set(cat, []);
+      }
+      categoryMap.get(cat).push(item);
+    }
+
+    const categories = [...categoryMap.keys()].sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
+    );
+
+    state.items = validItems;
+    state.categories = categories;
+    state.categoryMap = categoryMap;
+  }
+
+  function parseRangeInput(input, max) {
+    const value = String(input || "").trim();
+    const m = value.match(/^(\d+)\s*-\s*(\d+)$/);
+
+    if (!m) {
+      throw new Error("Format range harus seperti 1-5 atau 7-12.");
+    }
+
+    let start = parseInt(m[1], 10);
+    let end = parseInt(m[2], 10);
+
+    if (start < 1 || end < 1) {
+      throw new Error("Range harus dimulai dari 1.");
+    }
+
+    if (end < start) {
+      throw new Error("Nilai akhir harus lebih besar atau sama dengan nilai awal.");
+    }
+
+    if (start > max) {
+      throw new Error(`Range mulai melebihi jumlah kategori (${max}).`);
+    }
+
+    if (end > max) {
+      end = max;
+    }
+
+    return { start, end };
+  }
+
+  function updateCategoryPreview() {
+    if (!state.categories.length) {
+      infoBox.innerHTML = "Belum ada kategori.";
+      listBox.innerHTML = "";
+      return;
+    }
+
+    infoBox.innerHTML = `
+      Total item: <strong>${state.items.length}</strong><br>
+      Total kategori level 3: <strong>${state.categories.length}</strong>
+    `;
+
+    listBox.innerHTML = state.categories
+      .map((cat, idx) => {
+        const count = state.categoryMap.get(cat)?.length || 0;
+        return `<div style="padding:4px 0;border-bottom:1px solid #2a2a2a;">
+          <strong>${idx + 1}.</strong> ${cat} <span style="color:#aaa;">(${count} items)</span>
+        </div>`;
+      })
+      .join("");
+  }
+
+  async function handleLoad() {
+    try {
+      if (!fileInput.files || !fileInput.files.length) {
+        alert("Pilih minimal 1 file JSON.");
+        return;
+      }
+
+      infoBox.textContent = "Membaca file JSON...";
+
+      const files = [...fileInput.files].sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, {
+          numeric: true,
+          sensitivity: "base"
+        })
+      );
+
+      const rawItems = await readJsonFiles(files);
+      prepareData(rawItems);
+      updateCategoryPreview();
+    } catch (err) {
+      alert(err.message || String(err));
+      infoBox.textContent = "Gagal memuat JSON.";
+      listBox.innerHTML = "";
+    }
+  }
+
+  function handleDownloadRange() {
+    try {
+      if (!state.categories.length) {
+        alert("Belum ada kategori. Load JSON dulu.");
+        return;
+      }
+
+      const { start, end } = parseRangeInput(rangeInput.value, state.categories.length);
+      const selectedCategories = state.categories.slice(start - 1, end);
+
+      if (!selectedCategories.length) {
+        alert("Tidak ada kategori dalam range itu.");
+        return;
+      }
+
+      for (const cat of selectedCategories) {
+        const items = state.categoryMap.get(cat) || [];
+        const filename = `${safeFileName(cat)}.json`;
+        downloadFile(filename, JSON.stringify(items, null, 2), "application/json");
+      }
+
+      infoBox.innerHTML = `
+        Total item: <strong>${state.items.length}</strong><br>
+        Total kategori level 3: <strong>${state.categories.length}</strong><br>
+        Downloaded kategori <strong>${start}-${end}</strong>: <strong>${selectedCategories.length}</strong> file
+      `;
+    } catch (err) {
+      alert(err.message || String(err));
+    }
+  }
+
+  function handleDownloadOne() {
+    try {
+      if (!state.categories.length) {
+        alert("Belum ada kategori. Load JSON dulu.");
+        return;
+      }
+
+      const value = String(singleIndexInput.value || "").trim();
+      const idx = parseInt(value, 10);
+
+      if (!idx || idx < 1 || idx > state.categories.length) {
+        throw new Error(`Isi nomor kategori antara 1 sampai ${state.categories.length}.`);
+      }
+
+      const cat = state.categories[idx - 1];
+      const items = state.categoryMap.get(cat) || [];
+      const filename = `${safeFileName(cat)}.json`;
+
+      downloadFile(filename, JSON.stringify(items, null, 2), "application/json");
+    } catch (err) {
+      alert(err.message || String(err));
+    }
+  }
+
+  const panel = document.createElement("div");
+  panel.id = "__quizCategoryExporterUI";
+  panel.style.cssText = `
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    width: 460px;
+    max-height: calc(100vh - 24px);
+    overflow: auto;
+    z-index: 999999;
+    background: #111;
+    color: #fff;
+    border: 1px solid #444;
+    border-radius: 12px;
+    box-shadow: 0 10px 28px rgba(0,0,0,.35);
+    padding: 16px;
+    font: 13px/1.5 Arial, sans-serif;
+  `;
+
+  panel.innerHTML = `
+    <div style="font-size:18px;font-weight:bold;margin-bottom:12px;">JSON Category Exporter</div>
+
+    <div style="margin-bottom:12px;">
+      <label style="display:block;margin-bottom:6px;">Upload JSON file(s)</label>
+      <input id="qce_files" type="file" accept=".json,application/json" multiple
+        style="width:100%;padding:8px;border:1px solid #555;border-radius:6px;background:#222;color:#fff;">
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <button id="qce_load" style="padding:9px 12px;border:0;border-radius:6px;cursor:pointer;">Load JSON</button>
+      <button id="qce_close" style="padding:9px 12px;border:0;border-radius:6px;cursor:pointer;">Close</button>
+    </div>
+
+    <div style="margin-bottom:12px;padding:10px;background:#1b1b1b;border-radius:8px;" id="qce_info">
+      Belum ada data JSON.
+    </div>
+
+    <div style="margin-bottom:12px;">
+      <label style="display:block;margin-bottom:6px;">Download by range kategori</label>
+      <div style="display:flex;gap:8px;">
+        <input id="qce_range" type="text" placeholder="contoh: 1-5 atau 7-12"
+          style="flex:1;padding:8px;border:1px solid #555;border-radius:6px;background:#222;color:#fff;">
+        <button id="qce_download_range" style="padding:9px 12px;border:0;border-radius:6px;cursor:pointer;">Download Range</button>
+      </div>
+    </div>
+
+    <div style="margin-bottom:12px;">
+      <label style="display:block;margin-bottom:6px;">Download satu kategori</label>
+      <div style="display:flex;gap:8px;">
+        <input id="qce_single" type="number" min="1" placeholder="nomor kategori"
+          style="flex:1;padding:8px;border:1px solid #555;border-radius:6px;background:#222;color:#fff;">
+        <button id="qce_download_one" style="padding:9px 12px;border:0;border-radius:6px;cursor:pointer;">Download One</button>
+      </div>
+    </div>
+
+    <div style="margin-bottom:8px;font-weight:bold;">Daftar kategori level 3</div>
+    <div id="qce_list" style="background:#181818;border:1px solid #333;border-radius:8px;padding:10px;max-height:300px;overflow:auto;">
+      Belum ada kategori.
+    </div>
+  `;
+
+  document.body.appendChild(panel);
+
+  const fileInput = panel.querySelector("#qce_files");
+  const loadBtn = panel.querySelector("#qce_load");
+  const closeBtn = panel.querySelector("#qce_close");
+  const rangeInput = panel.querySelector("#qce_range");
+  const singleIndexInput = panel.querySelector("#qce_single");
+  const downloadRangeBtn = panel.querySelector("#qce_download_range");
+  const downloadOneBtn = panel.querySelector("#qce_download_one");
+  const infoBox = panel.querySelector("#qce_info");
+  const listBox = panel.querySelector("#qce_list");
+
+  loadBtn.onclick = handleLoad;
+  downloadRangeBtn.onclick = handleDownloadRange;
+  downloadOneBtn.onclick = handleDownloadOne;
+  closeBtn.onclick = () => {
+    panel.remove();
+    delete window.__quizCategoryExporterUI;
+  };
+
+  window.__quizCategoryExporterUI = true;
+})();
