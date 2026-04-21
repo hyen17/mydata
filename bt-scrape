@@ -1,0 +1,504 @@
+(async () => {
+  if (window.__quizScraperUI) {
+    alert("UI scraper sudah ada. Tutup dulu yang lama kalau mau buat ulang.");
+    return;
+  }
+
+  const sitemapUrls = [
+    "/mm_quiz_question-sitemap.xml",
+    "/mm_quiz_question-sitemap2.xml",
+    "/mm_quiz_question-sitemap3.xml"
+  ];
+
+  const state = {
+    allUrls: [],
+    filteredUrls: [],
+    selectedUrls: [],
+    results: [],
+    errors: [],
+    running: false,
+    cancelled: false
+  };
+
+  const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+  function textOf(el) {
+    return el ? el.textContent.trim() : "";
+  }
+
+  function cleanText(str) {
+    return String(str || "").replace(/\s+/g, " ").trim();
+  }
+
+  function normalizeHtml(html) {
+    return String(html || "").trim();
+  }
+
+  function getSlugFromUrl(url) {
+    try {
+      const u = new URL(url, location.origin);
+      const parts = u.pathname.split("/").filter(Boolean);
+      return parts[parts.length - 1] || "";
+    } catch {
+      return "";
+    }
+  }
+
+  function matchPrefix(slug, prefix) {
+    if (!prefix) return true;
+    return slug.toLowerCase().startsWith(prefix.toLowerCase());
+  }
+
+  function extractCategories(article) {
+    if (!article) return [];
+    return [...article.classList]
+      .filter(c => c.startsWith("mm_question_category-"))
+      .map(c => c.replace("mm_question_category-", ""));
+  }
+
+  function removeForumBlockFromHtml(html) {
+    const wrap = document.createElement("div");
+    wrap.innerHTML = html || "";
+
+    [...wrap.querySelectorAll("p")].forEach(p => {
+      if (/Discuss here in the forum/i.test(p.textContent || "")) {
+        p.remove();
+      }
+    });
+
+    return wrap.innerHTML.trim();
+  }
+
+  function extractQuestion(doc) {
+    const node = doc.querySelector(".mm-question-content");
+    return node ? normalizeHtml(node.innerHTML) : "";
+  }
+
+  function extractOptions(doc) {
+    return [...doc.querySelectorAll(".mm-question-responses label")].map(label => {
+      const answerLabel = textOf(label.querySelector(".mm-answer-label"));
+      const divs = label.querySelectorAll("div");
+      const textNode = divs[1] || null;
+
+      return {
+        label: answerLabel,
+        text: textNode ? normalizeHtml(textNode.innerHTML) : "",
+        is_correct: label.classList.contains("correct")
+      };
+    });
+  }
+
+  function extractExplanation(doc) {
+    const node = doc.querySelector(".mm-correct-answer");
+    if (!node) return "";
+
+    const clone = node.cloneNode(true);
+    clone.querySelectorAll(".mm-category-attribution").forEach(el => el.remove());
+
+    return removeForumBlockFromHtml(normalizeHtml(clone.innerHTML));
+  }
+
+  function extractQuestionData(doc, pageUrl) {
+    const article = doc.querySelector("article");
+    const questionCode = textOf(doc.querySelector("h1.entry-title"));
+    const optionsRaw = extractOptions(doc);
+    const correct = optionsRaw.find(x => x.is_correct) || null;
+
+    return {
+      url: pageUrl,
+      question_code: questionCode,
+      category: extractCategories(article),
+      question: extractQuestion(doc),
+      options: optionsRaw.map(({ label, text }) => ({
+        label,
+        text
+      })),
+      correct_answer: correct
+        ? {
+            label: correct.label,
+            text: correct.text
+          }
+        : null,
+      explanation: extractExplanation(doc)
+    };
+  }
+
+  async function fetchXml(url) {
+    const res = await fetch(url, { credentials: "include" });
+    if (!res.ok) throw new Error(`Gagal fetch sitemap ${url} (${res.status})`);
+    const text = await res.text();
+    return new DOMParser().parseFromString(text, "application/xml");
+  }
+
+  function getUrlsFromSitemap(xmlDoc) {
+    return [...xmlDoc.querySelectorAll("url > loc")]
+      .map(el => el.textContent.trim())
+      .filter(Boolean);
+  }
+
+  async function loadAllSitemaps() {
+    let all = [];
+    for (const url of sitemapUrls) {
+      setStatus(`Membaca sitemap: ${url}`);
+      const xml = await fetchXml(url);
+      const urls = getUrlsFromSitemap(xml);
+      all.push(...urls);
+    }
+    state.allUrls = [...new Set(all)];
+    return state.allUrls;
+  }
+
+  async function fetchQuestion(url) {
+    const res = await fetch(url, { credentials: "include" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const html = await res.text();
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    return extractQuestionData(doc, url);
+  }
+
+  function downloadFile(filename, content, mimeType) {
+    const blob = new Blob([content], { type: mimeType });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }
+
+  function makeFilename(prefix, rangeMode, rangeText) {
+    const safePrefix = (prefix || "all").replace(/[^a-z0-9-_]+/gi, "_");
+    const safeRange = rangeMode === "custom"
+      ? (rangeText || "custom").replace(/[^a-z0-9-_]+/gi, "_")
+      : "allrange";
+
+    const now = new Date();
+    const ts = [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0"),
+      "-",
+      String(now.getHours()).padStart(2, "0"),
+      String(now.getMinutes()).padStart(2, "0"),
+      String(now.getSeconds()).padStart(2, "0")
+    ].join("");
+
+    return `quiz_${safePrefix}_${safeRange}_${ts}.json`;
+  }
+
+  function setStatus(msg) {
+    statusBox.textContent = msg;
+  }
+
+  function updateCounts() {
+    totalBox.textContent = `Total URL sitemap: ${state.allUrls.length}`;
+    filteredBox.textContent = `URL hasil prefix: ${state.filteredUrls.length}`;
+    selectedBox.textContent = `URL akan diproses: ${state.selectedUrls.length}`;
+    resultBox.textContent = `Berhasil: ${state.results.length}`;
+    errorBox.textContent = `Gagal: ${state.errors.length}`;
+  }
+
+  function applyPrefixFilter(prefix) {
+    const normalized = prefix.trim().toLowerCase();
+    state.filteredUrls = state.allUrls.filter(url => {
+      const slug = getSlugFromUrl(url);
+      return matchPrefix(slug, normalized);
+    });
+  }
+
+  function parseCustomRange(input, max) {
+    const value = String(input || "").trim();
+    const m = value.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (!m) {
+      throw new Error("Format custom harus seperti 1-100 atau 101-150.");
+    }
+
+    let start = parseInt(m[1], 10);
+    let end = parseInt(m[2], 10);
+
+    if (start < 1 || end < 1) {
+      throw new Error("Range harus dimulai dari 1.");
+    }
+    if (end < start) {
+      throw new Error("Range tidak valid. Nilai akhir harus lebih besar atau sama.");
+    }
+    if (start > max) {
+      throw new Error(`Range mulai melebihi total hasil prefix (${max}).`);
+    }
+
+    if (end > max) end = max;
+
+    return { start, end };
+  }
+
+  function applySelectionRange() {
+    const mode = rangeModeAll.checked ? "all" : "custom";
+
+    if (mode === "all") {
+      state.selectedUrls = [...state.filteredUrls];
+      updateCounts();
+      return;
+    }
+
+    const { start, end } = parseCustomRange(rangeInput.value, state.filteredUrls.length);
+    state.selectedUrls = state.filteredUrls.slice(start - 1, end);
+    updateCounts();
+  }
+
+  async function runScrape() {
+    if (state.running) return;
+
+    state.running = true;
+    state.cancelled = false;
+    state.results = [];
+    state.errors = [];
+    updateCounts();
+
+    const prefix = prefixInput.value.trim();
+    const concurrency = Math.max(1, parseInt(concurrencyInput.value || "3", 10));
+    const waitMs = Math.max(0, parseInt(delayInput.value || "300", 10));
+    const rangeMode = rangeModeAll.checked ? "all" : "custom";
+    const rangeText = rangeInput.value.trim();
+
+    try {
+      applyPrefixFilter(prefix);
+      applySelectionRange();
+    } catch (err) {
+      setStatus(String(err.message || err));
+      state.running = false;
+      return;
+    }
+
+    if (!state.selectedUrls.length) {
+      setStatus("Tidak ada URL yang dipilih untuk diproses.");
+      state.running = false;
+      return;
+    }
+
+    startBtn.disabled = true;
+    cancelBtn.disabled = false;
+
+    let index = 0;
+
+    async function worker(workerId) {
+      while (index < state.selectedUrls.length && !state.cancelled) {
+        const currentIndex = index++;
+        const url = state.selectedUrls[currentIndex];
+
+        setStatus(`Worker ${workerId}: ${currentIndex + 1}/${state.selectedUrls.length}`);
+
+        try {
+          const data = await fetchQuestion(url);
+          state.results[currentIndex] = data;
+        } catch (err) {
+          state.errors.push({
+            url,
+            error: String(err)
+          });
+        }
+
+        updateCounts();
+        await delay(waitMs);
+      }
+    }
+
+    await Promise.all(
+      Array.from({ length: concurrency }, (_, i) => worker(i + 1))
+    );
+
+    state.running = false;
+    startBtn.disabled = false;
+    cancelBtn.disabled = true;
+
+    if (state.cancelled) {
+      setStatus("Dibatalkan.");
+      return;
+    }
+
+   state.results = state.results.filter(Boolean);
+
+    const filename = makeFilename(prefix, rangeMode, rangeText);
+    downloadFile(filename, JSON.stringify(state.results, null, 2), "application/json");
+
+    if (state.errors.length) {
+      const errName = filename.replace(/\.json$/i, "_errors.txt");
+      const errText = state.errors.map(e => `${e.url}\n${e.error}\n`).join("\n");
+      downloadFile(errName, errText, "text/plain");
+    }
+
+    setStatus(`Selesai. File ${filename} sudah dibuat.`);
+  }
+
+  const panel = document.createElement("div");
+  panel.id = "__quizScraperUI";
+  panel.style.cssText = `
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    width: 390px;
+    z-index: 999999;
+    background: #111;
+    color: #fff;
+    border: 1px solid #444;
+    border-radius: 10px;
+    padding: 14px;
+    font: 13px/1.4 Arial, sans-serif;
+    box-shadow: 0 8px 24px rgba(0,0,0,.35);
+  `;
+
+  panel.innerHTML = `
+    <div style="font-size:16px;font-weight:bold;margin-bottom:10px;">Quiz HTML-preserving Scraper</div>
+
+    <div style="margin-bottom:8px;">
+      <label style="display:block;margin-bottom:4px;">Filter prefix slug</label>
+      <input id="qs_prefix" type="text" placeholder="contoh: p2-t8 atau p2-t8-24"
+        style="width:100%;padding:8px;border-radius:6px;border:1px solid #555;background:#222;color:#fff;">
+    </div>
+
+    <div style="margin-bottom:10px;padding:10px;border:1px solid #333;border-radius:8px;background:#1a1a1a;">
+      <div style="margin-bottom:6px;font-weight:bold;">Range proses</div>
+
+      <label style="display:block;margin-bottom:6px;">
+        <input type="radio" name="qs_range_mode" id="qs_range_all" checked>
+        All
+      </label>
+
+      <label style="display:block;margin-bottom:6px;">
+        <input type="radio" name="qs_range_mode" id="qs_range_custom">
+        Custom
+      </label>
+
+      <input id="qs_range_input" type="text" placeholder="contoh: 1-100 atau 101-150"
+        style="width:100%;padding:8px;border-radius:6px;border:1px solid #555;background:#222;color:#fff;">
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+      <div>
+        <label style="display:block;margin-bottom:4px;">Concurrency</label>
+        <input id="qs_concurrency" type="number" min="1" value="3"
+          style="width:100%;padding:8px;border-radius:6px;border:1px solid #555;background:#222;color:#fff;">
+      </div>
+      <div>
+        <label style="display:block;margin-bottom:4px;">Delay ms</label>
+        <input id="qs_delay" type="number" min="0" value="300"
+          style="width:100%;padding:8px;border-radius:6px;border:1px solid #555;background:#222;color:#fff;">
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+      <button id="qs_load" style="padding:8px 10px;border:0;border-radius:6px;cursor:pointer;">Load Sitemap</button>
+      <button id="qs_preview" style="padding:8px 10px;border:0;border-radius:6px;cursor:pointer;">Preview Filter</button>
+      <button id="qs_start" style="padding:8px 10px;border:0;border-radius:6px;cursor:pointer;">Start Scrape</button>
+      <button id="qs_cancel" style="padding:8px 10px;border:0;border-radius:6px;cursor:pointer;" disabled>Cancel</button>
+      <button id="qs_close" style="padding:8px 10px;border:0;border-radius:6px;cursor:pointer;">Close</button>
+    </div>
+
+    <div id="qs_total" style="margin-bottom:4px;">Total URL sitemap: 0</div>
+    <div id="qs_filtered" style="margin-bottom:4px;">URL hasil prefix: 0</div>
+    <div id="qs_selected" style="margin-bottom:4px;">URL akan diproses: 0</div>
+    <div id="qs_result" style="margin-bottom:4px;">Berhasil: 0</div>
+    <div id="qs_error" style="margin-bottom:8px;">Gagal: 0</div>
+
+    <div id="qs_status" style="padding:8px;background:#1c1c1c;border-radius:6px;min-height:36px;">
+      Siap.
+    </div>
+
+    <div style="margin-top:10px;font-size:12px;color:#bbb;">
+      Field question/options/explanation sekarang menyimpan HTML asli.
+    </div>
+  `;
+
+  document.body.appendChild(panel);
+
+  const prefixInput = panel.querySelector("#qs_prefix");
+  const rangeModeAll = panel.querySelector("#qs_range_all");
+  const rangeModeCustom = panel.querySelector("#qs_range_custom");
+  const rangeInput = panel.querySelector("#qs_range_input");
+  const concurrencyInput = panel.querySelector("#qs_concurrency");
+  const delayInput = panel.querySelector("#qs_delay");
+
+  const totalBox = panel.querySelector("#qs_total");
+  const filteredBox = panel.querySelector("#qs_filtered");
+  const selectedBox = panel.querySelector("#qs_selected");
+  const resultBox = panel.querySelector("#qs_result");
+  const errorBox = panel.querySelector("#qs_error");
+  const statusBox = panel.querySelector("#qs_status");
+
+  const loadBtn = panel.querySelector("#qs_load");
+  const previewBtn = panel.querySelector("#qs_preview");
+  const startBtn = panel.querySelector("#qs_start");
+  const cancelBtn = panel.querySelector("#qs_cancel");
+  const closeBtn = panel.querySelector("#qs_close");
+
+  loadBtn.onclick = async () => {
+    try {
+      setStatus("Memuat semua sitemap...");
+      await loadAllSitemaps();
+      applyPrefixFilter(prefixInput.value);
+      applySelectionRange();
+      setStatus("Sitemap berhasil dimuat.");
+    } catch (err) {
+      setStatus(`Error load sitemap: ${err}`);
+    }
+  };
+
+  previewBtn.onclick = () => {
+    try {
+      applyPrefixFilter(prefixInput.value);
+      applySelectionRange();
+      const examples = state.selectedUrls.slice(0, 5).map(getSlugFromUrl);
+      setStatus(
+        state.selectedUrls.length
+          ? `Contoh slug terpilih: ${examples.join(", ")}`
+          : "Tidak ada URL yang cocok."
+      );
+    } catch (err) {
+      setStatus(String(err.message || err));
+    }
+  };
+
+  startBtn.onclick = runScrape;
+
+  cancelBtn.onclick = () => {
+    state.cancelled = true;
+    cancelBtn.disabled = true;
+    setStatus("Membatalkan proses...");
+  };
+
+  closeBtn.onclick = () => {
+    state.cancelled = true;
+    panel.remove();
+    delete window.__quizScraperUI;
+  };
+
+  rangeModeAll.onchange = () => {
+    if (state.allUrls.length) {
+      try {
+        applyPrefixFilter(prefixInput.value);
+        applySelectionRange();
+      } catch {}
+    }
+  };
+
+  rangeModeCustom.onchange = () => {
+    if (state.allUrls.length) {
+      try {
+        applyPrefixFilter(prefixInput.value);
+        applySelectionRange();
+      } catch {}
+    }
+  };
+
+  rangeInput.oninput = () => {
+    if (rangeModeCustom.checked && state.allUrls.length) {
+      try {
+        applyPrefixFilter(prefixInput.value);
+        applySelectionRange();
+      } catch {}
+    }
+  };
+
+  window.__quizScraperUI = true;
+  setStatus("UI siap. Klik Load Sitemap dulu.");
+})();
