@@ -263,6 +263,14 @@ body {
     print-color-adjust: exact;
     -webkit-print-color-adjust: exact;
   }
+  /* Menetralkan garis tepi (stroke) karakter rumus SVG saat diprint */
+  mjx-container svg use {
+    stroke: none !important;
+  }
+  
+  mjx-container svg g {
+    stroke-width: 0 !important;
+  }
 }
 `;
 
