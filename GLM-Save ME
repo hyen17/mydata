@@ -1,0 +1,168 @@
+(() => {
+  let collectedQuestions = [];
+  let quizTab = null;
+  let isCollecting = false; // Menggantikan intervalId
+
+  const overlay = document.createElement('div');
+  overlay.style = 'position:fixed;top:10px;right:10px;width:420px;background:white;border:2px solid black;padding:10px;z-index:9999;font-family:Arial,sans-serif;box-shadow:0 0 10px rgba(0,0,0,0.5)';
+  overlay.innerHTML = `
+    <input type="text" placeholder="Enter quiz URL" style="width:100%;margin-bottom:5px" id="quiz-url">
+    <button id="start-btn">Start</button>
+    <button id="stop-btn" style="margin-left:5px">Stop</button>
+    <button id="save-btn" style="margin-left:5px">Save JSON</button>
+    <div id="status-label" style="margin-top:5px">Questions collected: 0</div>
+  `;
+  document.body.appendChild(overlay);
+
+  const urlInput = document.getElementById('quiz-url');
+  const startBtn = document.getElementById('start-btn');
+  const stopBtn = document.getElementById('stop-btn');
+  const saveBtn = document.getElementById('save-btn');
+  const statusLabel = document.getElementById('status-label');
+
+  // Fungsi pembantu untuk membuat delay (jeda)
+  const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+  function cleanHTML(htmlString) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(htmlString, 'text/html');
+
+    const calcBtn = doc.querySelector('#open-calculator-modal');
+    if (calcBtn) calcBtn.remove();
+
+    const subunitLinks = doc.querySelectorAll('.ktoLink');
+    subunitLinks.forEach(el => el.remove());
+
+    return doc.body.innerHTML;
+  }
+
+  function getExplanationHTML(foilDiv) {
+    // Tetap menggunakan perbaikan sibling element sebelumnya
+    const explainWrapper = foilDiv.nextElementSibling;
+    
+    if (!explainWrapper || !explainWrapper.classList.contains('answer-explain')) {
+      return '';
+    }
+
+    const explainDiv = explainWrapper.querySelector('.inner-explain');
+    if (!explainDiv) return '';
+    
+    const cloned = explainDiv.cloneNode(true);
+    cloned.style.display = 'block'; 
+    
+    const calcBtn = cloned.querySelector('#open-calculator-modal');
+    if (calcBtn) calcBtn.remove();
+    
+    const subunitLinks = cloned.querySelectorAll('.ktoLink');
+    subunitLinks.forEach(el => el.remove());
+    
+    return cloned.innerHTML; 
+  }
+
+  function getQuestionFromTab(tab) {
+    try {
+      const doc = tab.document;
+      const article = doc.querySelector('#full-content-container .preview-content-holder article');
+      if (!article) return null;
+
+      const questionStem = article.querySelector('#questionStem')?.outerHTML || '';
+      const foils = article.querySelectorAll('#questionFoils .question-foil');
+
+      const choices = Array.from(foils).map(f => ({
+        label: f.querySelector('input')?.value || '',
+        content: f.querySelector('.answer-text')?.outerHTML || '',
+        correct: f.querySelector('.image-correctness img')?.alt === 'Correct',
+        explanation: getExplanationHTML(f)
+      }));
+
+      return { question: cleanHTML(questionStem), choices };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function clickNext(tab) {
+    try {
+      const nextBtn = tab.document.querySelector('#nav-to-next-item-button');
+      // Pastikan tombol ada DAN tidak dalam status disabled
+      if (!nextBtn || nextBtn.disabled) return false;
+      nextBtn.click();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function saveJSON() {
+    if (!collectedQuestions.length) return alert('No questions collected!');
+    const blob = new Blob([JSON.stringify(collectedQuestions, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'structured_questions.json';
+    a.click();
+  }
+
+  // Ubah menjadi async function agar bisa menggunakan await delay()
+  startBtn.onclick = async () => {
+    if (!urlInput.value) return alert('Enter quiz URL!');
+    if (quizTab && !quizTab.closed) quizTab.close();
+    
+    quizTab = window.open(urlInput.value, '_blank');
+    isCollecting = true;
+    let lastQuestionHTML = '';
+
+    // Beri waktu agak panjang di awal agar halaman pertama termuat sempurna
+    statusLabel.innerText = "Loading first page...";
+    await delay(4000); 
+
+    // Loop akan terus berjalan selama isCollecting bernilai true
+    while (isCollecting) {
+      if (!quizTab || quizTab.closed) {
+        isCollecting = false;
+        alert('Quiz tab closed. Collection stopped.');
+        break;
+      }
+
+      // 1. Ambil data soal
+      const qData = getQuestionFromTab(quizTab);
+      if (qData && qData.question !== lastQuestionHTML) {
+        collectedQuestions.push(qData);
+        lastQuestionHTML = qData.question;
+        statusLabel.innerText = `Questions collected: ${collectedQuestions.length}`;
+      }
+
+      // 2. Jeda 1 detik sebelum menekan tombol Next
+      await delay(1000);
+
+      // 3. Coba tekan tombol Next
+      let clicked = clickNext(quizTab);
+
+      // Jika tombol tidak ditemukan, jangan langsung menyerah. Tunggu sebentar dan cek lagi.
+      // Berguna jika koneksi lambat dan tombol telat dirender.
+      if (!clicked) {
+        statusLabel.innerText = "Waiting for next button...";
+        await delay(2000);
+        clicked = clickNext(quizTab);
+        
+        // Jika setelah ditunggu tetap tidak bisa diklik, berarti benar-benar habis
+        if (!clicked) {
+          isCollecting = false;
+          alert('Finished all questions or Next button is disabled.');
+          break;
+        }
+      }
+
+      // 4. Jeda 1.5 detik setelah klik Next untuk memberi waktu soal baru dimuat
+      statusLabel.innerText = "Loading next question...";
+      await delay(1500);
+      statusLabel.innerText = `Questions collected: ${collectedQuestions.length}`;
+    }
+  };
+
+  stopBtn.onclick = () => {
+    isCollecting = false;
+    alert('Stopped manually.');
+  };
+
+  saveBtn.onclick = saveJSON;
+})();
