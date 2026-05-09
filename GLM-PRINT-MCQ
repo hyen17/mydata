@@ -112,7 +112,7 @@
     if (!html) return '';
     let s = String(html);
     
-    s = removeSrOnly(s); // Menghapus teks sr-only (Screen Reader Only)
+    s = removeSrOnly(s); 
     s = fixWileyMathSVG(s);
     s = cleanMathTags(s);
     s = removeChoicePercentSpans(s);
@@ -172,7 +172,7 @@
   `;
 
   panel.innerHTML = `
-    <div style="font-weight:700; font-size:15px; margin-bottom:8px;">JSON → HTML (Selectable Topics)</div>
+    <div style="font-weight:700; font-size:15px; margin-bottom:8px;">JSON → HTML (Selectable Topics + Image Alert)</div>
     <div style="font-size:13px; margin-bottom:8px;">Upload JSON lalu klik Generate. Akan muncul pop-up untuk memilih topik yang ingin di-print.</div>
 
     <input id="fileInput" type="file" accept=".json,.txt,application/json" multiple style="width:100%; margin-bottom:8px;">
@@ -195,6 +195,7 @@
 
    <label style="display:block; margin-top:10px;"><input id="splitBySystem" type="checkbox" checked> Split File by Topic Name</label>
    <label style="display:block; margin-top:10px;"><input id="autoDl" type="checkbox"> Auto Download</label>
+   <label style="display:block; margin-top:10px; color:#fbbf24;"><input id="removeImgChk" type="checkbox"> Remove Question with Image</label>
 
     <div id="statusArea" style="margin-top:10px; font-size:13px; color:#d1d5db;"></div>
   `;
@@ -206,6 +207,7 @@
   const statusArea = panel.querySelector('#statusArea');
   const autoDlChk = panel.querySelector('#autoDl');
   const splitBySystemChk = panel.querySelector('#splitBySystem');
+  const removeImgChk = panel.querySelector('#removeImgChk');
 
   const setStatus = (t) => { statusArea.innerText = t; console.log('[gen]', t); };
 
@@ -301,14 +303,49 @@
   // =====================================================================
   // ESSAY + MCQ BUILDER
   // =====================================================================
-  function buildBodies(questions, mode, abstracts, isEssay) {
-    if (!isEssay) {
-      let qBody = '';
-      let aBody = '';
+  function buildBodies(questions, mode, abstracts, isEssay, removeImg) {
+    let qBody = '';
+    let aBody = '';
+    let imageReports = []; 
 
+    if (!isEssay) {
+      let processedQuestions = [];
+
+      // Tahap 1: Evaluasi Image dan Filter
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i];
-        const seq = (i + 1);
+        
+        let qText = sanitizeContent(q.stem || q.questionText || '');
+        let foilHeader = sanitizeContent(q.foilHeader || q.answerHeader || '');
+        const arr = q.foils || q.answerChoiceList || q.answerChoice || [];
+        
+        let htmlContentToSearchImage = qText + foilHeader + sanitizeContent(q.explanationText || '');
+        arr.forEach(ch => {
+           htmlContentToSearchImage += sanitizeContent(ch.text || ch.choice || '') + sanitizeContent(ch.explanation || '');
+        });
+
+        const hasImage = /<img\b/i.test(htmlContentToSearchImage);
+        
+        // Catat Soal yang punya image (menggunakan nomor aslinya)
+        if (hasImage) {
+            let tName = (q.source && q.source.topicName) ? String(q.source.topicName).trim() : 'Unknown Topic';
+            let originalNo = q.number || (i + 1);
+            imageReports.push(`- Topik: "${tName}", Soal asli No: ${originalNo}`);
+        }
+
+        // Buang jika fitur centang Remove Image aktif
+        if (removeImg && hasImage) {
+            continue; 
+        }
+        
+        // Simpan jika lolos filter
+        processedQuestions.push(q);
+      }
+
+      // Tahap 2: Build HTML dari soal-soal yang lolos
+      for (let i = 0; i < processedQuestions.length; i++) {
+        const q = processedQuestions[i];
+        const seq = (i + 1); // Penomoran urut ulang
 
         let qText = sanitizeContent(q.stem || q.questionText || '');
         let foilHeader = sanitizeContent(q.foilHeader || q.answerHeader || '');
@@ -368,7 +405,7 @@
         }
 
         qBody += `<div class="q-block">
-          <div class="q-header">Question ${seq} of ${questions.length}</div>
+          <div class="q-header">Question ${seq} of ${processedQuestions.length}</div>
           <div class="q-text">${qText}</div>
           ${foilHeader ? `<div class="foil-header">${foilHeader}</div>` : ''}
           <ol class="choices">`;
@@ -380,7 +417,7 @@
         qBody += `</ol></div><hr/>`;
 
         aBody += `<div class="q-block">
-          <div class="q-header">Question ${seq} of ${questions.length}</div>
+          <div class="q-header">Question ${seq} of ${processedQuestions.length}</div>
           <div class="q-text">${qText}</div>
           ${foilHeader ? `<div class="foil-header">${foilHeader}</div>` : ''}
           <ol class="choices">`;
@@ -397,11 +434,10 @@
         </div><hr/>`;
       }
 
-      return { qBody, aBody };
+      return { qBody, aBody, imageReports };
     }
 
-    let qBody = ''; let aBody = '';
-    return { qBody, aBody }; 
+    return { qBody, aBody, imageReports }; 
   }
 
   // =====================================================================
@@ -505,6 +541,7 @@
     setStatus('Membaca file dan mengekstrak topik...');
     const autoDownload = !!autoDlChk.checked;
     const splitBySystem = !!splitBySystemChk.checked;
+    const removeImg = !!removeImgChk.checked; // Ambil nilai checkbox Remove Image
 
     let files = Array.from(fileOrFiles || []);
     const doJoin = (outMode === 'join') || (files.length === 1);
@@ -585,11 +622,17 @@
     // 5. Fungsi Render Helper
     const mode = panel.querySelector("input[name='pb']:checked").value;
     const css = cssFor(mode);
+    let globalImageReports = []; 
 
     async function buildAndOutput(qList, title) {
         const isEssay = isEssayFlag || qList.some(q => q._testTypeName === 'WC');
-        const { qBody, aBody } = buildBodies(qList, mode, abstracts, isEssay);
+        const { qBody, aBody, imageReports } = buildBodies(qList, mode, abstracts, isEssay, removeImg);
         
+        globalImageReports.push(...imageReports); 
+
+        // Hindari membuat popup kosong jika qList kosong karena difilter semua
+        if (!qBody) return;
+
         const convQ = await convertImagesToBase64(qBody);
         const convA = await convertImagesToBase64(aBody);
         
@@ -610,14 +653,12 @@
 
     // 6. Jalankan Render Berdasarkan Filter dan Output Mode
     if (doJoin && splitBySystem) {
-        // Output digabung, tapi di-split (file HTML berbeda) per Topik yang dipilih
         for (const sysName of selectedTopicKeys) {
             const qList = globalGroups[sysName];
             await buildAndOutput(qList, sysName === 'DEFAULT' ? 'Questions' : sysName);
         }
     } 
     else if (doJoin && !splitBySystem) {
-        // Output digabung dalam SATU file HTML berisi gabungan topik yang dipilih
         let combinedQs = [];
         for (const sysName of selectedTopicKeys) {
             combinedQs.push(...globalGroups[sysName]);
@@ -625,7 +666,6 @@
         await buildAndOutput(combinedQs, 'Combined_Topics');
     } 
     else if (!doJoin && splitBySystem) {
-        // Pisah per File upload, dan di dalam file itu di-split per Topik
         for (let fi = 0; fi < files.length; fi++) {
             const f = files[fi];
             let parsed;
@@ -644,7 +684,6 @@
         }
     } 
     else if (!doJoin && !splitBySystem) {
-        // Pisah per File upload, tapi di dalamnya SATU output HTML memuat filter Topik
         for (let fi = 0; fi < files.length; fi++) {
             const f = files[fi];
             let parsed;
@@ -662,6 +701,22 @@
                 await buildAndOutput(combinedQs, baseName);
             }
         }
+    }
+
+    // 7. Menampilkan Pop-Up Pemberitahuan Gambar
+    if (globalImageReports.length > 0) {
+        let msg = removeImg 
+            ? "PERHATIAN: Soal-soal berikut memiliki gambar dan TELAH DIHAPUS dari hasil generate:\n\n"
+            : "PERHATIAN: Terdapat gambar (image) pada soal-soal berikut:\n\n";
+        
+        if (globalImageReports.length > 20) {
+            msg += globalImageReports.slice(0, 20).join("\n");
+            msg += `\n... dan ${globalImageReports.length - 20} soal lainnya.`;
+        } else {
+            msg += globalImageReports.join("\n");
+        }
+        
+        setTimeout(() => alert(msg), 500); 
     }
 
     setStatus('Proses Selesai.');
