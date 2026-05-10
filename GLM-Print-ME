@@ -1,0 +1,809 @@
+(() => {
+  // ---------- Config / Utils ----------
+  const letters = (n) => String.fromCharCode(64 + n); // 1->A
+
+  // ---------- Sanitizers & Math Fixers ----------
+  
+  function cleanGleimSpecifics(html) {
+    if (!html) return html;
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    // Menghapus elemen tool source-link yang menyebabkan jarak kosong lebar
+    div.querySelectorAll('.tool.source-link').forEach(el => el.remove());
+    return div.innerHTML;
+  }
+
+  function removeSrOnly(html) {
+    if (!html) return html;
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    const srOnlyElements = div.querySelectorAll('.sr-only');
+    srOnlyElements.forEach(el => el.remove());
+    return div.innerHTML;
+  }
+
+  function removeLabelTags(html) {
+    if (!html) return html;
+    return html.replace(/<\/?label[^>]*>/gi, '');
+  }
+
+  function fixWileyMathSVG(html) {
+    if (!html) return html;
+    if (!html.includes('data-svg')) return html;
+
+    const div = document.createElement('div');
+    div.innerHTML = html;
+
+    const spans = div.querySelectorAll('span[data-svg]');
+    let changed = false;
+
+    spans.forEach(span => {
+      const svgContent = span.getAttribute('data-svg');
+      if (svgContent) {
+        const spanWrapper = document.createElement('span');
+        spanWrapper.className = 'mjx-svg-fix'; 
+        spanWrapper.style.display = 'inline-block';
+        spanWrapper.style.verticalAlign = 'middle';
+        spanWrapper.innerHTML = svgContent;
+        span.replaceWith(spanWrapper);
+        changed = true;
+      }
+    });
+
+    return changed ? div.innerHTML : html;
+  }
+
+  function removeChoicePercentSpans(html) {
+    if (!html) return html;
+    return html
+      .replace(/<span[^>]*class=["']?choice-percent["']?[^>]*>.*?<\/span>/gi, '')
+      .replace(/\(\s*\d{1,3}%\s*\)/g, '');
+  }
+
+  function cleanMathTags(html) {
+    if (!html) return html;
+    let h = String(html);
+    h = h.replace(/<\/?\w+:displayeditem[^>]*>/gi, ''); 
+    h = h.replace(/xmlns(:\w+)?="[^"]*"/gi, '');
+    return h;
+  }
+
+  function removeVideoAndEmptyP(html) {
+    if (!html) return html;
+    let h = String(html);
+    h = h.replace(/<a\b[^>]*>\s*Video\s*<\/a>/gi, '');
+    h = h.replace(/<p\b[^>]*>[\s\S]*?<\/p>/gi, (m) => {
+      if (/<img\b/i.test(m)) return m;
+      if (/<svg|data-svg/i.test(m)) return m;
+      if (/^<p[^>]*>\s*(?:&nbsp;|\s|<br\s*\/?>)*<\/p>$/i.test(m)) return '';
+      return m;
+    });
+    h = h.replace(/>\s+</g, '><');
+    return h;
+  }
+
+  function removeEssayPrompt(html) {
+    if (!html) return html;
+    return String(html).replace(/type\s+your\s+response\s+here\b[.\s:]*/gi, '');
+  }
+
+  function removeInternalLinks(html) {
+    if (!html) return html;
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    const links = div.querySelectorAll('a[href]');
+    links.forEach(a => {
+      const href = (a.getAttribute('href') || '').trim();
+      const isExternalLink = /^(https?:)?\/\//i.test(href) || /^mailto:/i.test(href) || /^tel:/i.test(href) || /^#/i.test(href);
+      const isInternalLink = /^\d+$/.test(href) || href === '' || (!isExternalLink && !/[./:?#]/.test(href));
+      if (isInternalLink) {
+        a.replaceWith(document.createTextNode(a.textContent || ''));
+      }
+    });
+    return div.innerHTML;
+  }
+
+  function sanitizeContent(html) {
+    if (!html) return '';
+    let s = String(html);
+    
+    s = cleanGleimSpecifics(s);
+    s = removeSrOnly(s); 
+    s = removeLabelTags(s);
+    s = fixWileyMathSVG(s);
+    s = cleanMathTags(s);
+    s = removeChoicePercentSpans(s);
+    s = removeVideoAndEmptyP(s);
+    s = removeEssayPrompt(s);
+    s = removeInternalLinks(s);
+    s = applySmartTableClasses(s);
+    
+    return s.trim();
+  }
+
+  function addTdSpacing(html) {
+    if (!html) return html;
+    return html.replace(/<\/td>/gi, '&nbsp;&nbsp;</td>');
+  }
+
+  function applySmartTableClasses(html) {
+    if (!html) return html;
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    const tables = div.querySelectorAll('table');
+    tables.forEach(table => {
+      const classAttr = table.getAttribute('class') || '';
+      const borderAttr = (table.getAttribute('border') || '').trim();
+      const styleAttr = (table.getAttribute('style') || '').toLowerCase();
+      const hasDefaultLikeClass = /table-default-style|table-custom-style|table-CFA-default-style|gr-table-default-style/.test(classAttr);
+
+      if (!hasDefaultLikeClass) {
+        table.classList.add('table-default-style');
+      }
+
+      const isOriginallyNoBorder = borderAttr === '0' || /\bborder_outer_none\b/.test(classAttr) || /border\s*:\s*none/.test(styleAttr);
+      if (isOriginallyNoBorder) {
+        table.classList.add('table-No-Border');
+      }
+    });
+    return div.innerHTML;
+  }
+
+  // EKSTRAKSI FOIL HEADER DARI SR-ONLY (Khusus ME1)
+  function extractFoilHeaderFromChoices(arr) {
+    if (!arr || arr.length === 0) return '';
+    const firstChoice = arr[0].content || arr[0].text || arr[0].choice || '';
+    if (!/<table/i.test(firstChoice)) return '';
+
+    const div = document.createElement('div');
+    div.innerHTML = firstChoice;
+    const srOnlyEls = div.querySelectorAll('td .sr-only, th .sr-only');
+    
+    if (srOnlyEls.length > 0) {
+        let headers = [];
+        srOnlyEls.forEach(el => {
+            let txt = el.textContent.replace(/\u00A0/g, ' ').trim();
+            if (txt) headers.push(txt);
+        });
+        
+        if (headers.length > 0) {
+            return `<div style="font-weight:700; margin-bottom:12px; padding:8px 12px; background-color:#f1f5f9; border-radius:6px; display:inline-block; border: 1px solid #e2e8f0;">
+                       ${headers.join('<span style="margin: 0 16px; color: #94a3b8;">|</span>')}
+                    </div>`;
+        }
+    }
+    return '';
+  }
+
+  // ---------- UI ----------
+  const panel = document.createElement('div');
+  panel.style.cssText = `
+    position:fixed; right:18px; bottom:18px; z-index:2147483647;
+    background:#1f2937; color:#fff; padding:14px; width:380px;
+    border-radius:10px; font-family:'Inter', system-ui, sans-serif;
+    box-shadow:0 8px 30px rgba(0,0,0,0.4);
+  `;
+
+  panel.innerHTML = `
+    <div style="font-weight:700; font-size:15px; margin-bottom:8px;">JSON → HTML (Fixed Layout & ME1)</div>
+    <div style="font-size:13px; margin-bottom:8px;">Upload JSON lalu klik Generate. Mendukung fix centang, jarak, dan header ME1.</div>
+
+    <input id="fileInput" type="file" accept=".json,.txt,application/json" multiple style="width:100%; margin-bottom:8px;">
+
+    <div style="margin-bottom:6px;">Output mode:</div>
+    <label style="display:block; margin-bottom:6px;"><input type="radio" name="outmode" value="separate" checked> Separate (each file → own output)</label>
+    <label style="display:block; margin-bottom:10px;"><input type="radio" name="outmode" value="join"> Join (merge all files)</label>
+
+    <div style="margin-bottom:6px;">Page-break mode:</div>
+    <label style="display:block;"><input type="radio" name="pb" value="normal" checked> HTML Normal</label>
+    <label style="display:block;"><input type="radio" name="pb" value="smart"> HTML Smart</label>
+    <label style="display:block; margin-bottom:8px;"><input type="radio" name="pb" value="each"> HTML Page-break per Question</label>
+
+    <label style="display:block; margin-bottom:10px;"><input id="pdfChk" type="checkbox"> Auto Print PDF (Answers)</label>
+
+    <button id="genBtn" style="
+      width:100%; padding:10px; background:#10b981; color:#fff; border:none;
+      border-radius:6px; font-weight:700; cursor:pointer;
+    ">Generate HTML</button>
+
+   <label style="display:block; margin-top:10px;"><input id="splitBySystem" type="checkbox" checked> Split File by Topic Name</label>
+   <label style="display:block; margin-top:10px;"><input id="autoDl" type="checkbox"> Auto Download</label>
+   <label style="display:block; margin-top:10px; color:#fbbf24;"><input id="removeImgChk" type="checkbox"> Remove Question with Image</label>
+
+    <div id="statusArea" style="margin-top:10px; font-size:13px; color:#d1d5db;"></div>
+  `;
+
+  document.body.appendChild(panel);
+
+  const fileInput = panel.querySelector('#fileInput');
+  const genBtn = panel.querySelector('#genBtn');
+  const statusArea = panel.querySelector('#statusArea');
+  const autoDlChk = panel.querySelector('#autoDl');
+  const splitBySystemChk = panel.querySelector('#splitBySystem');
+  const removeImgChk = panel.querySelector('#removeImgChk');
+
+  const setStatus = (t) => { statusArea.innerText = t; console.log('[gen]', t); };
+
+  // ---------- CSS ----------
+  function cssFor(mode) {
+    let extra = '';
+    if (mode === 'smart') extra = `.q-block{page-break-inside:avoid;}`;
+    if (mode === 'each') extra = `.q-block{page-break-before:always;} .q-block:first-child{page-break-before:avoid;}`;
+
+    return `
+      body{ 
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+        padding:28px; 
+        color:#111; 
+        line-height:1.55; 
+      }
+      .q-block{ margin-bottom:22px }
+      .reading-block{ margin-bottom:22px; page-break-before:always; }
+      .reading-title{ font-size:20px; font-weight:700; margin-bottom:10px; }
+      .reading-text{ margin-bottom:12px; }
+
+      .q-header{ font-weight:700; font-size:18px; margin-bottom:8px }
+      .q-text{ margin-bottom:12px }
+      
+      /* Pembersihan Margin Ekstra Bawaan Gleim */
+      .q-text > *:first-child { margin-top: 0 !important; }
+      .q-text > *:last-child { margin-bottom: 0 !important; }
+      
+      .foil-header { margin-top:10px; margin-bottom:10px; }
+
+      ol.choices{ list-style:none; padding-left:0; margin:0 }
+      ol.choices li{
+        margin:0 !important; padding:8px 8px !important;
+        line-height:1.3; 
+        display:flex; align-items:flex-start; /* Menggunakan Flexbox untuk menjaga centang di samping */
+      }
+      .letter{ font-weight:700; margin-right:8px; flex:0 0 auto; white-space:nowrap; }
+      
+      /* Wadah Teks Pilihan */
+      .choice-content{ flex:1 1 auto; min-width:0; }
+      .choice-content > *:first-child { margin-top: 0 !important; }
+      .choice-content > *:last-child { margin-bottom: 0 !important; }
+
+      .correct{ background:#e6f9ea; border:1px solid #2e7d32; border-radius: 6px; }
+      
+      /* Centang (Tick) dibuat sebagai elemen Flex mandiri di ujung kanan */
+      .tick{ 
+        flex: 0 0 auto; 
+        color:#2e7d32; 
+        font-weight:700; 
+        margin-left:12px; 
+        font-size:18px; 
+        align-self: center; /* Sejajar vertikal di tengah */
+      }
+
+      .answer-header{ margin:8px 0 12px 36px; }
+
+      .explain-box{ 
+        background:#f8fafc; 
+        border: 1px solid #e2e8f0;
+        padding:16px; 
+        border-radius:8px; 
+        margin-top:16px; 
+        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+      }
+      .explain-box p{ margin:8px 0 !important; padding:0 !important; }
+      
+      .exp-correct-title { color: #15803d; font-size: 16px; margin-bottom: 4px; border-bottom: 1px solid #dcfce7; padding-bottom: 4px;}
+      .exp-false-title { color: #b91c1c; font-size: 16px; margin-top: 14px; margin-bottom: 6px; border-bottom: 1px solid #fee2e2; padding-bottom: 4px;}
+      .false-choice-item { margin-bottom: 8px; background: #fff; padding: 8px; border: 1px solid #f1f5f9; border-radius: 4px; }
+
+      img, svg {max-width:100%; height:auto; display:block}
+      
+      /* SEMBUNYIKAN TEXT SCREEN READER */
+      .sr-only { display: none !important; }
+      
+      /* FIX MATHJAX SVG PRINTING */
+      .mjx-svg-fix svg { vertical-align: middle; }
+      .mjx-svg-fix svg path, 
+      .mjx-svg-fix svg use, 
+      .mjx-svg-fix svg g { 
+         stroke-width: 0 !important; 
+         fill: currentColor !important; 
+         stroke: none !important;
+      }
+
+      hr{border:none; border-top:2px dashed #e2e8f0; margin:24px 0}
+
+      ${extra}
+    `;
+  }
+
+  // ---------- JSON parsing ----------
+  function parseJsonContent(text) {
+    try { return JSON.parse(text); }
+    catch {
+      const m = text.match(/(\[.*\]|\{[\s\S]*\})/);
+      if (!m) throw new Error('Cannot parse JSON');
+      return JSON.parse(m[1]);
+    }
+  }
+
+  function normalizeQuestions(obj) {
+    if (!obj) return [];
+    if (Array.isArray(obj)) return obj;
+    if (obj.questionList) return obj.questionList;
+    if (obj.test && obj.test.questionList) return obj.test.questionList;
+    if (obj.questions) return obj.questions;
+    return [obj];
+  }
+
+  // =====================================================================
+  // ESSAY + MCQ BUILDER
+  // =====================================================================
+  function buildBodies(questions, mode, abstracts, isEssay, removeImg) {
+    let qBody = '';
+    let aBody = '';
+    let imageReports = []; 
+
+    if (!isEssay) {
+      let processedQuestions = [];
+
+      // Tahap 1: Evaluasi Image dan Filter
+      for (let i = 0; i < questions.length; i++) {
+        const q = questions[i];
+        
+        let qText = sanitizeContent(q.question || q.stem || q.questionText || '');
+        let foilHeader = sanitizeContent(q.foilHeader || q.answerHeader || '');
+        const arr = q.choices || q.foils || q.answerChoiceList || q.answerChoice || [];
+        
+        // Ekstrak foil header dari .sr-only jika di JSON tidak ada foilHeader (Format ME1)
+        if (!foilHeader && arr.length > 0) {
+            foilHeader = extractFoilHeaderFromChoices(arr);
+        }
+        // Simpan foil header sementara ke object agar bisa dipakai di Tahap 2
+        q._extractedFoilHeader = foilHeader;
+
+        let htmlContentToSearchImage = qText + foilHeader + sanitizeContent(q.explanationText || '');
+        arr.forEach(ch => {
+           htmlContentToSearchImage += sanitizeContent(ch.content || ch.text || ch.choice || '') + sanitizeContent(ch.explanation || '');
+        });
+
+        const hasImage = /<img\b/i.test(htmlContentToSearchImage);
+        
+        if (hasImage) {
+            let tName = (q.source && q.source.topicName) ? String(q.source.topicName).trim() : 'DEFAULT (No Topic Name)';
+            let originalNo = q.number || (i + 1);
+            imageReports.push(`- Topik: "${tName}", Soal asli No: ${originalNo}`);
+        }
+
+        if (removeImg && hasImage) {
+            continue; 
+        }
+        
+        processedQuestions.push(q);
+      }
+
+      // Tahap 2: Build HTML
+      for (let i = 0; i < processedQuestions.length; i++) {
+        const q = processedQuestions[i];
+        const seq = (i + 1); 
+
+        let qText = sanitizeContent(q.question || q.stem || q.questionText || '');
+        let foilHeader = q._extractedFoilHeader || '';
+        
+        let correctLetter = null;
+        if (q.correctAnswer != null) {
+          correctLetter = String(q.correctAnswer).trim().toLowerCase();
+        }
+
+        const arr = q.choices || q.foils || q.answerChoiceList || q.answerChoice || [];
+        
+        let correctExplanation = '';
+        let falseExplanations = '';
+
+        const normalized = arr.map((ch, idx) => {
+          let html = sanitizeContent(ch.content || ch.text || ch.choice || '');
+          html = addTdSpacing(html);
+          html = html.replace(/^\s*[A-Z]\.\s*/i, '');
+          if (/^\s*<table/i.test(html)) {
+            html = applySmartTableClasses(html);
+          }
+          
+          const letter = (ch.label || ch.letter || letters(idx + 1)).toLowerCase();
+          const isCorrect = correctLetter ? (letter === correctLetter) : !!(ch.correct || ch.isCorrect || ch.correctTaken === true);
+          
+          let rawExp = ch.explanation || '';
+          rawExp = rawExp.replace(/<span[^>]*class=["']?answer-statement["']?[^>]*>.*?<\/span>/gi, '');
+          rawExp = rawExp.replace(/<div[^>]*class=["']?study-unit-reference["']?[^>]*>[\s\S]*?<\/div>/gi, '');
+          rawExp = rawExp.replace(/<div[^>]*class=["']?clearfix["']?[^>]*><\/div>/gi, '');
+          rawExp = rawExp.replace(/<hr\s*\/?>/gi, ''); 
+
+          const expText = sanitizeContent(rawExp);
+
+          if (isCorrect) {
+             correctExplanation = expText;
+          } else {
+             if (expText && expText !== '') {
+                 falseExplanations += `<div class="false-choice-item"><strong>Choice ${letter.toUpperCase()}:</strong> ${expText}</div>`;
+             }
+          }
+
+          return { letter: letter.toUpperCase(), html, isCorrect };
+        });
+
+        if (!correctExplanation && q.explanationText) {
+            correctExplanation = sanitizeContent(q.explanationText);
+        }
+
+        let combinedExplanationHTML = '';
+        if (correctExplanation) {
+            combinedExplanationHTML += `
+              <div class="exp-correct-title"><strong>&#10004; Correct Answer Explanation</strong></div>
+              <div>${correctExplanation}</div>
+            `;
+        }
+        if (falseExplanations) {
+            combinedExplanationHTML += `
+              <div class="exp-false-title"><strong>&#10006; False Answer Explanations</strong></div>
+              <div>${falseExplanations}</div>
+            `;
+        }
+        if (!combinedExplanationHTML) {
+            combinedExplanationHTML = '(No explanation provided)';
+        }
+
+        qBody += `<div class="q-block">
+          <div class="q-header">Question ${seq} of ${processedQuestions.length}</div>
+          <div class="q-text">${qText}</div>
+          ${foilHeader ? `<div class="foil-header">${foilHeader}</div>` : ''}
+          <ol class="choices">`;
+
+        normalized.forEach(c => {
+          qBody += `<li>
+            <span class="letter">${c.letter}.</span>
+            <div class="choice-content">${c.html}</div>
+          </li>`;
+        });
+
+        qBody += `</ol></div><hr/>`;
+
+        aBody += `<div class="q-block">
+          <div class="q-header">Question ${seq} of ${processedQuestions.length}</div>
+          <div class="q-text">${qText}</div>
+          ${foilHeader ? `<div class="foil-header">${foilHeader}</div>` : ''}
+          <ol class="choices">`;
+
+        normalized.forEach(c => {
+          // Centang (Tick) kini dikeluarkan dari choice-content agar selalu berada di kanan
+          aBody += `<li class="${c.isCorrect ? 'correct' : ''}">
+            <span class="letter">${c.letter}.</span>
+            <div class="choice-content">${c.html}</div>
+            ${c.isCorrect ? '<span class="tick">&#10004;</span>' : ''}
+          </li>`;
+        });
+
+        aBody += `</ol>
+          <div class="explain-box">${combinedExplanationHTML}</div>
+        </div><hr/>`;
+      }
+
+      return { qBody, aBody, imageReports };
+    }
+
+    return { qBody, aBody, imageReports }; 
+  }
+
+  // =====================================================================
+  // BASE64 IMAGE CONVERTER
+  // =====================================================================
+  async function convertImagesToBase64(htmlString) {
+    const div = document.createElement("div");
+    div.innerHTML = htmlString;
+    const imgs = div.querySelectorAll("img");
+    const failed = [];
+
+    async function imgToBase64(url) {
+      try {
+        const res = await fetch(url, { mode: "cors" });
+        const blob = await res.blob();
+        return await new Promise(resolve => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result);
+          reader.readAsDataURL(blob);
+        });
+      } catch (e) {
+        failed.push(url);
+        return null;
+      }
+    }
+
+    for (const img of imgs) {
+      const url = img.getAttribute("src");
+      if (!url) continue;
+      if (url.startsWith('data:') || url.startsWith('svg:')) continue;
+
+      const base64 = await imgToBase64(url);
+      if (base64) img.setAttribute("src", base64);
+    }
+
+    return { html: div.innerHTML, failed };
+  }
+
+  // =====================================================================
+  // MULTIPLE FILE COLLECTOR
+  // =====================================================================
+  async function collectQuestionsFromFiles(fileList) {
+    const all = [];
+    const abstracts = {}; 
+    let isEssayFlag = false;
+
+    for (let i = 0; i < fileList.length; i++) {
+      const f = fileList[i];
+      try {
+        const txt = await f.text();
+        let parsed;
+        try { parsed = parseJsonContent(txt); }
+        catch (e) {
+          alert('JSON Error in file: ' + f.name + ' — ' + e.message);
+          continue;
+        }
+
+        const qs = normalizeQuestions(parsed);
+        if (qs && qs.length) {
+          for (const q of qs) {
+            all.push(q);
+          }
+        }
+      } catch (e) {
+        alert('Gagal membaca file: ' + f.name);
+      }
+    }
+
+    all.sort((a, b) => {
+      const sa = (a && (a.number ?? a.sequenceId ?? a.questionIndex ?? 0)) || 0;
+      const sb = (b && (b.number ?? b.sequenceId ?? b.questionIndex ?? 0)) || 0;
+      return sa - sb;
+    });
+
+    return { questions: all, abstracts, isEssayFlag };
+  }
+
+  function getBaseName(filename) {
+    if (!filename) return 'file';
+    const name = filename.split('/').pop().split('\\').pop();
+    const dot = name.lastIndexOf('.');
+    return dot === -1 ? name : name.slice(0, dot);
+  }
+
+  function downloadBlob(blob, filename) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 1500);
+  }
+
+  // =====================================================================
+  // GENERATE & TOPIC PROMPT LOGIC
+  // =====================================================================
+  async function handleFile(fileOrFiles, outMode, wantPdf) {
+    setStatus('Membaca file dan mengekstrak topik...');
+    const autoDownload = !!autoDlChk.checked;
+    const splitBySystem = !!splitBySystemChk.checked;
+    const removeImg = !!removeImgChk.checked; 
+
+    let files = Array.from(fileOrFiles || []);
+    const doJoin = (outMode === 'join') || (files.length === 1);
+
+    const { questions: allQuestions, abstracts, isEssayFlag } = await collectQuestionsFromFiles(files);
+    if (!allQuestions.length) {
+        setStatus('Tidak ada soal ditemukan.');
+        return alert('Tidak ada soal.');
+    }
+
+    const groupQuestionsBySystem = (questions) => {
+      const groups = {};
+      questions.forEach(q => {
+        let sysKey = 'DEFAULT';
+        if (q.source && q.source.topicName && String(q.source.topicName).trim()) {
+            sysKey = String(q.source.topicName).trim();
+        } else if (q.topic) {
+            sysKey = String(q.topic).trim();
+        }
+        
+        if (!groups[sysKey]) groups[sysKey] = [];
+        groups[sysKey].push(q);
+      });
+      return groups;
+    };
+
+    const globalGroups = groupQuestionsBySystem(allQuestions);
+    const topicKeys = Object.keys(globalGroups);
+
+    let promptMsg = "Daftar Topik Ditemukan:\n";
+    topicKeys.forEach((key, idx) => {
+        promptMsg += `${idx + 1}. ${key} (${globalGroups[key].length} soal)\n`;
+    });
+    promptMsg += `\nMasukkan pilihan Anda:\n- Ketik "all" untuk semua topik.\n- Ketik angka (misal: 1)\n- Ketik range (misal: 1-4)\n- Ketik pisah koma (misal: 1, 3, 5)`;
+
+    const userChoice = window.prompt(promptMsg, "all");
+    if (userChoice === null) {
+        setStatus('Dibatalkan oleh user.');
+        return;
+    }
+
+    let selectedTopicKeys = [];
+    const choiceStr = userChoice.trim().toLowerCase();
+    
+    if (choiceStr === 'all' || choiceStr === '') {
+        selectedTopicKeys = topicKeys;
+    } else {
+        const parts = choiceStr.split(',');
+        const indices = new Set();
+        
+        parts.forEach(p => {
+            const rangeMatch = p.match(/(\d+)\s*-\s*(\d+)/);
+            if (rangeMatch) {
+                let start = parseInt(rangeMatch[1], 10);
+                let end = parseInt(rangeMatch[2], 10);
+                let min = Math.min(start, end);
+                let max = Math.max(start, end);
+                for (let i = min; i <= max; i++) indices.add(i);
+            } else {
+                let num = parseInt(p, 10);
+                if (!isNaN(num)) indices.add(num);
+            }
+        });
+        
+        indices.forEach(idx => {
+            if (idx >= 1 && idx <= topicKeys.length) {
+                selectedTopicKeys.push(topicKeys[idx - 1]);
+            }
+        });
+    }
+
+    if (selectedTopicKeys.length === 0) {
+        setStatus('Gagal: Input tidak valid.');
+        return alert('Tidak ada topik valid yang dipilih.');
+    }
+
+    const mode = panel.querySelector("input[name='pb']:checked").value;
+    const css = cssFor(mode);
+    let globalImageReports = []; 
+
+    async function buildAndOutput(qList, title) {
+        const isEssay = isEssayFlag || qList.some(q => q._testTypeName === 'WC');
+        const { qBody, aBody, imageReports } = buildBodies(qList, mode, abstracts, isEssay, removeImg);
+        
+        globalImageReports.push(...imageReports); 
+
+        if (!qBody) return;
+
+        const convQ = await convertImagesToBase64(qBody);
+        const convA = await convertImagesToBase64(aBody);
+        
+        const htmlQ = wrapFullHtml(title + ' - Questions', css, convQ.html);
+        const htmlA = wrapFullHtml(title + ' - Answers', css, convA.html);
+
+        const winQ = window.open(URL.createObjectURL(new Blob([htmlQ], { type: 'text/html' })), '_blank');
+        const winA = window.open(URL.createObjectURL(new Blob([htmlA], { type: 'text/html' })), '_blank');
+
+        if (autoDownload) {
+            downloadBlob(new Blob([htmlQ], { type: 'text/html' }), `${title} - Questions.html`);
+            downloadBlob(new Blob([htmlA], { type: 'text/html' }), `${title} - Answers.html`);
+        }
+        if (wantPdf && winA) setTimeout(() => winA.print(), 1000);
+    }
+
+    setStatus('Membangun HTML sesuai filter topik...');
+
+    if (doJoin && splitBySystem) {
+        for (const sysName of selectedTopicKeys) {
+            const qList = globalGroups[sysName];
+            await buildAndOutput(qList, sysName === 'DEFAULT' ? 'Questions' : sysName);
+        }
+    } 
+    else if (doJoin && !splitBySystem) {
+        let combinedQs = [];
+        for (const sysName of selectedTopicKeys) {
+            combinedQs.push(...globalGroups[sysName]);
+        }
+        await buildAndOutput(combinedQs, 'Combined_Topics');
+    } 
+    else if (!doJoin && splitBySystem) {
+        for (let fi = 0; fi < files.length; fi++) {
+            const f = files[fi];
+            let parsed;
+            try { parsed = parseJsonContent(await f.text()); } catch(e) { continue; }
+            
+            const fileQs = normalizeQuestions(parsed);
+            const fileGroups = groupQuestionsBySystem(fileQs);
+            const baseName = getBaseName(f.name);
+
+            for (const sysName of selectedTopicKeys) {
+                if (fileGroups[sysName] && fileGroups[sysName].length > 0) {
+                     const title = sysName === 'DEFAULT' ? baseName : `${baseName} - ${sysName}`;
+                     await buildAndOutput(fileGroups[sysName], title);
+                }
+            }
+        }
+    } 
+    else if (!doJoin && !splitBySystem) {
+        for (let fi = 0; fi < files.length; fi++) {
+            const f = files[fi];
+            let parsed;
+            try { parsed = parseJsonContent(await f.text()); } catch(e) { continue; }
+            
+            const fileQs = normalizeQuestions(parsed);
+            const fileGroups = groupQuestionsBySystem(fileQs);
+            const baseName = getBaseName(f.name);
+
+            let combinedQs = [];
+            for (const sysName of selectedTopicKeys) {
+                if (fileGroups[sysName]) combinedQs.push(...fileGroups[sysName]);
+            }
+            if (combinedQs.length > 0) {
+                await buildAndOutput(combinedQs, baseName);
+            }
+        }
+    }
+
+    if (globalImageReports.length > 0) {
+        let msg = removeImg 
+            ? "PERHATIAN: Soal-soal berikut memiliki gambar dan TELAH DIHAPUS dari hasil generate:\n\n"
+            : "PERHATIAN: Terdapat gambar (image) pada soal-soal berikut:\n\n";
+        
+        if (globalImageReports.length > 20) {
+            msg += globalImageReports.slice(0, 20).join("\n");
+            msg += `\n... dan ${globalImageReports.length - 20} soal lainnya.`;
+        } else {
+            msg += globalImageReports.join("\n");
+        }
+        
+        setTimeout(() => alert(msg), 500); 
+    }
+
+    setStatus('Proses Selesai.');
+  }
+
+  // Wrapper External CSS & Google Fonts
+  function wrapFullHtml(title, css, body) {
+    return `<!doctype html><html><head><meta charset="utf-8">
+    <title>${title}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="https://www.gleim.com/accounting/_stylesheets/prometric2018.lm1778269112.css">
+    
+    <style>${css}</style>
+    <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [ ['\\\\(','\\\\)'] ], 
+        displayMath: [ ['$$','$$'] ],
+        processEscapes: true
+      },
+      options: {
+        ignoreHtmlClass: 'tex2jax_ignore',
+        processHtmlClass: 'tex2jax_process'
+      }
+    };
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" id="MathJax-script" async></script>
+    </head><body>${body}</body></html>`;
+  }
+
+  // ---------- Events ----------
+  genBtn.addEventListener('click', () => {
+    const files = fileInput.files;
+    if (!files || files.length === 0) return alert('Upload file JSON terlebih dahulu.');
+
+    const outMode = panel.querySelector("input[name='outmode']:checked").value;
+    const wantPdf = panel.querySelector('#pdfChk').checked;
+
+    handleFile(files, outMode, wantPdf);
+  });
+
+  setStatus('Ready — Upload JSON lalu klik Generate.');
+
+})();
