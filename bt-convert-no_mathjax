@@ -332,8 +332,6 @@ body {
         explanation: cleanExplanationHtml(item.explanation || "")
       }));
 
-  
-
     return cleaned;
   }
 
@@ -450,19 +448,24 @@ body {
     </div>
 
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
-      <button id="qjh_load" style="padding:9px 12px;border:0;border-radius:6px;cursor:pointer;">Load JSON</button>
+      <button id="qjh_load" style="padding:9px 12px;border:0;border-radius:6px;cursor:pointer;background:#4CAF50;color:white;">Load JSON</button>
       <button id="qjh_questions" style="padding:9px 12px;border:0;border-radius:6px;cursor:pointer;">Open Questions</button>
       <button id="qjh_answers" style="padding:9px 12px;border:0;border-radius:6px;cursor:pointer;">Open Answers</button>
       <button id="qjh_both" style="padding:9px 12px;border:0;border-radius:6px;cursor:pointer;">Open Both</button>
-      <button id="qjh_close" style="padding:9px 12px;border:0;border-radius:6px;cursor:pointer;">Close</button>
+      <button id="qjh_close" style="padding:9px 12px;border:0;border-radius:6px;cursor:pointer;background:#555;color:white;">Close</button>
     </div>
 
     <div style="margin-bottom:12px;">
-      <label style="display:block;margin-bottom:6px;">Kategori level 3</label>
-      <select id="qjh_category"
-        style="width:100%;padding:9px;border:1px solid #555;border-radius:6px;background:#222;color:#fff;">
-        <option value="">Belum ada kategori</option>
-      </select>
+      <label style="display:block;margin-bottom:6px;">Pilih Kategori Level 3 (Bisa lebih dari satu)</label>
+      <div id="qjh_category_container" style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px;">
+        <select class="qjh_category_select" style="width:100%;padding:9px;border:1px solid #555;border-radius:6px;background:#222;color:#fff;">
+          <option value="">Belum ada kategori</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button id="qjh_add_category" style="padding:6px 12px;border:0;border-radius:6px;cursor:pointer;background:#2196F3;color:#fff;font-weight:bold;">+ Tambah Kategori</button>
+        <button id="qjh_clear_category" style="padding:6px 12px;border:0;border-radius:6px;cursor:pointer;background:#f44336;color:#fff;font-weight:bold;">Clear</button>
+      </div>
     </div>
 
     <div id="qjh_info" style="background:#1b1b1b;border-radius:8px;padding:10px;min-height:58px;">
@@ -478,12 +481,24 @@ body {
   const answersBtn = panel.querySelector("#qjh_answers");
   const bothBtn = panel.querySelector("#qjh_both");
   const closeBtn = panel.querySelector("#qjh_close");
-  const categorySelect = panel.querySelector("#qjh_category");
+  const categoryContainer = panel.querySelector("#qjh_category_container");
+  const addCategoryBtn = panel.querySelector("#qjh_add_category");
+  const clearCategoryBtn = panel.querySelector("#qjh_clear_category");
   const infoBox = panel.querySelector("#qjh_info");
 
+  // Fungsi untuk mendapatkan semua nilai kategori yang dipilih
+  function getSelectedCategoryValues() {
+    const selects = categoryContainer.querySelectorAll(".qjh_category_select");
+    const values = [];
+    selects.forEach(sel => {
+      if (sel.value) values.push(sel.value);
+    });
+    return [...new Set(values)]; // Hapus duplikat jika user memilih kategori yang sama
+  }
+
   function updateInfo() {
-    const cat = categorySelect.value;
-    const filtered = state.items.filter(x => getLevel3Category(x) === cat);
+    const selectedCats = getSelectedCategoryValues();
+    const filtered = state.items.filter(x => selectedCats.includes(getLevel3Category(x)));
     infoBox.innerHTML = `
       Total soal gabungan: <strong>${state.items.length}</strong><br>
       Total kategori level 3: <strong>${state.categories.length}</strong><br>
@@ -491,23 +506,54 @@ body {
     `;
   }
 
-  function updateCategoryList() {
-    categorySelect.innerHTML = "";
+  // Fungsi untuk mengisi pilihan pada satu elemen <select>
+  function populateSelect(selectElement) {
+    selectElement.innerHTML = `<option value="">Pilih kategori...</option>`;
     if (!state.categories.length) {
-      categorySelect.innerHTML = `<option value="">Belum ada kategori</option>`;
-      infoBox.textContent = "Belum ada data JSON.";
+      selectElement.innerHTML = `<option value="">Belum ada kategori</option>`;
       return;
     }
-
     state.categories.forEach(cat => {
       const opt = document.createElement("option");
       opt.value = cat;
       opt.textContent = cat;
-      categorySelect.appendChild(opt);
+      selectElement.appendChild(opt);
     });
+  }
 
+  // Update semua dropdown yang ada di container
+  function updateCategoryList() {
+    const selects = categoryContainer.querySelectorAll(".qjh_category_select");
+    selects.forEach(sel => populateSelect(sel));
     updateInfo();
   }
+
+  // Event untuk tombol + Tambah Kategori
+  addCategoryBtn.onclick = () => {
+    const newSelect = document.createElement("select");
+    newSelect.className = "qjh_category_select";
+    newSelect.style.cssText = "width:100%;padding:9px;border:1px solid #555;border-radius:6px;background:#222;color:#fff;";
+    newSelect.onchange = updateInfo;
+    populateSelect(newSelect);
+    categoryContainer.appendChild(newSelect);
+  };
+
+  // Event untuk tombol Clear
+  clearCategoryBtn.onclick = () => {
+    const selects = categoryContainer.querySelectorAll(".qjh_category_select");
+    // Hapus semua dropdown kecuali yang pertama (index 0)
+    for (let i = 1; i < selects.length; i++) {
+      selects[i].remove();
+    }
+    // Reset nilai dropdown pertama
+    if (selects[0]) {
+      selects[0].value = "";
+    }
+    updateInfo();
+  };
+
+  // Bind event onchange untuk dropdown pertama saat inisialisasi
+  categoryContainer.querySelector(".qjh_category_select").onchange = updateInfo;
 
   loadBtn.onclick = async () => {
     try {
@@ -518,10 +564,10 @@ body {
 
       infoBox.textContent = "Membaca file JSON...";
       const files = [...fileInput.files].sort((a, b) => a.name.localeCompare(b.name, undefined, {
-  numeric: true,
-  sensitivity: "base"
-}));
-const rawItems = await readJsonFiles(files);
+        numeric: true,
+        sensitivity: "base"
+      }));
+      const rawItems = await readJsonFiles(files);
       state.items = prepareItems(rawItems);
       state.categories = buildCategoryList(state.items);
       updateCategoryList();
@@ -535,17 +581,15 @@ const rawItems = await readJsonFiles(files);
     }
   };
 
-  categorySelect.onchange = updateInfo;
-
   function getSelectedItems() {
-    const cat = categorySelect.value;
-    if (!cat) {
-      alert("Pilih kategori dulu.");
+    const selectedCats = getSelectedCategoryValues();
+    if (!selectedCats.length) {
+      alert("Pilih minimal satu kategori dulu.");
       return [];
     }
-    const items = state.items.filter(x => getLevel3Category(x) === cat);
+    const items = state.items.filter(x => selectedCats.includes(getLevel3Category(x)));
     if (!items.length) {
-      alert("Tidak ada soal pada kategori ini.");
+      alert("Tidak ada soal pada kategori terpilih.");
       return [];
     }
     return items;
