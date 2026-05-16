@@ -11,9 +11,9 @@
   ];
 
   const state = {
-    allUrls: [],
-    filteredUrls: [],
-    selectedUrls: [],
+    allUrls: [],        // [{url, lastmod}]
+    filteredUrls: [],   // [{url, lastmod}]
+    selectedUrls: [],   // [{url, lastmod}]
     results: [],
     errors: [],
     running: false,
@@ -59,13 +59,11 @@
   function removeForumBlockFromHtml(html) {
     const wrap = document.createElement("div");
     wrap.innerHTML = html || "";
-
     [...wrap.querySelectorAll("p")].forEach(p => {
       if (/Discuss here in the forum/i.test(p.textContent || "")) {
         p.remove();
       }
     });
-
     return wrap.innerHTML.trim();
   }
 
@@ -79,7 +77,6 @@
       const answerLabel = textOf(label.querySelector(".mm-answer-label"));
       const divs = label.querySelectorAll("div");
       const textNode = divs[1] || null;
-
       return {
         label: answerLabel,
         text: textNode ? normalizeHtml(textNode.innerHTML) : "",
@@ -91,14 +88,12 @@
   function extractExplanation(doc) {
     const node = doc.querySelector(".mm-correct-answer");
     if (!node) return "";
-
     const clone = node.cloneNode(true);
     clone.querySelectorAll(".mm-category-attribution").forEach(el => el.remove());
-
     return removeForumBlockFromHtml(normalizeHtml(clone.innerHTML));
   }
 
-  function extractQuestionData(doc, pageUrl) {
+  function extractQuestionData(doc, pageUrl, lastmod) {
     const article = doc.querySelector("article");
     const questionCode = textOf(doc.querySelector("h1.entry-title"));
     const optionsRaw = extractOptions(doc);
@@ -106,18 +101,13 @@
 
     return {
       url: pageUrl,
+      lastmod: lastmod || null,
       question_code: questionCode,
       category: extractCategories(article),
       question: extractQuestion(doc),
-      options: optionsRaw.map(({ label, text }) => ({
-        label,
-        text
-      })),
+      options: optionsRaw.map(({ label, text }) => ({ label, text })),
       correct_answer: correct
-        ? {
-            label: correct.label,
-            text: correct.text
-          }
+        ? { label: correct.label, text: correct.text }
         : null,
       explanation: extractExplanation(doc)
     };
@@ -130,10 +120,33 @@
     return new DOMParser().parseFromString(text, "application/xml");
   }
 
+  // Ambil URL beserta lastmod dari sitemap
   function getUrlsFromSitemap(xmlDoc) {
-    return [...xmlDoc.querySelectorAll("url > loc")]
-      .map(el => el.textContent.trim())
-      .filter(Boolean);
+    const entries = [];
+    const urlNodes = xmlDoc.querySelectorAll("url");
+
+    urlNodes.forEach(urlNode => {
+      const loc = urlNode.querySelector("loc");
+      const lastmodEl = urlNode.querySelector("lastmod");
+      if (!loc) return;
+
+      const urlStr = loc.textContent.trim();
+      if (!urlStr) return;
+
+      // Ambil lastmod, bisa format: "2026-04-30 23:00 +00:00" atau "2026-04-30T23:00:00+00:00"
+      let lastmod = null;
+      if (lastmodEl) {
+        const raw = lastmodEl.textContent.trim();
+        // Normalisasi format ke ISO agar bisa di-parse Date
+        const normalized = raw.replace(" ", "T").replace(/ \+/, "+").replace(/ -/, "-");
+        const d = new Date(normalized);
+        lastmod = isNaN(d.getTime()) ? raw : d.toISOString();
+      }
+
+      entries.push({ url: urlStr, lastmod });
+    });
+
+    return entries;
   }
 
   async function loadAllSitemaps() {
@@ -141,19 +154,30 @@
     for (const url of sitemapUrls) {
       setStatus(`Membaca sitemap: ${url}`);
       const xml = await fetchXml(url);
-      const urls = getUrlsFromSitemap(xml);
-      all.push(...urls);
+      const entries = getUrlsFromSitemap(xml);
+      all.push(...entries);
     }
-    state.allUrls = [...new Set(all)];
+
+    // Deduplicate berdasarkan url
+    const seen = new Set();
+    const deduped = [];
+    for (const entry of all) {
+      if (!seen.has(entry.url)) {
+        seen.add(entry.url);
+        deduped.push(entry);
+      }
+    }
+
+    state.allUrls = deduped;
     return state.allUrls;
   }
 
-  async function fetchQuestion(url) {
+  async function fetchQuestion(url, lastmod) {
     const res = await fetch(url, { credentials: "include" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const html = await res.text();
     const doc = new DOMParser().parseFromString(html, "text/html");
-    return extractQuestionData(doc, url);
+    return extractQuestionData(doc, url, lastmod);
   }
 
   function downloadFile(filename, content, mimeType) {
@@ -167,11 +191,17 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   }
 
-  function makeFilename(prefix, rangeMode, rangeText) {
+  function makeFilename(prefix, selectionMode, rangeText, dateFrom, dateTo) {
     const safePrefix = (prefix || "all").replace(/[^a-z0-9-_]+/gi, "_");
-    const safeRange = rangeMode === "custom"
-      ? (rangeText || "custom").replace(/[^a-z0-9-_]+/gi, "_")
-      : "allrange";
+
+    let safeSuffix = "allrange";
+    if (selectionMode === "range_custom") {
+      safeSuffix = (rangeText || "custom").replace(/[^a-z0-9-_]+/gi, "_");
+    } else if (selectionMode === "date") {
+      const df = dateFrom ? dateFrom.replace(/[^a-z0-9]/gi, "") : "start";
+      const dt = dateTo ? dateTo.replace(/[^a-z0-9]/gi, "") : "latest";
+      safeSuffix = `date_${df}_to_${dt}`;
+    }
 
     const now = new Date();
     const ts = [
@@ -184,7 +214,7 @@
       String(now.getSeconds()).padStart(2, "0")
     ].join("");
 
-    return `quiz_${safePrefix}_${safeRange}_${ts}.json`;
+    return `quiz_${safePrefix}_${safeSuffix}_${ts}.json`;
   }
 
   function setStatus(msg) {
@@ -192,17 +222,17 @@
   }
 
   function updateCounts() {
-    totalBox.textContent = `Total URL sitemap: ${state.allUrls.length}`;
+    totalBox.textContent    = `Total URL sitemap: ${state.allUrls.length}`;
     filteredBox.textContent = `URL hasil prefix: ${state.filteredUrls.length}`;
     selectedBox.textContent = `URL akan diproses: ${state.selectedUrls.length}`;
-    resultBox.textContent = `Berhasil: ${state.results.length}`;
-    errorBox.textContent = `Gagal: ${state.errors.length}`;
+    resultBox.textContent   = `Berhasil: ${state.results.length}`;
+    errorBox.textContent    = `Gagal: ${state.errors.length}`;
   }
 
   function applyPrefixFilter(prefix) {
     const normalized = prefix.trim().toLowerCase();
-    state.filteredUrls = state.allUrls.filter(url => {
-      const slug = getSlugFromUrl(url);
+    state.filteredUrls = state.allUrls.filter(entry => {
+      const slug = getSlugFromUrl(entry.url);
       return matchPrefix(slug, normalized);
     });
   }
@@ -210,56 +240,103 @@
   function parseCustomRange(input, max) {
     const value = String(input || "").trim();
     const m = value.match(/^(\d+)\s*-\s*(\d+)$/);
-    if (!m) {
-      throw new Error("Format custom harus seperti 1-100 atau 101-150.");
-    }
+    if (!m) throw new Error("Format custom harus seperti 1-100 atau 101-150.");
 
     let start = parseInt(m[1], 10);
-    let end = parseInt(m[2], 10);
+    let end   = parseInt(m[2], 10);
 
-    if (start < 1 || end < 1) {
-      throw new Error("Range harus dimulai dari 1.");
-    }
-    if (end < start) {
-      throw new Error("Range tidak valid. Nilai akhir harus lebih besar atau sama.");
-    }
-    if (start > max) {
-      throw new Error(`Range mulai melebihi total hasil prefix (${max}).`);
-    }
-
+    if (start < 1 || end < 1)  throw new Error("Range harus dimulai dari 1.");
+    if (end < start)           throw new Error("Range tidak valid. Nilai akhir harus lebih besar atau sama.");
+    if (start > max)           throw new Error(`Range mulai melebihi total hasil prefix (${max}).`);
     if (end > max) end = max;
 
     return { start, end };
   }
 
-  function applySelectionRange() {
-    const mode = rangeModeAll.checked ? "all" : "custom";
+  // Parse input tanggal ke Date object (awal hari UTC)
+  function parseDateInput(val) {
+    if (!val || !val.trim()) return null;
+    const d = new Date(val.trim() + "T00:00:00Z");
+    return isNaN(d.getTime()) ? null : d;
+  }
 
-    if (mode === "all") {
+  function getSelectionMode() {
+    if (document.getElementById("qs_mode_range_all").checked)    return "range_all";
+    if (document.getElementById("qs_mode_range_custom").checked) return "range_custom";
+    if (document.getElementById("qs_mode_date").checked)         return "date";
+    return "range_all";
+  }
+
+  function applySelectionRange() {
+    const mode = getSelectionMode();
+
+    if (mode === "range_all") {
       state.selectedUrls = [...state.filteredUrls];
       updateCounts();
       return;
     }
 
-    const { start, end } = parseCustomRange(rangeInput.value, state.filteredUrls.length);
-    state.selectedUrls = state.filteredUrls.slice(start - 1, end);
-    updateCounts();
+    if (mode === "range_custom") {
+      const { start, end } = parseCustomRange(
+        document.getElementById("qs_range_input").value,
+        state.filteredUrls.length
+      );
+      state.selectedUrls = state.filteredUrls.slice(start - 1, end);
+      updateCounts();
+      return;
+    }
+
+    if (mode === "date") {
+      const dateFromVal = document.getElementById("qs_date_from").value;
+      const dateToVal   = document.getElementById("qs_date_to").value;
+
+      const dateFrom = parseDateInput(dateFromVal);
+      // Jika date_to kosong, pakai sekarang (inklusif sampai terbaru)
+      let dateTo = parseDateInput(dateToVal);
+      if (!dateTo) dateTo = new Date();
+
+      // Geser dateTo ke akhir hari UTC (23:59:59.999)
+      dateTo = new Date(dateTo.getTime() + 86399999);
+
+      if (!dateFrom) throw new Error("Tanggal mulai (Date From) wajib diisi dalam mode Date.");
+
+      state.selectedUrls = state.filteredUrls.filter(entry => {
+        if (!entry.lastmod) return false;
+        const d = new Date(entry.lastmod);
+        if (isNaN(d.getTime())) return false;
+        return d >= dateFrom && d <= dateTo;
+      });
+
+      updateCounts();
+      return;
+    }
+  }
+
+  function updateDateModeVisibility() {
+    const mode = getSelectionMode();
+    const rangeCustomRow = document.getElementById("qs_range_custom_row");
+    const dateRow        = document.getElementById("qs_date_row");
+
+    rangeCustomRow.style.display = (mode === "range_custom") ? "block" : "none";
+    dateRow.style.display        = (mode === "date")         ? "block" : "none";
   }
 
   async function runScrape() {
     if (state.running) return;
 
-    state.running = true;
+    state.running   = true;
     state.cancelled = false;
-    state.results = [];
-    state.errors = [];
+    state.results   = [];
+    state.errors    = [];
     updateCounts();
 
-    const prefix = prefixInput.value.trim();
+    const prefix      = prefixInput.value.trim();
     const concurrency = Math.max(1, parseInt(concurrencyInput.value || "3", 10));
-    const waitMs = Math.max(0, parseInt(delayInput.value || "300", 10));
-    const rangeMode = rangeModeAll.checked ? "all" : "custom";
-    const rangeText = rangeInput.value.trim();
+    const waitMs      = Math.max(0, parseInt(delayInput.value || "300", 10));
+    const mode        = getSelectionMode();
+    const rangeText   = document.getElementById("qs_range_input").value.trim();
+    const dateFromVal = document.getElementById("qs_date_from").value.trim();
+    const dateToVal   = document.getElementById("qs_date_to").value.trim();
 
     try {
       applyPrefixFilter(prefix);
@@ -276,7 +353,7 @@
       return;
     }
 
-    startBtn.disabled = true;
+    startBtn.disabled  = true;
     cancelBtn.disabled = false;
 
     let index = 0;
@@ -284,18 +361,15 @@
     async function worker(workerId) {
       while (index < state.selectedUrls.length && !state.cancelled) {
         const currentIndex = index++;
-        const url = state.selectedUrls[currentIndex];
+        const entry = state.selectedUrls[currentIndex];
 
-        setStatus(`Worker ${workerId}: ${currentIndex + 1}/${state.selectedUrls.length}`);
+        setStatus(`Worker ${workerId}: ${currentIndex + 1}/${state.selectedUrls.length} — ${getSlugFromUrl(entry.url)}`);
 
         try {
-          const data = await fetchQuestion(url);
+          const data = await fetchQuestion(entry.url, entry.lastmod);
           state.results[currentIndex] = data;
         } catch (err) {
-          state.errors.push({
-            url,
-            error: String(err)
-          });
+          state.errors.push({ url: entry.url, error: String(err) });
         }
 
         updateCounts();
@@ -307,8 +381,8 @@
       Array.from({ length: concurrency }, (_, i) => worker(i + 1))
     );
 
-    state.running = false;
-    startBtn.disabled = false;
+    state.running      = false;
+    startBtn.disabled  = false;
     cancelBtn.disabled = true;
 
     if (state.cancelled) {
@@ -316,9 +390,9 @@
       return;
     }
 
-   state.results = state.results.filter(Boolean);
+    state.results = state.results.filter(Boolean);
 
-    const filename = makeFilename(prefix, rangeMode, rangeText);
+    const filename = makeFilename(prefix, mode, rangeText, dateFromVal, dateToVal);
     downloadFile(filename, JSON.stringify(state.results, null, 2), "application/json");
 
     if (state.errors.length) {
@@ -327,8 +401,10 @@
       downloadFile(errName, errText, "text/plain");
     }
 
-    setStatus(`Selesai. File ${filename} sudah dibuat.`);
+    setStatus(`Selesai. ${state.results.length} soal tersimpan ke ${filename}.`);
   }
+
+  // ── UI ───────────────────────────────────────────────────────────────────
 
   const panel = document.createElement("div");
   panel.id = "__quizScraperUI";
@@ -336,7 +412,7 @@
     position: fixed;
     top: 12px;
     right: 12px;
-    width: 390px;
+    width: 400px;
     z-index: 999999;
     background: #111;
     color: #fff;
@@ -345,91 +421,181 @@
     padding: 14px;
     font: 13px/1.4 Arial, sans-serif;
     box-shadow: 0 8px 24px rgba(0,0,0,.35);
+    max-height: 95vh;
+    overflow-y: auto;
   `;
 
   panel.innerHTML = `
-    <div style="font-size:16px;font-weight:bold;margin-bottom:10px;">Quiz HTML-preserving Scraper</div>
+    <div style="font-size:16px;font-weight:bold;margin-bottom:10px;">
+      📋 Quiz HTML-preserving Scraper
+    </div>
 
+    <!-- PREFIX -->
     <div style="margin-bottom:8px;">
-      <label style="display:block;margin-bottom:4px;">Filter prefix slug</label>
-      <input id="qs_prefix" type="text" placeholder="contoh: p2-t8 atau p2-t8-24"
-        style="width:100%;padding:8px;border-radius:6px;border:1px solid #555;background:#222;color:#fff;">
+      <label style="display:block;margin-bottom:4px;color:#aaa;">Filter prefix slug</label>
+      <input id="qs_prefix" type="text" placeholder="contoh: p2-t8 atau kosongkan untuk semua"
+        style="width:100%;box-sizing:border-box;padding:8px;border-radius:6px;border:1px solid #555;background:#222;color:#fff;">
     </div>
 
+    <!-- SELECTION MODE -->
     <div style="margin-bottom:10px;padding:10px;border:1px solid #333;border-radius:8px;background:#1a1a1a;">
-      <div style="margin-bottom:6px;font-weight:bold;">Range proses</div>
+      <div style="margin-bottom:8px;font-weight:bold;color:#ddd;">Mode Seleksi URL</div>
 
-      <label style="display:block;margin-bottom:6px;">
-        <input type="radio" name="qs_range_mode" id="qs_range_all" checked>
-        All
+      <!-- Radio: All -->
+      <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px;cursor:pointer;">
+        <input type="radio" name="qs_sel_mode" id="qs_mode_range_all" checked>
+        <span>All (semua hasil prefix)</span>
       </label>
 
-      <label style="display:block;margin-bottom:6px;">
-        <input type="radio" name="qs_range_mode" id="qs_range_custom">
-        Custom
+      <!-- Radio: Range Custom -->
+      <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px;cursor:pointer;">
+        <input type="radio" name="qs_sel_mode" id="qs_mode_range_custom">
+        <span>Range nomor urut</span>
       </label>
 
-      <input id="qs_range_input" type="text" placeholder="contoh: 1-100 atau 101-150"
-        style="width:100%;padding:8px;border-radius:6px;border:1px solid #555;background:#222;color:#fff;">
+      <!-- Range custom input -->
+      <div id="qs_range_custom_row" style="display:none;margin-bottom:6px;padding-left:20px;">
+        <input id="qs_range_input" type="text" placeholder="contoh: 1-100 atau 101-150"
+          style="width:100%;box-sizing:border-box;padding:8px;border-radius:6px;border:1px solid #555;background:#222;color:#fff;">
+      </div>
+
+      <!-- Radio: Date -->
+      <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px;cursor:pointer;">
+        <input type="radio" name="qs_sel_mode" id="qs_mode_date">
+        <span>Filter tanggal lastmod</span>
+      </label>
+
+      <!-- Date inputs -->
+      <div id="qs_date_row" style="display:none;padding-left:20px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div>
+            <label style="display:block;margin-bottom:4px;color:#aaa;font-size:12px;">
+              Date From <span style="color:#ff6b6b;">*</span>
+            </label>
+            <input id="qs_date_from" type="date"
+              style="width:100%;box-sizing:border-box;padding:7px;border-radius:6px;border:1px solid #555;background:#222;color:#fff;">
+          </div>
+          <div>
+            <label style="display:block;margin-bottom:4px;color:#aaa;font-size:12px;">
+              Date To <span style="color:#888;">(opsional)</span>
+            </label>
+            <input id="qs_date_to" type="date"
+              style="width:100%;box-sizing:border-box;padding:7px;border-radius:6px;border:1px solid #555;background:#222;color:#fff;">
+          </div>
+        </div>
+        <div style="margin-top:6px;font-size:11px;color:#888;">
+          ℹ️ Kosongkan "Date To" untuk mengambil hingga tanggal terbaru.
+          URL tanpa lastmod akan dilewati.
+        </div>
+      </div>
     </div>
 
+    <!-- CONCURRENCY & DELAY -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
       <div>
-        <label style="display:block;margin-bottom:4px;">Concurrency</label>
+        <label style="display:block;margin-bottom:4px;color:#aaa;">Concurrency</label>
         <input id="qs_concurrency" type="number" min="1" value="3"
-          style="width:100%;padding:8px;border-radius:6px;border:1px solid #555;background:#222;color:#fff;">
+          style="width:100%;box-sizing:border-box;padding:8px;border-radius:6px;border:1px solid #555;background:#222;color:#fff;">
       </div>
       <div>
-        <label style="display:block;margin-bottom:4px;">Delay ms</label>
+        <label style="display:block;margin-bottom:4px;color:#aaa;">Delay (ms)</label>
         <input id="qs_delay" type="number" min="0" value="300"
-          style="width:100%;padding:8px;border-radius:6px;border:1px solid #555;background:#222;color:#fff;">
+          style="width:100%;box-sizing:border-box;padding:8px;border-radius:6px;border:1px solid #555;background:#222;color:#fff;">
       </div>
     </div>
 
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
-      <button id="qs_load" style="padding:8px 10px;border:0;border-radius:6px;cursor:pointer;">Load Sitemap</button>
-      <button id="qs_preview" style="padding:8px 10px;border:0;border-radius:6px;cursor:pointer;">Preview Filter</button>
-      <button id="qs_start" style="padding:8px 10px;border:0;border-radius:6px;cursor:pointer;">Start Scrape</button>
-      <button id="qs_cancel" style="padding:8px 10px;border:0;border-radius:6px;cursor:pointer;" disabled>Cancel</button>
-      <button id="qs_close" style="padding:8px 10px;border:0;border-radius:6px;cursor:pointer;">Close</button>
+    <!-- BUTTONS -->
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">
+      <button id="qs_load"    style="flex:1;padding:8px;border:0;border-radius:6px;cursor:pointer;background:#2563eb;color:#fff;font-weight:bold;">
+        🔄 Load Sitemap
+      </button>
+      <button id="qs_preview" style="flex:1;padding:8px;border:0;border-radius:6px;cursor:pointer;background:#7c3aed;color:#fff;font-weight:bold;">
+        👁 Preview
+      </button>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">
+      <button id="qs_start"  style="flex:1;padding:8px;border:0;border-radius:6px;cursor:pointer;background:#16a34a;color:#fff;font-weight:bold;">
+        ▶ Start Scrape
+      </button>
+      <button id="qs_cancel" style="flex:1;padding:8px;border:0;border-radius:6px;cursor:pointer;background:#dc2626;color:#fff;font-weight:bold;" disabled>
+        ⏹ Cancel
+      </button>
+      <button id="qs_close"  style="padding:8px 12px;border:0;border-radius:6px;cursor:pointer;background:#444;color:#fff;">
+        ✕
+      </button>
     </div>
 
-    <div id="qs_total" style="margin-bottom:4px;">Total URL sitemap: 0</div>
-    <div id="qs_filtered" style="margin-bottom:4px;">URL hasil prefix: 0</div>
-    <div id="qs_selected" style="margin-bottom:4px;">URL akan diproses: 0</div>
-    <div id="qs_result" style="margin-bottom:4px;">Berhasil: 0</div>
-    <div id="qs_error" style="margin-bottom:8px;">Gagal: 0</div>
-
-    <div id="qs_status" style="padding:8px;background:#1c1c1c;border-radius:6px;min-height:36px;">
-      Siap.
+    <!-- STATS -->
+    <div style="padding:8px;background:#1a1a1a;border-radius:6px;margin-bottom:8px;font-size:12px;line-height:1.8;">
+      <div id="qs_total"    style="color:#aaa;">Total URL sitemap: 0</div>
+      <div id="qs_filtered" style="color:#aaa;">URL hasil prefix: 0</div>
+      <div id="qs_selected" style="color:#facc15;">URL akan diproses: 0</div>
+      <div id="qs_result"   style="color:#4ade80;">Berhasil: 0</div>
+      <div id="qs_error"    style="color:#f87171;">Gagal: 0</div>
     </div>
 
-    <div style="margin-top:10px;font-size:12px;color:#bbb;">
-      Field question/options/explanation sekarang menyimpan HTML asli.
+    <!-- STATUS -->
+    <div id="qs_status" style="padding:8px;background:#1c1c1c;border-radius:6px;min-height:36px;font-size:12px;color:#ccc;word-break:break-all;">
+      Siap. Klik Load Sitemap dulu.
+    </div>
+
+    <div style="margin-top:8px;font-size:11px;color:#666;text-align:center;">
+      question / options / explanation disimpan sebagai HTML mentah
     </div>
   `;
 
   document.body.appendChild(panel);
 
-  const prefixInput = panel.querySelector("#qs_prefix");
-  const rangeModeAll = panel.querySelector("#qs_range_all");
-  const rangeModeCustom = panel.querySelector("#qs_range_custom");
-  const rangeInput = panel.querySelector("#qs_range_input");
+  // Refs
+  const prefixInput      = panel.querySelector("#qs_prefix");
   const concurrencyInput = panel.querySelector("#qs_concurrency");
-  const delayInput = panel.querySelector("#qs_delay");
+  const delayInput       = panel.querySelector("#qs_delay");
 
-  const totalBox = panel.querySelector("#qs_total");
+  const totalBox    = panel.querySelector("#qs_total");
   const filteredBox = panel.querySelector("#qs_filtered");
   const selectedBox = panel.querySelector("#qs_selected");
-  const resultBox = panel.querySelector("#qs_result");
-  const errorBox = panel.querySelector("#qs_error");
-  const statusBox = panel.querySelector("#qs_status");
+  const resultBox   = panel.querySelector("#qs_result");
+  const errorBox    = panel.querySelector("#qs_error");
+  const statusBox   = panel.querySelector("#qs_status");
 
-  const loadBtn = panel.querySelector("#qs_load");
+  const loadBtn    = panel.querySelector("#qs_load");
   const previewBtn = panel.querySelector("#qs_preview");
-  const startBtn = panel.querySelector("#qs_start");
-  const cancelBtn = panel.querySelector("#qs_cancel");
-  const closeBtn = panel.querySelector("#qs_close");
+  const startBtn   = panel.querySelector("#qs_start");
+  const cancelBtn  = panel.querySelector("#qs_cancel");
+  const closeBtn   = panel.querySelector("#qs_close");
+
+  // Toggle visibility saat mode berubah
+  ["qs_mode_range_all", "qs_mode_range_custom", "qs_mode_date"].forEach(id => {
+    panel.querySelector(`#${id}`).addEventListener("change", () => {
+      updateDateModeVisibility();
+      if (state.allUrls.length) {
+        try {
+          applyPrefixFilter(prefixInput.value);
+          applySelectionRange();
+        } catch(e) {
+          setStatus(String(e.message || e));
+        }
+      }
+    });
+  });
+
+  // Range input live update
+  panel.querySelector("#qs_range_input").addEventListener("input", () => {
+    if (document.getElementById("qs_mode_range_custom").checked && state.allUrls.length) {
+      try { applyPrefixFilter(prefixInput.value); applySelectionRange(); } catch {}
+    }
+  });
+
+  // Date input live update
+  ["qs_date_from", "qs_date_to"].forEach(id => {
+    panel.querySelector(`#${id}`).addEventListener("change", () => {
+      if (document.getElementById("qs_mode_date").checked && state.allUrls.length) {
+        try { applyPrefixFilter(prefixInput.value); applySelectionRange(); } catch(e) {
+          setStatus(String(e.message || e));
+        }
+      }
+    });
+  });
 
   loadBtn.onclick = async () => {
     try {
@@ -437,7 +603,17 @@
       await loadAllSitemaps();
       applyPrefixFilter(prefixInput.value);
       applySelectionRange();
-      setStatus("Sitemap berhasil dimuat.");
+
+      // Tampilkan info rentang tanggal yang tersedia
+      const withDate = state.allUrls.filter(e => e.lastmod);
+      if (withDate.length) {
+        const dates = withDate.map(e => new Date(e.lastmod)).sort((a,b) => a-b);
+        const oldest = dates[0].toISOString().slice(0,10);
+        const newest = dates[dates.length-1].toISOString().slice(0,10);
+        setStatus(`Sitemap dimuat. Rentang lastmod: ${oldest} s/d ${newest}. ${withDate.length} URL punya lastmod.`);
+      } else {
+        setStatus("Sitemap berhasil dimuat. Tidak ada data lastmod ditemukan.");
+      }
     } catch (err) {
       setStatus(`Error load sitemap: ${err}`);
     }
@@ -447,58 +623,30 @@
     try {
       applyPrefixFilter(prefixInput.value);
       applySelectionRange();
-      const examples = state.selectedUrls.slice(0, 5).map(getSlugFromUrl);
-      setStatus(
-        state.selectedUrls.length
-          ? `Contoh slug terpilih: ${examples.join(", ")}`
-          : "Tidak ada URL yang cocok."
-      );
+      if (!state.selectedUrls.length) {
+        setStatus("Tidak ada URL yang cocok dengan filter saat ini.");
+        return;
+      }
+      const examples = state.selectedUrls.slice(0, 5)
+        .map(e => `${getSlugFromUrl(e.url)} [${e.lastmod ? e.lastmod.slice(0,10) : "no-date"}]`);
+      setStatus(`${state.selectedUrls.length} URL terpilih. Contoh: ${examples.join(", ")} ...`);
     } catch (err) {
       setStatus(String(err.message || err));
     }
   };
 
-  startBtn.onclick = runScrape;
-
+  startBtn.onclick  = runScrape;
   cancelBtn.onclick = () => {
     state.cancelled = true;
     cancelBtn.disabled = true;
-    setStatus("Membatalkan proses...");
+    setStatus("Membatalkan...");
   };
-
-  closeBtn.onclick = () => {
+  closeBtn.onclick  = () => {
     state.cancelled = true;
     panel.remove();
     delete window.__quizScraperUI;
   };
 
-  rangeModeAll.onchange = () => {
-    if (state.allUrls.length) {
-      try {
-        applyPrefixFilter(prefixInput.value);
-        applySelectionRange();
-      } catch {}
-    }
-  };
-
-  rangeModeCustom.onchange = () => {
-    if (state.allUrls.length) {
-      try {
-        applyPrefixFilter(prefixInput.value);
-        applySelectionRange();
-      } catch {}
-    }
-  };
-
-  rangeInput.oninput = () => {
-    if (rangeModeCustom.checked && state.allUrls.length) {
-      try {
-        applyPrefixFilter(prefixInput.value);
-        applySelectionRange();
-      } catch {}
-    }
-  };
-
   window.__quizScraperUI = true;
-  setStatus("UI siap. Klik Load Sitemap dulu.");
+  updateCounts();
 })();
