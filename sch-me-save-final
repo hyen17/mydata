@@ -26,244 +26,401 @@
             }
             const $ = (sel, root = document) => root.querySelector(sel);
             const $all = (sel, root = document) => Array.from(root.querySelectorAll(sel));
-            const esc = (s) => s ? s.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])) : '';
+            const esc = (s) => s ? s.replace(/[&<>"']/g, m => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[m])) : '';
 
             /***********************************************************
-             * FUNGSI PEMBERSIH (HARD DELETE BERDASARKAN SCRIPT 2)     *
+             * FUNGSI PEMBERSIH (HARD DELETE)                          *
              ***********************************************************/
             function performHardClean(domElement) {
-    if (!domElement) return;
+                if (!domElement) return;
 
-    // 1. HAPUS VIDEO PLAYER
-    const videos = domElement.querySelectorAll('#VideoPlayerContainer');
-    videos.forEach(video => {
-        const sibling1 = video.nextElementSibling;
-        if (sibling1 && sibling1.tagName === 'BR') {
-            const sibling2 = sibling1.nextElementSibling;
-            if (sibling2 && sibling2.tagName === 'P' && sibling2.innerText.trim() === '') {
-                sibling2.remove();
+                // 1. HAPUS VIDEO PLAYER
+                const videos = domElement.querySelectorAll('#VideoPlayerContainer');
+                videos.forEach(video => {
+                    const sibling1 = video.nextElementSibling;
+                    if (sibling1 && sibling1.tagName === 'BR') {
+                        const sibling2 = sibling1.nextElementSibling;
+                        if (sibling2 && sibling2.tagName === 'P' && sibling2.innerText.trim() === '') {
+                            sibling2.remove();
+                        }
+                        sibling1.remove();
+                    }
+                    video.remove();
+                });
+
+                // 2. HAPUS HANYA BLOK "RELATED MATERIAL"
+                const sections = domElement.querySelectorAll('section.QuestionBody-module__item--oc5Wf');
+                sections.forEach(section => {
+                    const boldEl = section.querySelector('b');
+                    const title = boldEl ? boldEl.innerText.trim().toLowerCase() : '';
+                    if (
+                        title === 'related material' ||
+                        title === 'related materials' ||
+                        title === 'related resource' ||
+                        title === 'related resources'
+                    ) {
+                        section.remove();
+                    }
+                });
             }
-            sibling1.remove();
-        }
-        video.remove();
-    });
-
-    // 2. HAPUS HANYA BLOK "RELATED MATERIAL", JANGAN HAPUS "EXPLANATION"
-    const sections = domElement.querySelectorAll('section.QuestionBody-module__item--oc5Wf');
-
-    sections.forEach(section => {
-        const boldEl = section.querySelector('b');
-        const title = boldEl ? boldEl.innerText.trim().toLowerCase() : '';
-
-        // Hapus hanya jika judulnya benar-benar related material / related resources
-        if (
-            title === 'related material' ||
-            title === 'related materials' ||
-            title === 'related resource' ||
-            title === 'related resources'
-        ) {
-            section.remove();
-        }
-    });
-}
 
             /***********************
              * TITLE (SHORT)       *
              ***********************/
             function pickText(el) { return el ? (el.textContent || el.innerText || '').trim() : ''; }
-            function getFullCourseTitleImmediate() { const el = $('h1.CourseNodeHeader-module__courseTitleHeadingTwo--RL41B[data-test-id="course-module-name"]') || $('h1[data-test-id="course-module-name"]') || $('h1[class*="courseTitleHeadingTwo"]') || $('[class*="CourseNodeHeader-module__wrapper"] h1') || $('h1'); return pickText(el) || 'Quiz'; }
-            async function getFullCourseTitle() { const now = getFullCourseTitleImmediate(); if (now !== 'Quiz') return now; const el = await waitFor(() => $('h1[data-test-id="course-module-name"]') || $('h1[class*="courseTitleHeadingTwo"]') || $('[class*="CourseNodeHeader-module__wrapper"] h1') || null, 2000, 120); return el ? pickText(el) : 'Quiz'; }
-            function toShortModuleTitle(fullTitle) { const m = fullTitle.match(/(Module\s+\d+(?:\.\d+)*)(?::|$)/i); if (m) return `${m[1]} Quiz`; const beforeColon = fullTitle.split(':')[0].trim(); if (/Module/i.test(beforeColon)) return `${beforeColon} Quiz`; return 'Quiz'; }
+            function getFullCourseTitleImmediate() {
+                const el = $('h1.CourseNodeHeader-module__courseTitleHeadingTwo--RL41B[data-test-id="course-module-name"]')
+                    || $('h1[data-test-id="course-module-name"]')
+                    || $('h1[class*="courseTitleHeadingTwo"]')
+                    || $('[class*="CourseNodeHeader-module__wrapper"] h1')
+                    || $('h1');
+                return pickText(el) || 'Quiz';
+            }
+            async function getFullCourseTitle() {
+                const now = getFullCourseTitleImmediate();
+                if (now !== 'Quiz') return now;
+                const el = await waitFor(
+                    () => $('h1[data-test-id="course-module-name"]')
+                        || $('h1[class*="courseTitleHeadingTwo"]')
+                        || $('[class*="CourseNodeHeader-module__wrapper"] h1')
+                        || null,
+                    2000, 120
+                );
+                return el ? pickText(el) : 'Quiz';
+            }
+            function toShortModuleTitle(fullTitle) {
+                const m = fullTitle.match(/(Module\s+\d+(?:\.\d+)*)(?::|$)/i);
+                if (m) return `${m[1]} Quiz`;
+                const beforeColon = fullTitle.split(':')[0].trim();
+                if (/Module/i.test(beforeColon)) return `${beforeColon} Quiz`;
+                return 'Quiz';
+            }
 
             /***********************
              * HELPERS (NUMBERS)   *
              ***********************/
-            function parseQNumFromIndexText(s) { if (!s) return null; const m = s.match(/Question(?:\s*#)?\s*(\d+)/i); return m ? parseInt(m[1], 10) : null; }
-            function getNextAriaNumber() { const btn = $('[data-test-id="attempt-review-footer-nextattempt"], button[class*="__nextbtn"]'); if (!btn) return null; const aria = btn.getAttribute('aria-label') || ''; const m = aria.match(/Next item question #(\d+)/i); return m ? parseInt(m[1], 10) : null; }
+            function parseQNumFromIndexText(s) {
+                if (!s) return null;
+                const m = s.match(/Question(?:\s*#)?\s*(\d+)/i);
+                return m ? parseInt(m[1], 10) : null;
+            }
+            function getNextAriaNumber() {
+                const btn = $('[data-test-id="attempt-review-footer-nextattempt"], button[class*="__nextbtn"]');
+                if (!btn) return null;
+                const aria = btn.getAttribute('aria-label') || '';
+                const m = aria.match(/Next item question #(\d+)/i);
+                return m ? parseInt(m[1], 10) : null;
+            }
+
+            /*****************************
+             * EKSTRAK EXPLANATION       *
+             * (standar + grading guide) *
+             *****************************/
+            function extractExplanation(root) {
+                // --- PRIORITAS 1: Explanation standar ---
+                const expWrap = $('[id^="question-explanation-"]', root);
+                if (expWrap) {
+                    const clone = expWrap.cloneNode(true);
+                    performHardClean(clone);
+                    return {
+                        explanationHTML: clone.innerHTML.trim(),
+                        explanationText: clone.innerText.trim(),
+                        explanationHasLabel: !!$('b', clone)
+                    };
+                }
+
+                // --- PRIORITAS 2: Grading Guide ---
+                const guideWrap = $('[class*="QuestionBody-module__guide"]', root);
+                if (guideWrap) {
+                    const clone = guideWrap.cloneNode(true);
+
+                    // Hapus elemen <b> pertama yang berisi judul "Grading Guide"
+                    // agar tidak duplikat dengan label "Explanation:" yang kita tambah sendiri
+                    const firstBold = clone.querySelector('b');
+                    if (firstBold) {
+                        // Pastikan itu memang judul, bukan bold di dalam paragraf
+                        const boldText = firstBold.textContent.trim().toLowerCase();
+                        if (
+                            boldText === 'grading guide' ||
+                            boldText === 'grading guides' ||
+                            boldText === 'guide'
+                        ) {
+                            // Kalau <b> langsung anak pertama clone (bukan di dalam <p>)
+                            // atau parentnya adalah clone langsung, hapus
+                            if (
+                                firstBold.parentElement === clone ||
+                                firstBold.closest('p') === null
+                            ) {
+                                firstBold.remove();
+                            }
+                        }
+                    }
+
+                    // Ambil konten sisa (div kosong pertama pembungkus konten)
+                    // Struktur: <div class="guide..."><b>Grading Guide</b><div class=""><p>...</p></div></div>
+                    // Setelah <b> dihapus, yang tersisa adalah <div class=""><p>...</p></div>
+                    // Kita ambil innerHTML-nya agar tidak ada wrapper div kosong berlebih
+                    const innerDiv = clone.querySelector('div');
+                    const finalHTML = innerDiv
+                        ? innerDiv.innerHTML.trim()
+                        : clone.innerHTML.trim();
+
+                    const finalText = innerDiv
+                        ? (innerDiv.innerText || innerDiv.textContent || '').trim()
+                        : clone.innerText.trim();
+
+                    return {
+                        explanationHTML: finalHTML,
+                        explanationText: finalText,
+                        // false → kita akan tambah label "Explanation:" secara manual di renderer
+                        explanationHasLabel: false
+                    };
+                }
+
+                // --- Tidak ada explanation apapun ---
+                return {
+                    explanationHTML: '',
+                    explanationText: '',
+                    explanationHasLabel: false
+                };
+            }
 
             /***********************
              * SINGLE Q EXTRACT    *
              ***********************/
-            function extractFromContainer(root, readingHTML) { 
-                const content = $('[data-id="question-content"]', root) || root; 
-                const idxEl = $('.QuestionBody-module__questionOrder--kNol4,[class*="questionOrder"]', root); 
-                const indexText = idxEl ? idxEl.innerText.trim() : ($('[data-test-id="attempt-review-question-index"]') ?.innerText.trim() || null); 
-                const qEl = $('.QuestionBody-module__questionText--mVV91,[class*="QuestionBody-module__questionText"]', root) || content; 
-                const questionHTML = qEl.innerHTML; 
-                const questionText = qEl.innerText.trim(); 
-                const group = $('[role="radiogroup"]', root) || root; 
-                const blocks = $all('[data-id="question-body-container"]', group); 
-                const makeChoice = (container, idx) => { 
-                    const letterEl = $('[class*="alphaOrdinal"]', container); 
-                    const textEl = $('[class*="optionText"]', container) || container; 
-                    const correctImg = $('img[alt="Correct Answer"]', container); 
-                    const letter = (letterEl ? letterEl.innerText : String.fromCharCode(65 + idx)).replace(/[)\.]/g, '').trim(); 
-                    const choiceHTML = (textEl.innerHTML || '').trim(); 
-                    const choiceText = (textEl.innerText || '').trim(); 
-                    return { letter, text: choiceText, html: choiceHTML, isCorrect: !!correctImg }; 
-                }; 
-                const choices = blocks.length ? blocks.map(makeChoice) : $all('label[class*="e1bppr3n2"], label', group).map(makeChoice); 
-                
-                // --- PENGAMBILAN PENJELASAN DENGAN PEMBERSIHAN ---
-                const expWrap = $('[id^="question-explanation-"]', root);
-                let explanationHTML = '', explanationText = '', explanationHasLabel = false; 
-                if (expWrap) { 
-                    const clone = expWrap.cloneNode(true); 
-                    
-                    // >>> LANGKAH PENTING: BERSIHKAN ELEMENT DARI CLONE SEBELUM DIJADIKAN HTML <<<
-                    performHardClean(clone);
-                    // --------------------------------------------------------------------------
+            function extractFromContainer(root, readingHTML) {
+                const content = $('[data-id="question-content"]', root) || root;
+                const idxEl = $('.QuestionBody-module__questionOrder--kNol4,[class*="questionOrder"]', root);
+                const indexText = idxEl
+                    ? idxEl.innerText.trim()
+                    : ($('[data-test-id="attempt-review-question-index"]')?.innerText.trim() || null);
+                const qEl = $('.QuestionBody-module__questionText--mVV91,[class*="QuestionBody-module__questionText"]', root) || content;
+                const questionHTML = qEl.innerHTML;
+                const questionText = qEl.innerText.trim();
+                const group = $('[role="radiogroup"]', root) || root;
+                const blocks = $all('[data-id="question-body-container"]', group);
+                const makeChoice = (container, idx) => {
+                    const letterEl = $('[class*="alphaOrdinal"]', container);
+                    const textEl = $('[class*="optionText"]', container) || container;
+                    const correctImg = $('img[alt="Correct Answer"]', container);
+                    const letter = (letterEl ? letterEl.innerText : String.fromCharCode(65 + idx)).replace(/[)\.]/g, '').trim();
+                    const choiceHTML = (textEl.innerHTML || '').trim();
+                    const choiceText = (textEl.innerText || '').trim();
+                    return { letter, text: choiceText, html: choiceHTML, isCorrect: !!correctImg };
+                };
+                const choices = blocks.length
+                    ? blocks.map(makeChoice)
+                    : $all('label[class*="e1bppr3n2"], label', group).map(makeChoice);
 
-                    explanationHasLabel = !!$('b', clone); 
-                    explanationHTML = clone.innerHTML.trim(); 
-                    explanationText = clone.innerText.trim(); 
-                } 
-                
-                const idEl = content.closest('[id^="question_"]') || content; 
-                const qId = idEl.id || null; 
-                const correct = choices.find(c => c.isCorrect) || null; 
-                return { id: qId, indexText, questionHTML, questionText, choices, correct, explanationHTML, explanationText, explanationHasLabel, readingHTML: readingHTML || null }; 
+                // Gunakan fungsi baru extractExplanation
+                const { explanationHTML, explanationText, explanationHasLabel } = extractExplanation(root);
+
+                const idEl = content.closest('[id^="question_"]') || content;
+                const qId = idEl.id || null;
+                const correct = choices.find(c => c.isCorrect) || null;
+
+                return {
+                    id: qId,
+                    indexText,
+                    questionHTML,
+                    questionText,
+                    choices,
+                    correct,
+                    explanationHTML,
+                    explanationText,
+                    explanationHasLabel,
+                    readingHTML: readingHTML || null
+                };
             }
 
             /*******************************
              * PAGE EXTRACT (WITH READING) *
              *******************************/
-            function collectAllQuestionsOnPage() { 
-                const results = []; 
-                const setContainer = $('.AttemptReview-module__questionSetContainer--k2LgH') || $('[data-question-target="overview"]') ?.closest('.AttemptReview-module__questionSetContainer--k2LgH'); 
-                if (setContainer) { 
-                    const readingEl = $('.QuestionSet-module__questionText--e_VDw[data-question-target="overview"]', setContainer); 
-                    const readingHTML = readingEl ? readingEl.innerHTML : null; 
-                    const qBodies = $all('.QuestionSet-module__questionSetBodyContainer--N7Atb', setContainer).map(span => $('.QuestionBody-module__questionContainer--wi5XU', span) || span).filter(Boolean); 
-                    qBodies.forEach(root => { results.push(extractFromContainer(root, readingHTML)); }); 
-                    return { records: results, pageMaxQNum: getMaxQNumFromRecords(results) }; 
-                } 
-                const wrap = $('[data-id="question-content"]'); 
-                if (wrap) { 
-                    const rec = extractFromContainer(wrap, null); 
-                    return { records: [rec], pageMaxQNum: parseQNumFromIndexText(rec.indexText) || null }; 
-                } 
-                return { records: [], pageMaxQNum: null }; 
+            function collectAllQuestionsOnPage() {
+                const results = [];
+                const setContainer = $('.AttemptReview-module__questionSetContainer--k2LgH')
+                    || $('[data-question-target="overview"]')?.closest('.AttemptReview-module__questionSetContainer--k2LgH');
+                if (setContainer) {
+                    const readingEl = $('.QuestionSet-module__questionText--e_VDw[data-question-target="overview"]', setContainer);
+                    const readingHTML = readingEl ? readingEl.innerHTML : null;
+                    const qBodies = $all('.QuestionSet-module__questionSetBodyContainer--N7Atb', setContainer)
+                        .map(span => $('.QuestionBody-module__questionContainer--wi5XU', span) || span)
+                        .filter(Boolean);
+                    qBodies.forEach(root => { results.push(extractFromContainer(root, readingHTML)); });
+                    return { records: results, pageMaxQNum: getMaxQNumFromRecords(results) };
+                }
+                const wrap = $('[data-id="question-content"]');
+                if (wrap) {
+                    const rec = extractFromContainer(wrap, null);
+                    return { records: [rec], pageMaxQNum: parseQNumFromIndexText(rec.indexText) || null };
+                }
+                return { records: [], pageMaxQNum: null };
             }
-            function getMaxQNumFromRecords(recs) { let max = null; recs.forEach(r => { const n = parseQNumFromIndexText(r.indexText); if (Number.isFinite(n)) max = max == null ? n : Math.max(max, n); }); return max; }
+            function getMaxQNumFromRecords(recs) {
+                let max = null;
+                recs.forEach(r => {
+                    const n = parseQNumFromIndexText(r.indexText);
+                    if (Number.isFinite(n)) max = max == null ? n : Math.max(max, n);
+                });
+                return max;
+            }
 
             /**********************
              * FLOW: CAPTURE ALL  *
              **********************/
-            async function captureAll() { 
-                await waitFor(() => $('[data-id="question-content"]') || $('.AttemptReview-module__questionSetContainer--k2LgH')); 
-                let prevFirstId = ($('[data-id="question-content"]') ?.closest('[id^="question_"]') || $('[data-id="question-content"]')) ?.id || null; 
-                const all = []; 
-                const seen = new Set(); 
-                while (true) { 
-                    const { records: pageRecs, pageMaxQNum } = collectAllQuestionsOnPage(); 
-                    for (const rec of pageRecs) { 
-                        const key = rec.id || (rec.indexText + '|' + rec.questionText.slice(0, 40)); 
-                        if (!seen.has(key)) { 
-                            seen.add(key); 
-                            all.push(rec); 
-                        } 
-                    } 
-                    const nextBtn = $('[data-test-id="attempt-review-footer-nextattempt"], button[class*="__nextbtn"]'); 
-                    if (!nextBtn || nextBtn.disabled) break; 
-                    const nextNum = getNextAriaNumber(); 
-                    if (pageMaxQNum != null && nextNum != null && nextNum <= pageMaxQNum) break; 
-                    nextBtn.click(); 
-                    const changed = await waitFor(() => { 
-                        const nowId = ($('[data-id="question-content"]') ?.closest('[id^="question_"]') || $('[data-id="question-content"]')) ?.id || null; 
-                        return (nowId && nowId !== prevFirstId) ? nowId : null; 
-                    }, CONFIG.LOAD_TIMEOUT_MS, 120); 
-                    if (!changed) break; 
-                    prevFirstId = changed; 
-                } 
-                return all; 
+            async function captureAll() {
+                await waitFor(() => $('[data-id="question-content"]') || $('.AttemptReview-module__questionSetContainer--k2LgH'));
+                let prevFirstId = ($('[data-id="question-content"]')?.closest('[id^="question_"]') || $('[data-id="question-content"]'))?.id || null;
+                const all = [];
+                const seen = new Set();
+                while (true) {
+                    const { records: pageRecs, pageMaxQNum } = collectAllQuestionsOnPage();
+                    for (const rec of pageRecs) {
+                        const key = rec.id || (rec.indexText + '|' + rec.questionText.slice(0, 40));
+                        if (!seen.has(key)) {
+                            seen.add(key);
+                            all.push(rec);
+                        }
+                    }
+                    const nextBtn = $('[data-test-id="attempt-review-footer-nextattempt"], button[class*="__nextbtn"]');
+                    if (!nextBtn || nextBtn.disabled) break;
+                    const nextNum = getNextAriaNumber();
+                    if (pageMaxQNum != null && nextNum != null && nextNum <= pageMaxQNum) break;
+                    nextBtn.click();
+                    const changed = await waitFor(() => {
+                        const nowId = ($('[data-id="question-content"]')?.closest('[id^="question_"]') || $('[data-id="question-content"]'))?.id || null;
+                        return (nowId && nowId !== prevFirstId) ? nowId : null;
+                    }, CONFIG.LOAD_TIMEOUT_MS, 120);
+                    if (!changed) break;
+                    prevFirstId = changed;
+                }
+                return all;
             }
 
             /********************************************
              * RENDER (HTML GENERATOR)
              ********************************************/
-            function gatherOriginalHead() { 
-                let headBits = ['<meta charset="utf-8">', '<meta name="viewport" content="width=device-width, initial-scale=1">']; 
-                headBits.push('<script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>');
-                headBits.push('<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>');
-                document.querySelectorAll('style, link[rel="stylesheet"]').forEach(el => { headBits.push(el.outerHTML); }); 
-                return headBits.join("\n"); 
+            function gatherOriginalHead() {
+                let headBits = [
+                    '<meta charset="utf-8">',
+                    '<meta name="viewport" content="width=device-width, initial-scale=1">'
+                ];
+                headBits.push('<script src="https://polyfill.io/v3/polyfill.min.js?features=es6"><\/script>');
+                headBits.push('<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"><\/script>');
+                document.querySelectorAll('style, link[rel="stylesheet"]').forEach(el => {
+                    headBits.push(el.outerHTML);
+                });
+                return headBits.join("\n");
             }
 
-            function getPageTemplate(title, originalHeadHTML, bodyHTML) { 
-                // Karena elemen sampah SUDAH DIHAPUS, CSS di sini hanya untuk style tampilan, tidak perlu hide-hide lagi.
+            function getPageTemplate(title, originalHeadHTML, bodyHTML) {
                 const quizStyles = `
                 <style>
-                    :root { --qc-maxw: 900px; --qc-pad: 16px; --qc-gray: #f3f4f6; --qc-reading:#f9fafb; } 
-                    html, body { background:#fff !important; } 
-                    body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding:24px; } 
-                    .qc-container { margin: 0 auto; max-width: var(--qc-maxw); } 
-                    .qc-title { font-size:20px; font-weight:700; margin:0 0 12px; } 
-                    .qc-reading { padding:12px; background: var(--qc-reading); border:1px solid #e5e7eb; border-radius:8px; margin: 16px 0; } 
-                    .qc-breakMarker { height:0; border:none; margin:0; } 
-                    
-                    .qc-item { padding:12px 8px; margin-bottom:12px; border-radius:8px; border:1px solid #f0f0f0; background:#fff; break-inside: avoid; page-break-inside: avoid; } 
-                    .qc-item h3 { margin:0 0 6px; font-size:16px; font-weight:700; } 
-                    .qc-stem { margin:4px 0 10px; line-height:1.5; } 
-                    .qc-choices { margin:8px 0 0 0; padding:0; list-style:none; } 
-                    .qc-choice { margin:6px 0; display:flex; gap:8px; line-height:1.45; } 
-                    .qc-letter { font-weight:700; min-width:22px; } 
-                    .qc-correct .qc-text { font-weight:700; } 
-                    .qc-tick { font-weight:700; margin-left:6px; color: green; } 
-                    .qc-answer-block { border-top:1px dashed #e5e7eb; margin-top:10px; padding:10px; background: var(--qc-gray); border-radius:8px; } 
-                    .qc-choice mjx-container[display="true"] { display:block; } 
-
-                    /* FONT FIX: Tetap kita pakai agar font penjelasan enak dibaca */
+                    :root { --qc-maxw: 900px; --qc-pad: 16px; --qc-gray: #f3f4f6; --qc-reading:#f9fafb; }
+                    html, body { background:#fff !important; }
+                    body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding:24px; }
+                    .qc-container { margin: 0 auto; max-width: var(--qc-maxw); }
+                    .qc-title { font-size:20px; font-weight:700; margin:0 0 12px; }
+                    .qc-reading { padding:12px; background: var(--qc-reading); border:1px solid #e5e7eb; border-radius:8px; margin: 16px 0; }
+                    .qc-breakMarker { height:0; border:none; margin:0; }
+                    .qc-item { padding:12px 8px; margin-bottom:12px; border-radius:8px; border:1px solid #f0f0f0; background:#fff; break-inside: avoid; page-break-inside: avoid; }
+                    .qc-item h3 { margin:0 0 6px; font-size:16px; font-weight:700; }
+                    .qc-stem { margin:4px 0 10px; line-height:1.5; }
+                    .qc-choices { margin:8px 0 0 0; padding:0; list-style:none; }
+                    .qc-choice { margin:6px 0; display:flex; gap:8px; line-height:1.45; }
+                    .qc-letter { font-weight:700; min-width:22px; }
+                    .qc-correct .qc-text { font-weight:700; }
+                    .qc-tick { font-weight:700; margin-left:6px; color: green; }
+                    .qc-answer-block { border-top:1px dashed #e5e7eb; margin-top:10px; padding:10px; background: var(--qc-gray); border-radius:8px; }
+                    .qc-choice mjx-container[display="true"] { display:block; }
                     .qc-expl, .qc-expl * { font-size: 1rem !important; }
-
                     @media print {
-                        .qc-reading.qc-break { page-break-before: always; break-before: page; } 
-                        .qc-item { page-break-inside: avoid; break-inside: avoid; } 
+                        .qc-reading.qc-break { page-break-before: always; break-before: page; }
+                        .qc-item { page-break-inside: avoid; break-inside: avoid; }
                         body { padding:0 20px; }
                     }
-                </style>`; 
-                
-                return '<!doctype html><html><head><title>' + esc(title) + '</title>' + originalHeadHTML + quizStyles + '</head><body>' + bodyHTML + '</body></html>'; 
+                </style>`;
+
+                return '<!doctype html><html><head><title>' + esc(title) + '</title>'
+                    + originalHeadHTML + quizStyles
+                    + '</head><body>' + bodyHTML + '</body></html>';
             }
 
-            function renderListHTML(records, title, mode) { 
-                let html = '<div class="qc-container"><h1 class="qc-title">' + esc(title) + '</h1>'; 
-                let lastReadingKey = null; 
-                let firstBlock = true; 
-                records.forEach((rec, i) => { 
-                    if (rec.readingHTML && rec.readingHTML !== lastReadingKey) { 
-                        const readingClass = firstBlock ? 'qc-reading' : 'qc-reading qc-break'; 
-                        html += (firstBlock ? '' : '<hr class="qc-breakMarker">') + '<section class="' + readingClass + '">' + rec.readingHTML + '</section>'; 
-                        lastReadingKey = rec.readingHTML; 
-                        firstBlock = false; 
-                    } 
-                    const idxText = rec.indexText || ('Question ' + (i + 1)); 
-                    const choiceLis = rec.choices.map(ch => { 
-                        const core = (ch.html && ch.html.length) ? ch.html : esc(ch.text); 
-                        const tick = (mode === 'A' && ch.isCorrect) ? '<span class="qc-tick">✓</span>' : ''; 
-                        const base = '<span class="qc-letter">' + esc(ch.letter) + ')</span>' + '<span class="qc-text">' + core + tick + '</span>'; 
-                        return '<li class="qc-choice ' + ((mode === 'A' && ch.isCorrect) ? 'qc-correct' : '') + '">' + base + '</li>'; 
-                    }).join(''); 
-                    
-                    html += '' + '<article class="qc-item" data-qid="' + esc(rec.id || ('q-' + (i + 1))) + '">' + '<h3>' + esc(idxText) + '</h3>' + '<div class="qc-stem">' + (rec.questionHTML || esc(rec.questionText)) + '</div>' + '<ul class="qc-choices">' + choiceLis + '</ul>' + (mode === 'A' ? ('<div class="qc-answer-block">' + (rec.explanationHTML ? (rec.explanationHasLabel ? '<div class="qc-expl">' + rec.explanationHTML + '</div>' : '<div class="qc-expl"><b>Explanation:</b> ' + rec.explanationHTML + '</div>') : '<div class="qc-expl"><b>Explanation:</b> <em>No explanation found.</em></div>') + '</div>') : '') + '</article>'; 
-                    firstBlock = false; 
-                }); 
-                html += '</div>'; 
-                return html; 
+            function renderListHTML(records, title, mode) {
+                let html = '<div class="qc-container"><h1 class="qc-title">' + esc(title) + '</h1>';
+                let lastReadingKey = null;
+                let firstBlock = true;
+
+                records.forEach((rec, i) => {
+                    if (rec.readingHTML && rec.readingHTML !== lastReadingKey) {
+                        const readingClass = firstBlock ? 'qc-reading' : 'qc-reading qc-break';
+                        html += (firstBlock ? '' : '<hr class="qc-breakMarker">')
+                            + '<section class="' + readingClass + '">' + rec.readingHTML + '</section>';
+                        lastReadingKey = rec.readingHTML;
+                        firstBlock = false;
+                    }
+
+                    const idxText = rec.indexText || ('Question ' + (i + 1));
+                    const choiceLis = rec.choices.map(ch => {
+                        const core = (ch.html && ch.html.length) ? ch.html : esc(ch.text);
+                        const tick = (mode === 'A' && ch.isCorrect) ? '<span class="qc-tick">✓</span>' : '';
+                        const base = '<span class="qc-letter">' + esc(ch.letter) + ')</span>'
+                            + '<span class="qc-text">' + core + tick + '</span>';
+                        return '<li class="qc-choice ' + ((mode === 'A' && ch.isCorrect) ? 'qc-correct' : '') + '">' + base + '</li>';
+                    }).join('');
+
+                    // Render explanation block (mode A saja)
+                    let explanationBlock = '';
+                    if (mode === 'A') {
+                        let explContent = '';
+                        if (rec.explanationHTML) {
+                            if (rec.explanationHasLabel) {
+                                // Explanation standar sudah punya label sendiri di dalam HTML
+                                explContent = '<div class="qc-expl">' + rec.explanationHTML + '</div>';
+                            } else {
+                                // Grading Guide atau standar tanpa label → tambahkan label "Explanation:"
+                                explContent = '<div class="qc-expl"><b>Explanation:</b> ' + rec.explanationHTML + '</div>';
+                            }
+                        } else {
+                            explContent = '<div class="qc-expl"><b>Explanation:</b> <em>No explanation found.</em></div>';
+                        }
+                        explanationBlock = '<div class="qc-answer-block">' + explContent + '</div>';
+                    }
+
+                    html += '<article class="qc-item" data-qid="' + esc(rec.id || ('q-' + (i + 1))) + '">'
+                        + '<h3>' + esc(idxText) + '</h3>'
+                        + '<div class="qc-stem">' + (rec.questionHTML || esc(rec.questionText)) + '</div>'
+                        + '<ul class="qc-choices">' + choiceLis + '</ul>'
+                        + explanationBlock
+                        + '</article>';
+
+                    firstBlock = false;
+                });
+
+                html += '</div>';
+                return html;
             }
 
-            function downloadFile(filename, content) {
+            // ─────────────────────────────────────────────────
+            // BUKA DI TAB BARU (ganti downloadFile)
+            // ─────────────────────────────────────────────────
+            function openInNewTab(content) {
                 const blob = new Blob([content], { type: 'text/html' });
                 const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                setTimeout(() => {
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                }, 100);
+                const newTab = window.open(url, '_blank');
+
+                // Revoke setelah tab sempat membuka konten
+                if (newTab) {
+                    newTab.addEventListener('load', () => {
+                        setTimeout(() => URL.revokeObjectURL(url), 3000);
+                    });
+                } else {
+                    // Fallback: popup diblokir → revoke setelah delay
+                    setTimeout(() => URL.revokeObjectURL(url), 10000);
+                    alert('Pop-up diblokir browser. Izinkan pop-up untuk situs ini lalu coba lagi.');
+                }
             }
 
             /**********************
@@ -272,21 +429,27 @@
             const fullTitle = await getFullCourseTitle();
             const shortTitle = toShortModuleTitle(fullTitle);
             const records = await captureAll();
-            if (!records || !records.length) { alert('Tidak ada pertanyaan yang tertangkap.'); return; }
+
+            if (!records || !records.length) {
+                alert('Tidak ada pertanyaan yang tertangkap.');
+                return;
+            }
 
             const originalHead = gatherOriginalHead();
-            
+
+            // Buka tab Questions
             const questionsTitle = shortTitle + ' - Questions';
             const questionsBody = renderListHTML(records, questionsTitle, 'Q');
             const questionsPage = getPageTemplate(questionsTitle, originalHead, questionsBody);
-            downloadFile(questionsTitle + '.html', questionsPage);
+            openInNewTab(questionsPage);
 
-            await sleep(500); 
+            await sleep(500);
 
+            // Buka tab Answers
             const answersTitle = shortTitle + ' - Answers';
             const answersBody = renderListHTML(records, answersTitle, 'A');
             const answersPage = getPageTemplate(answersTitle, originalHead, answersBody);
-            downloadFile(answersTitle + '.html', answersPage);
+            openInNewTab(answersPage);
 
         } catch (err) {
             console.error(err);
@@ -300,9 +463,8 @@
     }
 
     function buatTombolEkstraktor() {
-        if (document.getElementById('quiz-extractor-btn')) {
-            return;
-        }
+        if (document.getElementById('quiz-extractor-btn')) return;
+
         const button = document.createElement('button');
         button.id = 'quiz-extractor-btn';
         button.innerHTML = '🖨️ Ekstrak Quiz';
@@ -317,5 +479,4 @@
     }
 
     buatTombolEkstraktor();
-
 })();
