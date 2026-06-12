@@ -1,0 +1,537 @@
+(async () => {
+  const originalFetch = window.fetch;
+
+  const responsesToSave = new Map();
+
+  let automationRunning = false;
+  let automationStopped = true;
+
+  let saveLimit = null; // null = tidak dibatasi
+  let lastNumberLimit = null;
+
+  function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  function getSettingsFromUI() {
+    const numberRadio = document.getElementById('quizCaptureModeNumber');
+    const amountInput = document.getElementById('quizCaptureAmount');
+
+    const isNumberMode = numberRadio?.checked;
+    const amount = parseInt(amountInput?.value || '', 10);
+
+    if (isNumberMode && Number.isFinite(amount) && amount > 0) {
+      return {
+        mode: 'number',
+        amount
+      };
+    }
+
+    return {
+      mode: 'auto',
+      amount: null
+    };
+  }
+
+  function getResponsesArrayForDownload() {
+    const arr = Array.from(responsesToSave.values());
+
+    if (lastNumberLimit !== null) {
+      return arr.slice(0, lastNumberLimit);
+    }
+
+    return arr;
+  }
+
+  function setStatus(text, type = 'idle') {
+    const statusEl = document.getElementById('quizCaptureStatus');
+    if (!statusEl) return;
+
+    statusEl.textContent = text;
+
+    const colors = {
+      idle: '#64748b',
+      running: '#16a34a',
+      stopped: '#dc2626',
+      warning: '#d97706',
+      done: '#2563eb'
+    };
+
+    statusEl.style.color = colors[type] || '#64748b';
+  }
+
+  function updateAmountInputState() {
+    const numberRadio = document.getElementById('quizCaptureModeNumber');
+    const amountInput = document.getElementById('quizCaptureAmount');
+
+    if (!numberRadio || !amountInput) return;
+
+    const isNumberMode = numberRadio.checked;
+
+    amountInput.disabled = !isNumberMode;
+
+    if (isNumberMode) {
+      amountInput.placeholder = 'Misal: 41';
+    } else {
+      amountInput.placeholder = 'Otomatis sampai Next habis';
+    }
+  }
+
+  function updateUI() {
+    const countEl = document.getElementById('quizCaptureCount');
+    const startBtn = document.getElementById('quizCaptureStart');
+    const stopBtn = document.getElementById('quizCaptureStop');
+    const downloadBtn = document.getElementById('quizCaptureDownload');
+
+    const downloadCount = getResponsesArrayForDownload().length;
+
+    if (countEl) countEl.textContent = downloadCount;
+
+    if (startBtn) {
+      startBtn.disabled = automationRunning;
+      startBtn.textContent = automationRunning ? 'Running...' : 'Start';
+      startBtn.style.opacity = automationRunning ? '0.7' : '1';
+    }
+
+    if (stopBtn) {
+      stopBtn.disabled = !automationRunning;
+      stopBtn.style.opacity = automationRunning ? '1' : '0.6';
+    }
+
+    if (downloadBtn) {
+      downloadBtn.textContent = `Download (${downloadCount})`;
+      downloadBtn.disabled = downloadCount === 0;
+      downloadBtn.style.opacity = downloadCount === 0 ? '0.6' : '1';
+    }
+
+    updateAmountInputState();
+  }
+
+  function isTargetReached() {
+    if (saveLimit === null) return false;
+    return responsesToSave.size >= saveLimit;
+  }
+
+  window.fetch = async (url, options) => {
+    const response = await originalFetch(url, options);
+
+    const urlString = url.toString();
+
+    const isContentDetails =
+      urlString.includes('?details=content') &&
+      !urlString.includes('status');
+
+    const isContentStatusDetails =
+      urlString.includes('?details=content%2Cstatus');
+
+    if (isContentDetails || isContentStatusDetails) {
+      if (!responsesToSave.has(urlString)) {
+        if (saveLimit !== null && responsesToSave.size >= saveLimit) {
+          console.log(`⛔ Response skipped. Save limit ${saveLimit} already reached.`);
+          return response;
+        }
+
+        const responseClone = response.clone();
+        const responseBody = await responseClone.json().catch(() => null);
+
+        const endpointType = isContentStatusDetails ? 'content+status' : 'content';
+
+        responsesToSave.set(urlString, {
+          url: urlString,
+          response: responseBody,
+          endpoint_type: endpointType,
+          captured_at: new Date().toISOString()
+        });
+
+        console.log(`✅ Response captured (${endpointType}):`, responsesToSave.size);
+
+        if (automationRunning && isTargetReached()) {
+          automationStopped = true;
+          automationRunning = false;
+          setStatus(`Selesai. Total ${saveLimit} response sudah tersimpan.`, 'done');
+          console.log(`✅ Save limit ${saveLimit} reached. Automation stopped.`);
+        }
+
+        updateUI();
+      } else {
+        console.log('Duplicate URL detected, skipping:', urlString);
+      }
+    }
+
+    return response;
+  };
+
+  async function clickNext() {
+    let nextButton = null;
+
+    nextButton = document.querySelector('button[data-qa-label*="next"]');
+
+    if (!nextButton) {
+      nextButton = Array.from(document.querySelectorAll('button')).find(btn =>
+        btn.textContent.trim().toLowerCase().includes('next')
+      );
+    }
+
+    if (!nextButton) {
+      nextButton = Array.from(document.querySelectorAll('button[aria-label]')).find(btn =>
+        btn.getAttribute('aria-label')?.toLowerCase().includes('next')
+      );
+    }
+
+    if (!nextButton) {
+      nextButton = document.querySelector('button[class*="next"]');
+    }
+
+    if (!nextButton) {
+      nextButton = document.querySelector('button[id*="next"]');
+    }
+
+    if (!nextButton) {
+      const allButtons = Array.from(document.querySelectorAll('button'));
+
+      const navigationButtons = allButtons.filter(btn => {
+        const text = btn.textContent.trim().toLowerCase();
+        const ariaLabel = btn.getAttribute('aria-label')?.toLowerCase() || '';
+
+        return (
+          text.includes('next') ||
+          ariaLabel.includes('next') ||
+          text === '>' ||
+          text === '→' ||
+          text === 'lanjut' ||
+          ariaLabel.includes('lanjut')
+        );
+      });
+
+      if (navigationButtons.length > 0) {
+        nextButton = navigationButtons[navigationButtons.length - 1];
+      }
+    }
+
+    if (!nextButton) {
+      const navContainer = document.querySelector(
+        '.navigation, .quiz-navigation, .buttons, .controls'
+      );
+
+      if (navContainer) {
+        const buttons = navContainer.querySelectorAll('button');
+
+        if (buttons.length > 1) {
+          nextButton = buttons[buttons.length - 1];
+        }
+      }
+    }
+
+    if (nextButton && !nextButton.disabled && nextButton.offsetParent !== null) {
+      console.log(
+        '🖱️ Next button clicked:',
+        nextButton.textContent.trim() || nextButton.getAttribute('aria-label')
+      );
+
+      nextButton.click();
+      return true;
+    }
+
+    console.log('❌ No valid next button found.');
+    return false;
+  }
+
+  async function startAutomation() {
+    if (automationRunning) {
+      console.log('⚠️ Automation already running.');
+      return;
+    }
+
+    const settings = getSettingsFromUI();
+
+    if (settings.mode === 'number' && !settings.amount) {
+      alert('Isi jumlah soal terlebih dahulu, misalnya 41.');
+      return;
+    }
+
+    if (settings.mode === 'number') {
+      saveLimit = settings.amount;
+      lastNumberLimit = settings.amount;
+
+      if (responsesToSave.size >= saveLimit) {
+        setStatus(`Target ${saveLimit} sudah tercapai. Tidak perlu klik Next.`, 'done');
+        console.log(`✅ Already have ${responsesToSave.size} responses. Limit is ${saveLimit}.`);
+        updateUI();
+        return;
+      }
+
+      setStatus(
+        `Berjalan sampai total tersimpan tepat ${saveLimit} response...`,
+        'running'
+      );
+
+      console.log(`▶️ Automation started: NUMBER mode. Total save limit ${saveLimit}.`);
+      console.log(`📌 Current captured: ${responsesToSave.size}`);
+      console.log(`📌 Remaining needed: ${saveLimit - responsesToSave.size}`);
+    } else {
+      saveLimit = null;
+      lastNumberLimit = null;
+
+      setStatus('Berjalan otomatis sampai tombol Next habis...', 'running');
+      console.log('▶️ Automation started: AUTO mode');
+    }
+
+    automationRunning = true;
+    automationStopped = false;
+
+    updateUI();
+
+    while (!automationStopped) {
+      if (isTargetReached()) {
+        automationStopped = true;
+        setStatus(`Selesai. Total ${saveLimit} response sudah tersimpan.`, 'done');
+        break;
+      }
+
+      await delay(800);
+
+      const beforeClickCount = responsesToSave.size;
+      const hasNext = await clickNext();
+
+      if (!hasNext) {
+        automationStopped = true;
+        setStatus('Selesai. Tombol Next tidak ditemukan / sudah habis.', 'done');
+        console.log('✅ Automation finished: no next button.');
+        break;
+      }
+
+      let waitCount = 0;
+
+      while (
+        responsesToSave.size <= beforeClickCount &&
+        waitCount < 24 &&
+        !automationStopped
+      ) {
+        if (isTargetReached()) break;
+
+        await delay(250);
+        waitCount++;
+      }
+
+      if (waitCount >= 24) {
+        console.log('⚠️ Timeout waiting for new response. Continuing...');
+      }
+    }
+
+    automationRunning = false;
+    updateUI();
+  }
+
+  function stopAutomation() {
+    automationStopped = true;
+    automationRunning = false;
+    setStatus('Dihentikan oleh user.', 'stopped');
+    console.log('🛑 Automation stopped by user.');
+    updateUI();
+  }
+
+  function downloadAllResponses() {
+    const responsesArray = getResponsesArrayForDownload();
+
+    if (responsesArray.length === 0) {
+      alert('Belum ada response yang tertangkap.');
+      return;
+    }
+
+    const contentOnly = responsesArray.filter(r => r.endpoint_type === 'content').length;
+    const contentStatus = responsesArray.filter(r => r.endpoint_type === 'content+status').length;
+
+    const dataStr =
+      'data:text/json;charset=utf-8,' +
+      encodeURIComponent(JSON.stringify(responsesArray, null, 2));
+
+    const downloadAnchorNode = document.createElement('a');
+    downloadAnchorNode.setAttribute('href', dataStr);
+    downloadAnchorNode.setAttribute('download', 'quiz_responses.json');
+
+    document.body.appendChild(downloadAnchorNode);
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
+
+    console.log('💾 All quiz responses downloaded!');
+    console.log('📊 Total downloaded responses:', responsesArray.length);
+    console.log(`📊 Summary: ${contentOnly} content-only, ${contentStatus} content+status`);
+
+    alert(
+      `Downloaded ${responsesArray.length} responses!\n` +
+      `${contentOnly} content-only\n` +
+      `${contentStatus} content+status`
+    );
+  }
+
+  function resetCapturedResponses() {
+    if (!confirm('Hapus semua response yang sudah tertangkap di memori script?')) {
+      return;
+    }
+
+    responsesToSave.clear();
+
+    saveLimit = null;
+    lastNumberLimit = null;
+
+    setStatus('Data response di-reset.', 'idle');
+    updateUI();
+
+    console.log('♻️ Captured responses cleared.');
+  }
+
+  function createControlPanel() {
+    const oldPanel = document.getElementById('quizCapturePanel');
+    if (oldPanel) oldPanel.remove();
+
+    const panel = document.createElement('div');
+    panel.id = 'quizCapturePanel';
+
+    panel.innerHTML = `
+      <div style="font-weight:700;font-size:15px;margin-bottom:8px;">
+        Quiz Capture
+      </div>
+
+      <div style="font-size:12px;margin-bottom:8px;">
+        Tersimpan: <b id="quizCaptureCount">0</b>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-bottom:8px;align-items:center;">
+        <label style="font-size:12px;cursor:pointer;">
+          <input
+            id="quizCaptureModeAuto"
+            type="radio"
+            name="quizCaptureMode"
+            value="auto"
+            checked
+          >
+          Otomatis
+        </label>
+
+        <label style="font-size:12px;cursor:pointer;">
+          <input
+            id="quizCaptureModeNumber"
+            type="radio"
+            name="quizCaptureMode"
+            value="number"
+          >
+          Jumlah
+        </label>
+      </div>
+
+      <input
+        id="quizCaptureAmount"
+        type="number"
+        min="1"
+        step="1"
+        placeholder="Otomatis sampai Next habis"
+        style="
+          width:100%;
+          box-sizing:border-box;
+          padding:7px;
+          border:1px solid #cbd5e1;
+          border-radius:6px;
+          margin-bottom:8px;
+          font-size:13px;
+          background:white;
+          color:#0f172a;
+        "
+        disabled
+      >
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px;">
+        <button id="quizCaptureStart" style="background:#16a34a;color:white;">Start</button>
+        <button id="quizCaptureStop" style="background:#dc2626;color:white;" disabled>Stop</button>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">
+        <button id="quizCaptureDownload" style="background:#2563eb;color:white;" disabled>Download (0)</button>
+        <button id="quizCaptureReset" style="background:#64748b;color:white;">Reset</button>
+      </div>
+
+      <div
+        id="quizCaptureStatus"
+        style="font-size:12px;color:#64748b;line-height:1.35;"
+      >
+        Siap. Pilih mode lalu klik Start.
+      </div>
+    `;
+
+    panel.style.position = 'fixed';
+    panel.style.bottom = '20px';
+    panel.style.right = '20px';
+    panel.style.zIndex = '999999';
+    panel.style.width = '240px';
+    panel.style.padding = '14px';
+    panel.style.background = 'white';
+    panel.style.color = '#0f172a';
+    panel.style.border = '1px solid #cbd5e1';
+    panel.style.borderRadius = '12px';
+    panel.style.boxShadow = '0 8px 24px rgba(0,0,0,0.25)';
+    panel.style.fontFamily = 'Arial, sans-serif';
+
+    document.body.appendChild(panel);
+
+    const panelButtons = panel.querySelectorAll('button');
+
+    panelButtons.forEach(btn => {
+      btn.style.border = 'none';
+      btn.style.borderRadius = '6px';
+      btn.style.padding = '8px';
+      btn.style.cursor = 'pointer';
+      btn.style.fontSize = '12px';
+      btn.style.fontWeight = '700';
+    });
+
+    const autoRadio = document.getElementById('quizCaptureModeAuto');
+    const numberRadio = document.getElementById('quizCaptureModeNumber');
+    const amountInput = document.getElementById('quizCaptureAmount');
+
+    document.getElementById('quizCaptureStart').onclick = startAutomation;
+    document.getElementById('quizCaptureStop').onclick = stopAutomation;
+    document.getElementById('quizCaptureDownload').onclick = downloadAllResponses;
+    document.getElementById('quizCaptureReset').onclick = resetCapturedResponses;
+
+    autoRadio.addEventListener('change', () => {
+      updateAmountInputState();
+      updateUI();
+    });
+
+    numberRadio.addEventListener('change', () => {
+      updateAmountInputState();
+      updateUI();
+    });
+
+    numberRadio.addEventListener('click', () => {
+      amountInput.disabled = false;
+      amountInput.focus();
+    });
+
+    autoRadio.addEventListener('click', () => {
+      amountInput.disabled = true;
+    });
+
+    amountInput.addEventListener('input', updateUI);
+
+    console.log('✅ Quiz Capture control panel created.');
+  }
+
+  createControlPanel();
+  updateAmountInputState();
+  updateUI();
+
+  window.quizCapture = {
+    start: startAutomation,
+    stop: stopAutomation,
+    download: downloadAllResponses,
+    reset: resetCapturedResponses,
+    show: () => getResponsesArrayForDownload(),
+    showRaw: () => Array.from(responsesToSave.values()),
+    count: () => getResponsesArrayForDownload().length,
+    rawCount: () => responsesToSave.size
+  };
+
+  console.log('🚀 Quiz Capture ready.');
+  console.log('🎯 Monitoring endpoints: ?details=content and ?details=content%2Cstatus');
+  console.log('💡 Global helper: window.quizCapture');
+})();
