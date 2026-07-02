@@ -1,6 +1,6 @@
 (() => {
   // ================================================================
-  // JSON -> HTML Converter (Becker per-category JSON) v2.5
+  // JSON -> HTML Converter (Becker per-category JSON) v3.0
   // - Tidak combine/split category
   // - Setiap file JSON menghasilkan:
   //   <nama-json> - Questions.html
@@ -173,37 +173,122 @@
         });
       }
 
-      // v2.5: perbaikan sangat terbatas untuk table Becker yang masih melebar.
-      // Target 1: table 1 cell yang berisi rumus/kalimat panjang dengan inline white-space:nowrap.
-      // Target 2: table bertingkat yang benar-benar memakai colspan dan teks panjang.
-      // Penting: jangan lagi menandai semua table multi-kolom biasa sebagai becker-wide-wrap-table,
-      // karena table-layout:fixed bisa membuat kolom accounting saling menumpuk.
+      // v3.1: perbaikan statis yang lebih mirip pendekatan Colab:
+      // Jangan mengecilkan font. Untuk table non-choice yang *kemungkinan* melebar karena
+      // inline white-space:nowrap dari JSON Becker, hilangkan nowrap hanya pada teks panjang.
+      // Angka, simbol, dan cell pendek tetap nowrap.
       if (!table.classList.contains('becker-options-table')) {
         const allCells = Array.from(table.querySelectorAll('td, th'));
-        const hasLongSingleCellFormula = maxColumnCount === 1 && allCells.some(cell => {
+
+        const visualColumnCount = rows.reduce((max, row) => {
+          const cells = Array.from(row.children).filter(el => /^(TD|TH)$/i.test(el.tagName));
+          const count = cells.reduce((sum, cell) => sum + Number(cell.getAttribute('colspan') || '1'), 0);
+          return Math.max(max, count);
+        }, maxColumnCount);
+
+        function isNumberLikeText(text) {
+          const t = String(text || '').replace(/\s+/g, ' ').trim();
+          if (!t) return true;
+          if (/^[=×+\-–—]$/.test(t)) return true;
+          if (/^\(?\s*[$S]?\s*[\d,]+(?:\.\d+)?\s*\)?\s*%?\s*$/.test(t)) return true;
+          if (/^\(?\s*[\d,]+(?:\.\d+)?\s*\)?\s*(units?|types?|orders?)?$/i.test(t)) return true;
+          return false;
+        }
+
+        function hasInlineNowrap(cell) {
+          return /white-space\s*:\s*nowrap/i.test(cell.getAttribute('style') || '');
+        }
+
+        function isTextLikeLongCell(cell) {
           const text = (cell.textContent || '').replace(/\s+/g, ' ').trim();
-          const style = (cell.getAttribute('style') || '').toLowerCase();
-          return text.length > 95 && /white-space\s*:\s*nowrap/.test(style);
+          if (!text || isNumberLikeText(text)) return false;
+          const wordCount = text.split(/\s+/).length;
+          const isHeader = /^TH$/i.test(cell.tagName);
+          const colspan = Number(cell.getAttribute('colspan') || '1');
+
+          // v3.1: aturan utama untuk sumber masalah Becker:
+          // Jika non-choice table punya inline white-space:nowrap pada teks/header panjang,
+          // hapus nowrap langsung. Ini meniru hasil Colab yang lebih membiarkan table wrap,
+          // namun tetap menjaga angka/simbol/cell pendek agar tidak pecah.
+          if (!hasInlineNowrap(cell)) return false;
+          if (isHeader && (text.length > 18 || wordCount >= 3)) return true;
+          if (visualColumnCount === 1 && text.length > 35) return true;
+          if (visualColumnCount === 2 && text.length > 35) return true;
+          if (visualColumnCount >= 3 && (text.length > 28 || wordCount >= 4 || colspan > 1)) return true;
+          return false;
+        }
+
+        let staticLongNowrapFixed = false;
+        allCells.forEach(cell => {
+          if (isTextLikeLongCell(cell)) {
+            cell.classList.add('becker-wide-wrap-cell');
+            stripWhiteSpaceNowrap(cell);
+            staticLongNowrapFixed = true;
+          }
+        });
+        if (staticLongNowrapFixed) {
+          table.classList.add('becker-wide-wrap-table', 'becker-static-nowrap-fixed-table');
+          if (visualColumnCount === 2) table.classList.add('becker-statement-wrap-table');
+          if (visualColumnCount >= 5) table.classList.add('becker-wide-header-wrap-table');
+        }
+
+        const hasLongSingleCellFormula = visualColumnCount === 1 && allCells.some(cell => {
+          const text = (cell.textContent || '').replace(/\s+/g, ' ').trim();
+          return text.length > 95 && hasInlineNowrap(cell);
         });
 
-        const hasLongColspanLayout = maxColumnCount >= 4 && allCells.some(cell => {
+        const hasLongColspanLayout = visualColumnCount >= 4 && allCells.some(cell => {
           const text = (cell.textContent || '').replace(/\s+/g, ' ').trim();
           const colspan = Number(cell.getAttribute('colspan') || '1');
-          const looksLikeAmount = /^\(?\s*\$?\s*[\d,.]+\s*\)?\s*%?\s*$/.test(text);
-          // v2.5: hanya table yang memang punya colspan. Table accounting multi-kolom normal
-          // biarkan tetap natural lalu ditangani auto-shrink jika benar-benar overflow.
-          return !looksLikeAmount && text.length > 48 && colspan > 1;
+          return !isNumberLikeText(text) && text.length > 48 && colspan > 1;
         });
 
-        if (hasLongSingleCellFormula || hasLongColspanLayout) {
+        // Table 2 kolom berisi statement I/II/III: kolom statement biasanya panjang dan nowrap.
+        const hasLongTwoColumnStatement = visualColumnCount === 2 && rows.some(row => {
+          const cells = Array.from(row.children).filter(el => /^(TD|TH)$/i.test(el.tagName));
+          if (cells.length < 2) return false;
+          const left = (cells[0].textContent || '').replace(/\s+/g, ' ').trim();
+          const right = (cells[1].textContent || '').replace(/\s+/g, ' ').trim();
+          return /^(I|II|III|IV|V|VI|VII|VIII|IX|X)\.?$/i.test(left) && right.length > 80 && hasInlineNowrap(cells[1]);
+        });
+
+        // Table lebar dengan banyak kolom dan header panjang seperti Workers / MRC / MRP.
+        // Header panjang boleh wrap; angka dan data pendek tetap nowrap.
+        const hasWideHeaderTable = visualColumnCount >= 5 && Array.from(table.querySelectorAll('th')).some(th => {
+          const text = (th.textContent || '').replace(/\s+/g, ' ').trim();
+          return text.length > 22 && hasInlineNowrap(th);
+        });
+
+        const shouldWrapWide = hasLongSingleCellFormula || hasLongColspanLayout || hasLongTwoColumnStatement || hasWideHeaderTable;
+
+        if (shouldWrapWide) {
           table.classList.add('becker-wide-wrap-table');
-          allCells.forEach(cell => {
-            const text = (cell.textContent || '').replace(/\s+/g, ' ').trim();
-            const looksLikeAmount = /^\(?\s*\$?\s*[\d,.]+\s*\)?\s*%?\s*$/.test(text);
-            if (!looksLikeAmount && text.length > 35) {
-              cell.classList.add('becker-wide-wrap-cell');
-              stripWhiteSpaceNowrap(cell);
-            }
+          if (hasLongTwoColumnStatement) table.classList.add('becker-statement-wrap-table');
+          if (hasWideHeaderTable) table.classList.add('becker-wide-header-wrap-table');
+
+          rows.forEach(row => {
+            const cells = Array.from(row.children).filter(el => /^(TD|TH)$/i.test(el.tagName));
+            cells.forEach((cell, idx) => {
+              const text = (cell.textContent || '').replace(/\s+/g, ' ').trim();
+              const wordCount = text ? text.split(/\s+/).length : 0;
+              const isHeader = /^TH$/i.test(cell.tagName);
+              const numberLike = isNumberLikeText(text);
+              const colspan = Number(cell.getAttribute('colspan') || '1');
+
+              let shouldWrapCell = false;
+              if (hasLongSingleCellFormula && text.length > 35 && !numberLike) shouldWrapCell = true;
+              if (hasLongColspanLayout && !numberLike && (text.length > 35 || colspan > 1)) shouldWrapCell = true;
+              if (hasLongTwoColumnStatement && idx >= 1 && !numberLike && text.length > 45) shouldWrapCell = true;
+              if (hasWideHeaderTable && isHeader && !numberLike && (text.length > 18 || wordCount >= 3)) shouldWrapCell = true;
+
+              // Data cell panjang pada table banyak kolom juga boleh wrap, tapi jangan sentuh angka/simbol.
+              if (hasWideHeaderTable && !isHeader && !numberLike && (text.length > 28 || wordCount >= 4)) shouldWrapCell = true;
+
+              if (shouldWrapCell) {
+                cell.classList.add('becker-wide-wrap-cell');
+                stripWhiteSpaceNowrap(cell);
+              }
+            });
           });
         }
       }
@@ -321,10 +406,15 @@
   `;
 
   panel.innerHTML = `
-    <div style="font-weight:700; font-size:15px; margin-bottom:8px;">Becker JSON → HTML v2.6</div>
+    <div style="font-weight:700; font-size:15px; margin-bottom:8px;">Becker JSON → HTML v3.0</div>
     <div style="font-size:13px; margin-bottom:8px;">Upload file JSON per kategori. Nama HTML otomatis mengikuti nama JSON.</div>
 
     <input id="fileInput" type="file" accept=".json,.txt,application/json" multiple style="width:100%; margin-bottom:10px;">
+
+    <div style="margin-bottom:6px;">HTML output:</div>
+    <label style="display:block;"><input type="radio" name="htmlout" value="questions"> Questions HTML only</label>
+    <label style="display:block;"><input type="radio" name="htmlout" value="answers"> Answers HTML only</label>
+    <label style="display:block; margin-bottom:8px;"><input type="radio" name="htmlout" value="both" checked> Both HTML</label>
 
     <div style="margin-bottom:6px;">Page-break mode:</div>
     <label style="display:block;"><input type="radio" name="pb" value="normal"> HTML Normal</label>
@@ -336,11 +426,12 @@
       <option value="letter" selected>Letter</option>
       <option value="a4">A4</option>
       <option value="browser">Browser default</option>
+      <option value="full">Full HTML / full screen</option>
     </select>
 
     <label style="display:block; margin-bottom:8px;"><input id="autoDl" type="checkbox"> Auto Download</label>
     <label style="display:block; margin-bottom:8px;"><input id="openTabChk" type="checkbox" checked> Open HTML in new tabs</label>
-    <label style="display:block; margin-bottom:8px;"><input id="shrinkTablesChk" type="checkbox" checked> Auto shrink overflow tables</label>
+    <label style="display:block; margin-bottom:8px;"><input id="shrinkTablesChk" type="checkbox" checked> Auto wrap wide tables (no font shrink)</label>
     <label style="display:block; margin-bottom:8px;"><input id="pdfChk" type="checkbox"> Auto Print PDF (Answer)</label>
     <label style="display:block; margin-bottom:10px; color:#fbbf24;"><input id="removeImgChk" type="checkbox"> Remove Question with Image</label>
 
@@ -372,14 +463,16 @@
     if (mode === 'each') extra = `.q-block{page-break-before:always; break-before:page;} .q-block:first-child{page-break-before:avoid; break-before:auto;}`;
 
     const normalizedPaper = String(paperSize || 'letter').toLowerCase();
-    const pageRule = normalizedPaper === 'browser'
+    const pageRule = (normalizedPaper === 'browser' || normalizedPaper === 'full')
       ? '@page{ margin:0.5in; }'
       : `@page{ size:${normalizedPaper === 'a4' ? 'A4' : 'Letter'} portrait; margin:0.5in; }`;
     const pageContentWidth = normalizedPaper === 'a4'
       ? '7.267in'
       : normalizedPaper === 'browser'
         ? '100%'
-        : '7.5in';
+        : normalizedPaper === 'full'
+          ? 'none'
+          : '7.5in';
 
     return `
       ${pageRule}
@@ -546,17 +639,29 @@
         overflow-wrap:break-word;
       }
 
-      /* v2.1: hanya untuk table yang ditandai sanitizer karena punya rumus/cell panjang yang melebar.
-         Tidak memengaruhi table Becker normal dan tidak mengubah table pilihan optionsHeader. */
+      /* v3.1: table yang ditandai sanitizer hanya diizinkan wrap pada cell panjang.
+         Tidak memakai table-layout:fixed agar table accounting tidak saling menumpuk. */
       .er-question .repQuestion table.becker-wide-wrap-table{
-        width:100% !important;
         max-width:100% !important;
-        table-layout:fixed !important;
         box-sizing:border-box;
       }
       .er-question .repQuestion table.becker-wide-wrap-table td,
       .er-question .repQuestion table.becker-wide-wrap-table th{
         box-sizing:border-box;
+      }
+      .er-question .repQuestion table.becker-statement-wrap-table,
+      .er-question .repQuestion table.becker-wide-header-wrap-table{
+        width:100% !important;
+        max-width:100% !important;
+      }
+      .er-question .repQuestion table.becker-wide-header-wrap-table th.becker-wide-wrap-cell{
+        max-width:150px;
+        min-width:70px;
+        line-height:1.2;
+      }
+      .er-question .repQuestion table.becker-statement-wrap-table td.becker-wide-wrap-cell,
+      .er-question .repQuestion table.becker-statement-wrap-table td.becker-wide-wrap-cell p{
+        width:auto;
         max-width:100%;
       }
       .er-question .repQuestion table.becker-wide-wrap-table td.becker-wide-wrap-cell,
@@ -564,7 +669,7 @@
       .er-question .repQuestion table.becker-wide-wrap-table td.becker-wide-wrap-cell p,
       .er-question .repQuestion table.becker-wide-wrap-table th.becker-wide-wrap-cell p{
         white-space:normal !important;
-        overflow-wrap:anywhere;
+        overflow-wrap:break-word;
         word-break:normal;
       }
 
@@ -841,6 +946,50 @@
     if (!enabled) return '';
     return `<script>
 (function () {
+  var STYLE_ID = 'becker-runtime-overflow-wrap-style-v31';
+  var PREP_CLASS = 'becker-overflow-wrap-prep';
+
+  function ensureRuntimeStyle() {
+    if (document.getElementById(STYLE_ID)) return;
+    var style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = [
+      'body.' + PREP_CLASS + ' .er-question .repQuestion table.becker-runtime-wrap-overflow{',
+      '  max-width:100% !important;',
+      '  table-layout:auto !important;',
+      '}',
+      'body.' + PREP_CLASS + ' .er-question .repQuestion table.becker-runtime-wrap-overflow th,',
+      'body.' + PREP_CLASS + ' .er-question .repQuestion table.becker-runtime-wrap-overflow td,',
+      'body.' + PREP_CLASS + ' .er-question .repQuestion table.becker-runtime-wrap-overflow th p,',
+      'body.' + PREP_CLASS + ' .er-question .repQuestion table.becker-runtime-wrap-overflow td p,',
+      'body.' + PREP_CLASS + ' .er-question .repQuestion table.becker-runtime-wrap-overflow th.becker-runtime-wrap-cell,',
+      'body.' + PREP_CLASS + ' .er-question .repQuestion table.becker-runtime-wrap-overflow td.becker-runtime-wrap-cell,',
+      'body.' + PREP_CLASS + ' .er-question .repQuestion table.becker-runtime-wrap-overflow th.becker-runtime-wrap-cell p,',
+      'body.' + PREP_CLASS + ' .er-question .repQuestion table.becker-runtime-wrap-overflow td.becker-runtime-wrap-cell p{',
+      '  white-space:normal !important;',
+      '  overflow-wrap:break-word !important;',
+      '  word-break:normal !important;',
+      '}',
+      'body.' + PREP_CLASS + ' .er-question .repQuestion table.becker-runtime-wrap-overflow th.becker-runtime-wrap-cell{',
+      '  min-width:0 !important;',
+      '}',
+      'body.' + PREP_CLASS + ' .er-question .repQuestion table.becker-runtime-wrap-overflow td.becker-runtime-wrap-cell{',
+      '  min-width:0 !important;',
+      '}',
+      'body.' + PREP_CLASS + ' .er-question .repQuestion table.becker-runtime-wrap-overflow th.becker-runtime-nowrap-cell,',
+      'body.' + PREP_CLASS + ' .er-question .repQuestion table.becker-runtime-wrap-overflow td.becker-runtime-nowrap-cell{',
+      '  white-space:nowrap !important;',
+      '}',
+      '@media print {',
+      '  body.' + PREP_CLASS + ' .er-question .repQuestion table.becker-runtime-wrap-overflow{',
+      '    max-width:100% !important;',
+      '    table-layout:auto !important;',
+      '  }',
+      '}'
+    ].join('\n');
+    document.head.appendChild(style);
+  }
+
   function isExcludedTable(table) {
     return table.closest('table.becker-options-table') ||
       table.classList.contains('becker-options-table') ||
@@ -849,21 +998,14 @@
       table.closest('.becker-options-table');
   }
 
-  function unwrapExisting() {
-    document.querySelectorAll('.overflow-table-shrink-wrap').forEach(function (wrapper) {
-      var table = wrapper.querySelector(':scope > table');
-      if (!table) return;
-      table.style.transform = '';
-      table.style.transformOrigin = '';
-      table.style.display = '';
-      table.style.width = table.getAttribute('data-original-width') || '';
-      table.style.maxWidth = table.getAttribute('data-original-max-width') || '';
-      table.removeAttribute('data-auto-shrunk');
-      table.removeAttribute('data-original-width');
-      table.removeAttribute('data-original-max-width');
-      wrapper.parentNode.insertBefore(table, wrapper);
-      wrapper.remove();
+  function clearRuntimeWrapClasses() {
+    document.querySelectorAll('.er-question .repQuestion table.becker-runtime-wrap-overflow').forEach(function (table) {
+      table.classList.remove('becker-runtime-wrap-overflow', 'becker-runtime-force-all-wrap');
+      table.querySelectorAll('.becker-runtime-wrap-cell, .becker-runtime-nowrap-cell').forEach(function (cell) {
+        cell.classList.remove('becker-runtime-wrap-cell', 'becker-runtime-nowrap-cell');
+      });
     });
+    document.body.classList.remove(PREP_CLASS);
   }
 
   function cssLengthToPx(value, base) {
@@ -887,8 +1029,6 @@
     var pStyle = window.getComputedStyle(pageBox);
     var maxFromCss = cssLengthToPx(pStyle.maxWidth, pRect.width || 0);
 
-    // v2.5: bandingkan juga dengan lebar kertas yang dipilih di CSS.
-    // Ini penting untuk print Letter/A4 karena viewport browser bisa lebih lebar daripada area print.
     var viewportWidth = Math.max(320, document.documentElement.clientWidth || window.innerWidth || 0);
     var rightPadding = 24;
     var availableByViewport = viewportWidth - Math.max(0, rect.left) - rightPadding;
@@ -907,61 +1047,85 @@
     return Math.max(table.scrollWidth || 0, table.offsetWidth || 0, rect.width || 0);
   }
 
-  function autoShrinkOverflowTables() {
-    unwrapExisting();
+  function isOverflowing(table) {
+    var availableWidth = availableWidthForTable(table);
+    if (!availableWidth || availableWidth < 120) return false;
+    var tableWidth = measuredTableWidth(table);
+    var rect = table.getBoundingClientRect();
+    var viewportWidth = document.documentElement.clientWidth || window.innerWidth || 0;
+    var crossesRightEdge = rect.right > (viewportWidth - 8);
+    return tableWidth > availableWidth + 2 || crossesRightEdge;
+  }
 
-    var tables = Array.prototype.slice.call(document.querySelectorAll('.er-question .repQuestion table'));
-    tables.forEach(function (table) {
-      if (isExcludedTable(table)) return;
+  function textOf(cell) {
+    return (cell.textContent || '').replace(/\s+/g, ' ').trim();
+  }
 
-      var availableWidth = availableWidthForTable(table);
-      if (!availableWidth || availableWidth < 120) return;
+  function isNumericOrSymbolCell(cell) {
+    var t = textOf(cell);
+    if (!t) return true;
+    if (/^[=×+\-–—]$/.test(t)) return true;
+    if (/^\(?\s*[$S]?\s*[\d,]+(?:\.\d+)?\s*\)?\s*%?\s*$/.test(t)) return true;
+    if (/^\(?\s*[\d,]+(?:\.\d+)?\s*\)?\s*(units?|types?|orders?)?$/i.test(t)) return true;
+    if (/^[$S]?\s*[\d,]+(?:\.\d+)?\s+(direct\s+labor|units?|types?|orders?)$/i.test(t)) return false;
+    return false;
+  }
 
-      var tableWidth = measuredTableWidth(table);
-      var rect = table.getBoundingClientRect();
-      var viewportWidth = document.documentElement.clientWidth || window.innerWidth || 0;
-      var actuallyCrossesRightEdge = rect.right > (viewportWidth - 8);
+  function markCellsForWrap(table, aggressive) {
+    table.classList.add('becker-runtime-wrap-overflow');
+    Array.prototype.slice.call(table.querySelectorAll('td, th')).forEach(function (cell) {
+      cell.classList.remove('becker-runtime-wrap-cell', 'becker-runtime-nowrap-cell');
+      var t = textOf(cell);
+      var wordCount = t ? t.split(/\s+/).length : 0;
+      var isHeader = /^TH$/i.test(cell.tagName);
+      var numeric = isNumericOrSymbolCell(cell);
 
-      if (tableWidth <= availableWidth + 2 && !actuallyCrossesRightEdge) return;
-
-      var scale = availableWidth / tableWidth;
-      if (!isFinite(scale) || scale >= 1) return;
-
-      // Jangan terlalu kecil; kalau table sangat ekstrem, biarkan shrink secukupnya
-      // dan sisanya tetap bisa dilihat via horizontal scroll wrapper.
-      scale = Math.max(0.60, scale);
-
-      var originalHeight = table.offsetHeight || table.getBoundingClientRect().height;
-      var originalInlineWidth = table.style.width || '';
-      var originalInlineMaxWidth = table.style.maxWidth || '';
-
-      var wrapper = document.createElement('div');
-      wrapper.className = 'overflow-table-shrink-wrap';
-      wrapper.setAttribute('data-scale', String(scale));
-
-      table.parentNode.insertBefore(wrapper, table);
-      wrapper.appendChild(table);
-
-      table.setAttribute('data-original-width', originalInlineWidth);
-      table.setAttribute('data-original-max-width', originalInlineMaxWidth);
-      table.style.transformOrigin = 'top left';
-      table.style.transform = 'scale(' + scale + ')';
-      table.style.display = 'block';
-      table.style.width = tableWidth + 'px';
-      table.style.maxWidth = 'none';
-      table.setAttribute('data-auto-shrunk', 'true');
-
-      wrapper.style.height = Math.ceil(originalHeight * scale) + 'px';
+      // Hanya table yang sudah terbukti overflow yang masuk ke fungsi ini.
+      // Header panjang dan teks panjang boleh turun baris; angka/simbol pendek tetap satu baris.
+      if (!numeric && (aggressive || isHeader || t.length > 16 || wordCount >= 3)) {
+        cell.classList.add('becker-runtime-wrap-cell');
+      } else if (numeric) {
+        cell.classList.add('becker-runtime-nowrap-cell');
+      } else {
+        cell.classList.add('becker-runtime-wrap-cell');
+      }
     });
   }
 
-  // v2.6: jangan shrink permanen saat HTML dibuka, karena itu bisa membuat print preview
-  // mengecilkan table sebelum benar-benar perlu. Shrink hanya dilakukan saat print.
-  window.addEventListener('beforeprint', function () { setTimeout(autoShrinkOverflowTables, 0); });
-  window.addEventListener('afterprint', unwrapExisting);
+  function prepareOverflowTables() {
+    ensureRuntimeStyle();
+    clearRuntimeWrapClasses();
+    document.body.classList.add(PREP_CLASS);
+
+    var tables = Array.prototype.slice.call(document.querySelectorAll('.er-question .repQuestion table'));
+
+    tables.forEach(function (table) {
+      if (isExcludedTable(table)) return;
+      if (!isOverflowing(table)) return;
+      markCellsForWrap(table, false);
+    });
+
+    // Recheck synchronously after classes are applied. If still overflow, allow all non-numeric text cells to wrap.
+    tables.forEach(function (table) {
+      if (isExcludedTable(table)) return;
+      if (!table.classList.contains('becker-runtime-wrap-overflow')) return;
+      if (isOverflowing(table)) markCellsForWrap(table, true);
+    });
+  }
+
+  function schedulePrepare() {
+    window.requestAnimationFrame(function () {
+      prepareOverflowTables();
+    });
+  }
+
+  window.addEventListener('load', schedulePrepare);
+  window.addEventListener('resize', schedulePrepare);
+  window.addEventListener('beforeprint', prepareOverflowTables);
 })();
 </script>`;
   }
+
 
   function wrapFullHtml(title, css, body, enableAutoShrink) {
     return `<!doctype html>
@@ -995,7 +1159,7 @@
 </html>`;
   }
 
-  async function processOneFile(file, mode, wantPdf, autoDownload, openTabs, removeImg, enableAutoShrink) {
+  async function processOneFile(file, mode, paperSize, outputMode, wantPdf, autoDownload, openTabs, removeImg, enableAutoShrink) {
     const txt = await file.text();
     const parsed = parseJsonContent(txt);
     const questions = normalizeQuestions(parsed);
@@ -1016,25 +1180,39 @@
       return { file: file.name, count: 0, imageReports, skipped: true };
     }
 
-    const css = cssFor(mode);
-    const convQ = await convertImagesToBase64(qBody);
-    const convA = await convertImagesToBase64(aBody);
+    const css = cssFor(mode, paperSize);
+    const makeQuestions = outputMode === 'questions' || outputMode === 'both';
+    const makeAnswers = outputMode === 'answers' || outputMode === 'both';
 
-    const htmlQ = wrapFullHtml(`${baseName} - Questions`, css, convQ.html, enableAutoShrink);
-    const htmlA = wrapFullHtml(`${baseName} - Answer`, css, convA.html, enableAutoShrink);
+    let convQ = { html: '', failed: [] };
+    let convA = { html: '', failed: [] };
+    let htmlQ = '';
+    let htmlA = '';
+
+    if (makeQuestions) {
+      convQ = await convertImagesToBase64(qBody);
+      htmlQ = wrapFullHtml(`${baseName} - Questions`, css, convQ.html, enableAutoShrink);
+    }
+    if (makeAnswers) {
+      convA = await convertImagesToBase64(aBody);
+      htmlA = wrapFullHtml(`${baseName} - Answer`, css, convA.html, enableAutoShrink);
+    }
 
     const qFileName = `${baseName} - Questions.html`;
     const aFileName = `${baseName} - Answer.html`;
 
     let winA = null;
     if (openTabs || wantPdf) {
-      window.open(URL.createObjectURL(new Blob([htmlQ], { type: 'text/html' })), '_blank');
-      winA = window.open(URL.createObjectURL(new Blob([htmlA], { type: 'text/html' })), '_blank');
+      if (makeQuestions) window.open(URL.createObjectURL(new Blob([htmlQ], { type: 'text/html' })), '_blank');
+      if (makeAnswers || wantPdf) {
+        const answerHtmlForPrint = makeAnswers ? htmlA : wrapFullHtml(`${baseName} - Answer`, css, (await convertImagesToBase64(aBody)).html, enableAutoShrink);
+        winA = window.open(URL.createObjectURL(new Blob([answerHtmlForPrint], { type: 'text/html' })), '_blank');
+      }
     }
 
     if (autoDownload) {
-      downloadBlob(new Blob([htmlQ], { type: 'text/html' }), qFileName);
-      downloadBlob(new Blob([htmlA], { type: 'text/html' }), aFileName);
+      if (makeQuestions) downloadBlob(new Blob([htmlQ], { type: 'text/html' }), qFileName);
+      if (makeAnswers) downloadBlob(new Blob([htmlA], { type: 'text/html' }), aFileName);
     }
 
     if (wantPdf && winA) setTimeout(() => winA.print(), 1000);
@@ -1053,6 +1231,8 @@
     if (!files.length) return alert('Upload file JSON terlebih dahulu.');
 
     const mode = panel.querySelector("input[name='pb']:checked").value;
+    const paperSize = paperSizeSel.value || 'letter';
+    const outputMode = panel.querySelector("input[name='htmlout']:checked").value || 'both';
     const wantPdf = !!panel.querySelector('#pdfChk').checked;
     const autoDownload = !!autoDlChk.checked;
     const openTabs = !!openTabChk.checked;
@@ -1070,7 +1250,7 @@
       const file = files[i];
       setStatus(`Memproses ${i + 1}/${files.length}: ${file.name}`);
       try {
-        const result = await processOneFile(file, mode, wantPdf, autoDownload, openTabs, removeImg, enableAutoShrink);
+        const result = await processOneFile(file, mode, paperSize, outputMode, wantPdf, autoDownload, openTabs, removeImg, enableAutoShrink);
         totalQuestions += result.count || 0;
         if (result.skipped) skippedFiles++;
         if (result.imageReports && result.imageReports.length) {
