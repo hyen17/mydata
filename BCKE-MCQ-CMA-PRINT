@@ -1,0 +1,1108 @@
+(() => {
+  // ================================================================
+  // JSON -> HTML Converter (Becker per-category JSON) v2.5
+  // - Tidak combine/split category
+  // - Setiap file JSON menghasilkan:
+  //   <nama-json> - Questions.html
+  //   <nama-json> - Answer.html
+  // - CSS utama dari Becker CDN
+  // ================================================================
+
+  const BECKER_CSS_URL = 'https://cdn-cpa.becker.com/public/frontend/_assets/assets/question-D1jw6Y6r-v3.css';
+  const letters = (n) => String.fromCharCode(64 + n); // 1 -> A
+
+  // ---------- Sanitizers ----------
+  function replaceChoiceNumberTokens(html) {
+    if (!html) return html;
+    return String(html).replace(/#([1-9]|1[0-9]|2[0-6])#/g, (_, n) => letters(Number(n)));
+  }
+
+  function removeSrOnly(html) {
+    if (!html) return html;
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    div.querySelectorAll('.sr-only').forEach(el => el.remove());
+    return div.innerHTML;
+  }
+
+  function fixWileyMathSVG(html) {
+    if (!html) return html;
+    if (!html.includes('data-svg')) return html;
+
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    div.querySelectorAll('span[data-svg]').forEach(span => {
+      const svgContent = span.getAttribute('data-svg');
+      if (!svgContent) return;
+      const spanWrapper = document.createElement('span');
+      spanWrapper.className = 'mjx-svg-fix';
+      spanWrapper.style.display = 'inline-block';
+      spanWrapper.style.verticalAlign = 'middle';
+      spanWrapper.innerHTML = svgContent;
+      span.replaceWith(spanWrapper);
+    });
+    return div.innerHTML;
+  }
+
+  function removeChoicePercentSpans(html) {
+    if (!html) return html;
+    return String(html)
+      .replace(/<span[^>]*class=["']?choice-percent["']?[^>]*>[\s\S]*?<\/span>/gi, '')
+      .replace(/\(\s*\d{1,3}%\s*\)/g, '');
+  }
+
+  function cleanMathTags(html) {
+    if (!html) return html;
+    let h = String(html);
+    h = h.replace(/<\/?\w+:displayeditem[^>]*>/gi, '');
+    h = h.replace(/xmlns(:\w+)?="[^"]*"/gi, '');
+    return h;
+  }
+
+  function removeVideoAndEmptyP(html) {
+    if (!html) return html;
+    let h = String(html);
+    h = h.replace(/<a\b[^>]*>\s*Video\s*<\/a>/gi, '');
+    h = h.replace(/<p\b[^>]*>[\s\S]*?<\/p>/gi, (m) => {
+      if (/<img\b/i.test(m)) return m;
+      if (/<svg|data-svg/i.test(m)) return m;
+      if (/^<p[^>]*>\s*(?:&nbsp;|\s|<br\s*\/?>)*<\/p>$/i.test(m)) return '';
+      return m;
+    });
+    h = h.replace(/>\s+</g, '><');
+    return h;
+  }
+
+  function removeEssayPrompt(html) {
+    if (!html) return html;
+    return String(html).replace(/type\s+your\s+response\s+here\b[.\s:]*/gi, '');
+  }
+
+  function removeInternalLinks(html) {
+    if (!html) return html;
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    div.querySelectorAll('a[href]').forEach(a => {
+      const href = (a.getAttribute('href') || '').trim();
+      const isExternal = /^(https?:)?\/\//i.test(href) || /^mailto:/i.test(href) || /^tel:/i.test(href) || /^#/i.test(href);
+      const isInternal = /^\d+$/.test(href) || href === '' || (!isExternal && !/[./:?#]/.test(href));
+      if (isInternal) a.replaceWith(document.createTextNode(a.textContent || ''));
+    });
+    return div.innerHTML;
+  }
+
+  function applySmartTableClasses(html) {
+    if (!html) return html;
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    div.querySelectorAll('table').forEach(table => {
+      const classAttr = table.getAttribute('class') || '';
+      const borderAttr = (table.getAttribute('border') || '').trim();
+      const styleAttr = (table.getAttribute('style') || '').toLowerCase();
+
+      if (!/table-default-style|table-custom-style|table-CFA-default-style|gr-table-default-style/.test(classAttr)) {
+        table.classList.add('table-default-style');
+      }
+
+      const noBorder = borderAttr === '0' || /\bborder_outer_none\b|\bborder_no\b|\bborder-no\b/.test(classAttr) || /border\s*:\s*none/.test(styleAttr);
+      if (noBorder) table.classList.add('table-No-Border');
+    });
+    return div.innerHTML;
+  }
+
+
+
+  function fixLongTableCells(html) {
+    if (!html) return html;
+    const div = document.createElement('div');
+    div.innerHTML = html;
+
+    function stripWhiteSpaceNowrap(cell) {
+      const style = cell.getAttribute('style') || '';
+      const cleaned = style
+        .replace(/(?:^|;)\s*white-space\s*:\s*nowrap\s*;?/ig, ';')
+        .replace(/;{2,}/g, ';')
+        .replace(/^\s*;|;\s*$/g, '')
+        .trim();
+
+      if (cleaned) cell.setAttribute('style', cleaned);
+      else cell.removeAttribute('style');
+    }
+
+    div.querySelectorAll('table').forEach(table => {
+      let hasNarrativeNote = false;
+      let maxColumnCount = 0;
+
+      const rows = Array.from(table.querySelectorAll('tr'));
+      rows.forEach(row => {
+        const cells = Array.from(row.children).filter(el => /^(TD|TH)$/i.test(el.tagName));
+        maxColumnCount = Math.max(maxColumnCount, cells.length);
+
+        cells.forEach((cell, idx) => {
+          const text = (cell.textContent || '').replace(/\s+/g, ' ').trim();
+          if (!text) return;
+
+          const looksLikeAmount = /^\(?\s*\$?\s*[\d,]+(?:\.\d+)?\s*\)?\s*%?\s*$/.test(text);
+          const wordCount = text.split(/\s+/).length;
+
+          // Target utama: kolom catatan/narasi panjang di table perhitungan 3 kolom.
+          // Jangan mengubah table biasa 2 kolom yang sudah wrap normal.
+          if (idx >= 2 && !looksLikeAmount && (text.length > 85 || wordCount >= 10)) {
+            hasNarrativeNote = true;
+            cell.classList.add('becker-wrap-cell', 'becker-note-cell');
+            stripWhiteSpaceNowrap(cell);
+          }
+        });
+      });
+
+      if (hasNarrativeNote && maxColumnCount >= 3) {
+        table.classList.add('becker-has-wrap-cell', 'becker-long-note-table');
+
+        // Di table semacam ini, label kolom pertama yang cukup panjang juga boleh wrap.
+        // Kolom nominal tetap dibiarkan nowrap agar angka tidak pecah.
+        rows.forEach(row => {
+          const cells = Array.from(row.children).filter(el => /^(TD|TH)$/i.test(el.tagName));
+          cells.forEach((cell, idx) => {
+            const text = (cell.textContent || '').replace(/\s+/g, ' ').trim();
+            if (!text) return;
+            if (idx === 0 && text.length > 30) {
+              cell.classList.add('becker-wrap-cell', 'becker-label-cell');
+              stripWhiteSpaceNowrap(cell);
+            }
+          });
+        });
+      }
+
+      // v2.5: perbaikan sangat terbatas untuk table Becker yang masih melebar.
+      // Target 1: table 1 cell yang berisi rumus/kalimat panjang dengan inline white-space:nowrap.
+      // Target 2: table bertingkat yang benar-benar memakai colspan dan teks panjang.
+      // Penting: jangan lagi menandai semua table multi-kolom biasa sebagai becker-wide-wrap-table,
+      // karena table-layout:fixed bisa membuat kolom accounting saling menumpuk.
+      if (!table.classList.contains('becker-options-table')) {
+        const allCells = Array.from(table.querySelectorAll('td, th'));
+        const hasLongSingleCellFormula = maxColumnCount === 1 && allCells.some(cell => {
+          const text = (cell.textContent || '').replace(/\s+/g, ' ').trim();
+          const style = (cell.getAttribute('style') || '').toLowerCase();
+          return text.length > 95 && /white-space\s*:\s*nowrap/.test(style);
+        });
+
+        const hasLongColspanLayout = maxColumnCount >= 4 && allCells.some(cell => {
+          const text = (cell.textContent || '').replace(/\s+/g, ' ').trim();
+          const colspan = Number(cell.getAttribute('colspan') || '1');
+          const looksLikeAmount = /^\(?\s*\$?\s*[\d,.]+\s*\)?\s*%?\s*$/.test(text);
+          // v2.5: hanya table yang memang punya colspan. Table accounting multi-kolom normal
+          // biarkan tetap natural lalu ditangani auto-shrink jika benar-benar overflow.
+          return !looksLikeAmount && text.length > 48 && colspan > 1;
+        });
+
+        if (hasLongSingleCellFormula || hasLongColspanLayout) {
+          table.classList.add('becker-wide-wrap-table');
+          allCells.forEach(cell => {
+            const text = (cell.textContent || '').replace(/\s+/g, ' ').trim();
+            const looksLikeAmount = /^\(?\s*\$?\s*[\d,.]+\s*\)?\s*%?\s*$/.test(text);
+            if (!looksLikeAmount && text.length > 35) {
+              cell.classList.add('becker-wide-wrap-cell');
+              stripWhiteSpaceNowrap(cell);
+            }
+          });
+        }
+      }
+    });
+
+    return div.innerHTML;
+  }
+
+
+  function sanitizeContent(html) {
+    if (!html) return '';
+    let s = String(html);
+    s = removeSrOnly(s);
+    s = fixWileyMathSVG(s);
+    s = cleanMathTags(s);
+    s = removeChoicePercentSpans(s);
+    s = removeVideoAndEmptyP(s);
+    s = removeEssayPrompt(s);
+    s = removeInternalLinks(s);
+    s = applySmartTableClasses(s);
+    s = fixLongTableCells(s);
+    return s.trim();
+  }
+
+  function unwrapOptionTd(html) {
+    if (!html) return '';
+    const table = document.createElement('table');
+    table.innerHTML = `<tbody><tr>${String(html).trim()}</tr></tbody>`;
+    const tds = table.querySelectorAll('td.optionText, td[class*="optionText"]');
+    if (tds.length) {
+      return Array.from(tds).map(td => td.innerHTML).join('');
+    }
+
+    const div = document.createElement('div');
+    div.innerHTML = String(html).trim();
+    return div.innerHTML;
+  }
+
+  function sanitizeTableRowCells(cellsHtml) {
+    if (!cellsHtml) return '';
+    const wrapped = `<table><tbody><tr>${String(cellsHtml)}</tr></tbody></table>`;
+    const cleaned = sanitizeContent(wrapped);
+    const div = document.createElement('div');
+    div.innerHTML = cleaned;
+    const tr = div.querySelector('tr');
+    return tr ? tr.innerHTML : String(cellsHtml);
+  }
+
+  function countTableCells(cellsHtml) {
+    if (!cellsHtml) return 0;
+    const table = document.createElement('table');
+    table.innerHTML = `<tbody><tr>${String(cellsHtml)}</tr></tbody>`;
+    return table.querySelectorAll('td, th').length;
+  }
+
+
+  function extractRowCells(cellsHtml, defaultTag) {
+    const table = document.createElement('table');
+    table.innerHTML = `<tbody><tr>${String(cellsHtml || '')}</tr></tbody>`;
+    const tr = table.querySelector('tr');
+    if (!tr) return [];
+
+    return Array.from(tr.children)
+      .filter(el => /^(td|th)$/i.test(el.tagName))
+      .map(el => {
+        const tag = defaultTag || el.tagName.toLowerCase();
+        let inner = sanitizeContent(el.innerHTML || '');
+        let style = el.getAttribute('style') || '';
+
+        // v1.8: optionTexts dari Becker sering memakai class optionText.
+        // Class itu ditargetkan CSS Becker khusus untuk pilihan radio asli,
+        // jadi untuk output table custom kita buang agar cell tidak dirender aneh.
+        return {
+          tag,
+          inner,
+          style
+        };
+      });
+  }
+
+  function renderHeaderCells(cellsHtml) {
+    const cells = extractRowCells(cellsHtml, 'th');
+    return cells.map(cell => {
+      const style = cell.style ? ` style="${cell.style.replace(/"/g, '&quot;')}"` : '';
+      return `<th class="becker-opt-head"${style}>${cell.inner}</th>`;
+    }).join('');
+  }
+
+  function renderOptionCells(cellsHtml, fallbackHtml) {
+    let cells = extractRowCells(cellsHtml, 'td');
+    if (!cells.length) cells = [{ tag: 'td', inner: sanitizeContent(fallbackHtml || ''), style: '' }];
+
+    return cells.map(cell => {
+      const style = cell.style ? ` style="${cell.style.replace(/"/g, '&quot;')}"` : '';
+      return `<td class="becker-opt-cell"${style}>${cell.inner}</td>`;
+    }).join('');
+  }
+
+  function addTdSpacing(html) {
+    if (!html) return html;
+    return String(html).replace(/<\/td>/gi, '&nbsp;&nbsp;</td>');
+  }
+
+  function hasImageInHtml(html) {
+    return /<img\b/i.test(String(html || ''));
+  }
+
+  // ---------- UI ----------
+  const panel = document.createElement('div');
+  panel.style.cssText = `
+    position:fixed; right:18px; bottom:18px; z-index:2147483647;
+    background:#1f2937; color:#fff; padding:14px; width:390px;
+    border-radius:10px; font-family:Inter, system-ui, sans-serif;
+    box-shadow:0 8px 30px rgba(0,0,0,0.4);
+  `;
+
+  panel.innerHTML = `
+    <div style="font-weight:700; font-size:15px; margin-bottom:8px;">Becker JSON → HTML v2.6</div>
+    <div style="font-size:13px; margin-bottom:8px;">Upload file JSON per kategori. Nama HTML otomatis mengikuti nama JSON.</div>
+
+    <input id="fileInput" type="file" accept=".json,.txt,application/json" multiple style="width:100%; margin-bottom:10px;">
+
+    <div style="margin-bottom:6px;">Page-break mode:</div>
+    <label style="display:block;"><input type="radio" name="pb" value="normal"> HTML Normal</label>
+    <label style="display:block;"><input type="radio" name="pb" value="smart" checked> HTML Smart</label>
+    <label style="display:block; margin-bottom:8px;"><input type="radio" name="pb" value="each"> HTML Page-break per Question</label>
+
+    <div style="margin-bottom:6px;">Paper size for print/page width:</div>
+    <select id="paperSizeSel" style="width:100%; margin-bottom:8px; padding:6px; border-radius:6px; border:1px solid #374151;">
+      <option value="letter" selected>Letter</option>
+      <option value="a4">A4</option>
+      <option value="browser">Browser default</option>
+    </select>
+
+    <label style="display:block; margin-bottom:8px;"><input id="autoDl" type="checkbox"> Auto Download</label>
+    <label style="display:block; margin-bottom:8px;"><input id="openTabChk" type="checkbox" checked> Open HTML in new tabs</label>
+    <label style="display:block; margin-bottom:8px;"><input id="shrinkTablesChk" type="checkbox" checked> Auto shrink overflow tables</label>
+    <label style="display:block; margin-bottom:8px;"><input id="pdfChk" type="checkbox"> Auto Print PDF (Answer)</label>
+    <label style="display:block; margin-bottom:10px; color:#fbbf24;"><input id="removeImgChk" type="checkbox"> Remove Question with Image</label>
+
+    <button id="genBtn" style="
+      width:100%; padding:10px; background:#10b981; color:#fff; border:none;
+      border-radius:6px; font-weight:700; cursor:pointer;
+    ">Generate HTML</button>
+
+    <div id="statusArea" style="margin-top:10px; font-size:13px; color:#d1d5db;"></div>
+  `;
+
+  document.body.appendChild(panel);
+
+  const fileInput = panel.querySelector('#fileInput');
+  const genBtn = panel.querySelector('#genBtn');
+  const statusArea = panel.querySelector('#statusArea');
+  const autoDlChk = panel.querySelector('#autoDl');
+  const openTabChk = panel.querySelector('#openTabChk');
+  const shrinkTablesChk = panel.querySelector('#shrinkTablesChk');
+  const paperSizeSel = panel.querySelector('#paperSizeSel');
+  const removeImgChk = panel.querySelector('#removeImgChk');
+
+  const setStatus = (t) => { statusArea.innerText = t; console.log('[becker-json-html]', t); };
+
+  // ---------- CSS ----------
+  function cssFor(mode, paperSize) {
+    let extra = '';
+    if (mode === 'smart') extra = `.q-block{page-break-inside:avoid; break-inside:avoid;}`;
+    if (mode === 'each') extra = `.q-block{page-break-before:always; break-before:page;} .q-block:first-child{page-break-before:avoid; break-before:auto;}`;
+
+    const normalizedPaper = String(paperSize || 'letter').toLowerCase();
+    const pageRule = normalizedPaper === 'browser'
+      ? '@page{ margin:0.5in; }'
+      : `@page{ size:${normalizedPaper === 'a4' ? 'A4' : 'Letter'} portrait; margin:0.5in; }`;
+    const pageContentWidth = normalizedPaper === 'a4'
+      ? '7.267in'
+      : normalizedPaper === 'browser'
+        ? '100%'
+        : '7.5in';
+
+    return `
+      ${pageRule}
+      :root{ --becker-page-content-width:${pageContentWidth}; }
+      body{
+        font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        padding:28px;
+        color:#111;
+        line-height:1.55;
+      }
+      .er-question .repQuestion{
+        max-width:var(--becker-page-content-width);
+        width:100%;
+        box-sizing:border-box;
+      }
+      @media print{
+        body{ padding:0; }
+        .er-question .repQuestion{ max-width:100%; width:100%; }
+      }
+      .er-question .repQuestion .q-block{ margin-bottom:22px; }
+      .er-question .repQuestion .q-header{ font-weight:700; font-size:18px; margin-bottom:8px; }
+      .er-question .repQuestion .q-text{ margin-bottom:10px; }
+      .er-question .repQuestion .foil-header{ margin:10px 0; }
+
+      /* Choices dibuat lebih spesifik dari CSS Becker agar A/B/C/D tetap sejajar */
+      .er-question .repQuestion ol.choices{ list-style:none; padding-left:0; margin:0; }
+      .er-question .repQuestion ol.choices li{
+        margin:0 !important;
+        padding:8px 4px !important;
+        line-height:1.35;
+        display:grid;
+        grid-template-columns:24px minmax(0, 1fr);
+        column-gap:4px;
+        align-items:start;
+      }
+      .er-question .repQuestion .letter{ font-weight:700; white-space:nowrap; line-height:1.35; }
+      .er-question .repQuestion .choice-content{ min-width:0; line-height:1.35; }
+      .er-question .repQuestion .choice-content > *:first-child{ margin-top:0 !important; }
+      .er-question .repQuestion .choice-content > *:last-child{ margin-bottom:0 !important; }
+      .er-question .repQuestion .choice-content p{ margin:0 !important; padding:0 !important; }
+      .er-question .repQuestion .correct{ font-weight:700; background:#e6f9ea; border:1px solid #2e7d32; border-radius:4px; }
+
+      /* v2.0: support optionsHeader Becker dengan jawaban berbentuk table tanpa class options-table agar tidak kena negative margin CSS Becker */
+      .er-question .repQuestion table.becker-options-table{
+        display:table !important;
+        margin-top:10px;
+        margin-left:0 !important;
+        border-collapse:separate !important;
+        border-spacing:0 8px !important;
+        width:auto !important;
+        max-width:100%;
+      }
+      .er-question .repQuestion table.becker-options-table thead{ display:table-header-group !important; }
+      .er-question .repQuestion table.becker-options-table tbody{ display:table-row-group !important; }
+      .er-question .repQuestion table.becker-options-table tr{ display:table-row !important; }
+      .er-question .repQuestion table.becker-options-table th,
+      .er-question .repQuestion table.becker-options-table td{
+        display:table-cell !important;
+        vertical-align:top;
+      }
+      .er-question .repQuestion table.becker-options-table .becker-opt-head,
+      .er-question .repQuestion table.becker-options-table .becker-opt-cell{
+        padding:5px !important;
+        white-space:normal;
+      }
+      .er-question .repQuestion table.becker-options-table .becker-opt-cell p,
+      .er-question .repQuestion table.becker-options-table .becker-opt-head p{
+        margin:0 !important;
+      }
+      /* v1.9: khusus table pilihan yang memakai optionsHeader.
+         Cell optionTexts dipertahankan sebagai cell table terpisah, bukan digabung jadi satu blok. */
+      .er-question .repQuestion table.becker-options-table .becker-opt-cell{
+        min-width:80px;
+      }
+      .er-question .repQuestion table.becker-options-table .becker-opt-cell,
+      .er-question .repQuestion table.becker-options-table .becker-opt-head{
+        text-align:left;
+      }
+      .er-question .repQuestion table.becker-options-table .optionLetter{
+        font-weight:700;
+        width:36px;
+        padding:5px 8px 5px 4px !important;
+        text-align:left;
+        white-space:nowrap;
+      }
+      .er-question .repQuestion table.becker-options-table td.optionText,
+      .er-question .repQuestion table.becker-options-table td[class*="optionText"]{
+        padding:5px !important;
+      }
+      .er-question .repQuestion table.becker-options-table td.optionText p,
+      .er-question .repQuestion table.becker-options-table td[class*="optionText"] p{
+        margin:0 !important;
+      }
+      .er-question .repQuestion table.becker-options-table tr.correct td{
+        background:#e6f9ea;
+        border-top:1px solid #2e7d32;
+        border-bottom:1px solid #2e7d32;
+        font-weight:700;
+      }
+      .er-question .repQuestion table.becker-options-table tr.correct td:first-child{
+        border-left:1px solid #2e7d32;
+        border-radius:4px 0 0 4px;
+      }
+      .er-question .repQuestion table.becker-options-table tr.correct td:last-child{
+        border-right:1px solid #2e7d32;
+        border-radius:0 4px 4px 0;
+      }
+
+      /* Fallback style Becker untuk table jika CSS CDN lambat/tidak termuat */
+      .er-question .repQuestion table{ border-collapse:collapse; border-spacing:0; margin:0; width:auto; max-width:100%; }
+      .er-question .repQuestion table p{ margin:0; }
+      .er-question .repQuestion table.color_grey{ background-color:#ececec; }
+      .er-question .repQuestion .color_grey th,
+      .er-question .repQuestion table.color_grey th{ background-color:#d9d9d9; color:#444; font-weight:400; }
+      .er-question .repQuestion table.color_blue{ background-color:#d2dff6; }
+      .er-question .repQuestion table.color_green{ background-color:#f2f6e0; }
+      .er-question .repQuestion table.color_orange{ background-color:#f8eae1; }
+      .er-question .repQuestion .repo_indent_level1{ margin-left:10px; }
+      .er-question .repQuestion .repo_indent_level2{ margin-left:20px; }
+      .er-question .repQuestion .repo_indent_level3{ margin-left:30px; }
+      .er-question .repQuestion .repo_border_bottom{ border-bottom:1px solid #001; }
+      .er-question .repQuestion .repo_border_double_bottom{ border-bottom:3px double #001; }
+      .er-question .repQuestion table td p.dollarsign{ position:relative; padding-left:.625rem; }
+      .er-question .repQuestion table td p.dollarsign:before{ position:absolute; left:0; content:"$"; }
+      .er-question .repQuestion table tr.drrow>td:nth-child(2){ text-align:left; }
+      .er-question .repQuestion table tr.drrow>td:nth-child(n+3){ padding-left:.8125rem; }
+      .er-question .repQuestion table tr.crrow>td:nth-child(2){ text-align:left; padding-left:1.4375rem; }
+      .er-question .repQuestion table tr.crrow>td:nth-child(n+3){ padding-left:.8125rem; }
+
+      /* v1.6: perbaikan terbatas untuk table perhitungan yang punya kolom catatan panjang.
+         Hanya table yang diberi class becker-long-note-table oleh sanitizer yang diatur ulang. */
+      .er-question .repQuestion table.becker-long-note-table{
+        width:100% !important;
+        max-width:100% !important;
+        table-layout:fixed !important;
+        box-sizing:border-box;
+      }
+      .er-question .repQuestion table.becker-long-note-table td,
+      .er-question .repQuestion table.becker-long-note-table th{
+        box-sizing:border-box;
+      }
+      .er-question .repQuestion table.becker-long-note-table td:nth-child(1),
+      .er-question .repQuestion table.becker-long-note-table th:nth-child(1){
+        width:36%;
+      }
+      .er-question .repQuestion table.becker-long-note-table td:nth-child(2),
+      .er-question .repQuestion table.becker-long-note-table th:nth-child(2){
+        width:17%;
+        white-space:nowrap;
+      }
+      .er-question .repQuestion table.becker-long-note-table td:nth-child(n+3),
+      .er-question .repQuestion table.becker-long-note-table th:nth-child(n+3){
+        width:47%;
+      }
+      .er-question .repQuestion table td.becker-wrap-cell,
+      .er-question .repQuestion table th.becker-wrap-cell{
+        white-space:normal !important;
+        overflow-wrap:break-word;
+        word-break:normal;
+        vertical-align:top;
+      }
+      .er-question .repQuestion table td.becker-note-cell,
+      .er-question .repQuestion table th.becker-note-cell{
+        overflow-wrap:break-word;
+      }
+
+      /* v2.1: hanya untuk table yang ditandai sanitizer karena punya rumus/cell panjang yang melebar.
+         Tidak memengaruhi table Becker normal dan tidak mengubah table pilihan optionsHeader. */
+      .er-question .repQuestion table.becker-wide-wrap-table{
+        width:100% !important;
+        max-width:100% !important;
+        table-layout:fixed !important;
+        box-sizing:border-box;
+      }
+      .er-question .repQuestion table.becker-wide-wrap-table td,
+      .er-question .repQuestion table.becker-wide-wrap-table th{
+        box-sizing:border-box;
+        max-width:100%;
+      }
+      .er-question .repQuestion table.becker-wide-wrap-table td.becker-wide-wrap-cell,
+      .er-question .repQuestion table.becker-wide-wrap-table th.becker-wide-wrap-cell,
+      .er-question .repQuestion table.becker-wide-wrap-table td.becker-wide-wrap-cell p,
+      .er-question .repQuestion table.becker-wide-wrap-table th.becker-wide-wrap-cell p{
+        white-space:normal !important;
+        overflow-wrap:anywhere;
+        word-break:normal;
+      }
+
+
+      .explain-box{
+        background:#f8fafc; border:1px solid #e2e8f0; padding:16px;
+        border-radius:8px; margin-top:14px; box-shadow:0 1px 2px rgba(0,0,0,0.05);
+      }
+      .explain-box p{ margin:8px 0 !important; padding:0 !important; }
+      .exp-correct-title{ color:#15803d; font-size:16px; margin-bottom:4px; border-bottom:1px solid #dcfce7; padding-bottom:4px; }
+      .exp-false-title{ color:#b91c1c; font-size:16px; margin-top:14px; margin-bottom:6px; border-bottom:1px solid #fee2e2; padding-bottom:4px; }
+      .false-choice-item{ margin-bottom:8px; background:#fff; padding:8px; border:1px solid #f1f5f9; border-radius:4px; }
+
+
+      /* v2.6: wrapper untuk table non-choice yang benar-benar overflow saat print/page width. */
+      .overflow-table-shrink-wrap{
+        width:100%;
+        overflow:hidden;
+        break-inside:avoid;
+        page-break-inside:avoid;
+      }
+      .overflow-table-shrink-wrap > table{
+        transform-origin:top left;
+      }
+      img, svg{ max-width:100%; height:auto; }
+      .sr-only{ display:none !important; }
+      .mjx-svg-fix svg{ vertical-align:middle; }
+      .mjx-svg-fix svg path,
+      .mjx-svg-fix svg use,
+      .mjx-svg-fix svg g{ stroke-width:0 !important; fill:currentColor !important; stroke:none !important; }
+      hr{ border:none; border-top:2px dashed #e2e8f0; margin:24px 0; }
+      ${extra}
+    `;
+  }
+
+  // ---------- JSON parsing / normalization ----------
+  function parseJsonContent(text) {
+    try { return JSON.parse(text); }
+    catch {
+      const m = String(text).match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
+      if (!m) throw new Error('Cannot parse JSON');
+      return JSON.parse(m[1]);
+    }
+  }
+
+  function normalizeQuestions(obj) {
+    if (!obj) return [];
+    if (Array.isArray(obj)) return obj.map(normalizeOneQuestion).filter(Boolean);
+    if (obj.questionList) return obj.questionList.map(normalizeOneQuestion).filter(Boolean);
+    if (obj.test && obj.test.questionList) return obj.test.questionList.map(normalizeOneQuestion).filter(Boolean);
+    if (obj.questions) return obj.questions.map(normalizeOneQuestion).filter(Boolean);
+    return [normalizeOneQuestion(obj)].filter(Boolean);
+  }
+
+  function normalizeOneQuestion(raw, idx) {
+    if (!raw) return null;
+
+    // Format baru Becker: item.response.content
+    const c = raw.response && raw.response.content ? raw.response.content : raw.content ? raw.content : raw;
+
+    const rawOptions = c.optionTexts || c.options || c.answerChoiceList || c.answerChoice || c.foils || [];
+    const explanations = Array.isArray(c.explanations) ? c.explanations : [];
+    const correctIndex = Number(c.correctOptionIndex ?? c.correctAnswerIndex ?? c.correctIndex ?? 0);
+
+    const choices = rawOptions.map((opt, optionIdx) => {
+      const optionNumber = optionIdx + 1;
+      const letter = letters(optionNumber);
+      let html = '';
+      let isCorrect = false;
+      let explanation = '';
+
+      let rawOptionHtml = '';
+      if (typeof opt === 'string') {
+        rawOptionHtml = replaceChoiceNumberTokens(opt);
+        html = unwrapOptionTd(rawOptionHtml);
+        isCorrect = correctIndex ? optionNumber === correctIndex : false;
+        explanation = replaceChoiceNumberTokens(explanations[optionIdx] || '');
+      } else {
+        rawOptionHtml = replaceChoiceNumberTokens(opt.text || opt.choice || opt.html || opt.body || '');
+        html = unwrapOptionTd(rawOptionHtml);
+        isCorrect = correctIndex ? optionNumber === correctIndex : !!(opt.isCorrect || opt.correctTaken === true);
+        explanation = replaceChoiceNumberTokens(opt.explanation || explanations[optionIdx] || '');
+      }
+
+      return { letter, html, rawOptionHtml, isCorrect, explanation };
+    });
+
+    return {
+      id: c.id || raw.id || '',
+      questionNumber: c.questionNumber || c.number || raw.questionNumber || raw.number || idx + 1,
+      body: c.body || c.stem || c.questionText || '',
+      optionsHeader: c.optionsHeader || c.foilHeader || c.answerHeader || '',
+      choices,
+      explanationText: replaceChoiceNumberTokens(c.explanationText || ''),
+      raw
+    };
+  }
+
+  function getBaseName(filename) {
+    if (!filename) return 'Questions';
+    const name = filename.split('/').pop().split('\\').pop();
+    const dot = name.lastIndexOf('.');
+    return dot === -1 ? name : name.slice(0, dot);
+  }
+
+  function downloadBlob(blob, filename) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 1500);
+  }
+
+  // ---------- Image converter ----------
+  async function convertImagesToBase64(htmlString) {
+    const div = document.createElement('div');
+    div.innerHTML = htmlString;
+    const imgs = div.querySelectorAll('img');
+    const failed = [];
+
+    async function imgToBase64(url) {
+      try {
+        const res = await fetch(url, { mode: 'cors' });
+        const blob = await res.blob();
+        return await new Promise(resolve => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result);
+          reader.readAsDataURL(blob);
+        });
+      } catch (e) {
+        failed.push(url);
+        return null;
+      }
+    }
+
+    for (const img of imgs) {
+      const url = img.getAttribute('src');
+      if (!url) continue;
+      if (/^(data:|blob:)/i.test(url)) continue;
+      const base64 = await imgToBase64(url);
+      if (base64) img.setAttribute('src', base64);
+    }
+
+    return { html: div.innerHTML, failed };
+  }
+
+  // ---------- HTML builders ----------
+  function buildBodies(questions, removeImg) {
+    let qBody = '';
+    let aBody = '';
+    const imageReports = [];
+
+    const processed = [];
+    questions.forEach((q, i) => {
+      const qText = sanitizeContent(q.body || '');
+      const foilHeader = sanitizeContent(q.optionsHeader || '');
+      let searchHtml = qText + foilHeader + sanitizeContent(q.explanationText || '');
+
+      q.choices.forEach(ch => {
+        searchHtml += sanitizeContent(ch.html || '') + sanitizeContent(ch.explanation || '');
+      });
+
+      const hasImage = hasImageInHtml(searchHtml);
+      if (hasImage) {
+        imageReports.push(`- Soal asli No: ${q.questionNumber || i + 1}${q.id ? ` (ID ${q.id})` : ''}`);
+      }
+
+      if (!(removeImg && hasImage)) processed.push(q);
+    });
+
+    processed.forEach((q, i) => {
+      const seq = i + 1;
+      const total = processed.length;
+      const qText = sanitizeContent(q.body || '');
+      const foilHeader = sanitizeContent(q.optionsHeader || '');
+
+      let correctExplanation = '';
+      let falseExplanations = '';
+
+      const normalized = q.choices.map((ch, idx) => {
+        let html = sanitizeContent(ch.html || '');
+        html = addTdSpacing(html);
+        html = html.replace(/^\s*[A-Z]\.\s*/i, '');
+        const letter = ch.letter || letters(idx + 1);
+        const expText = sanitizeContent(ch.explanation || '');
+
+        if (ch.isCorrect) {
+          correctExplanation = expText;
+        } else if (expText) {
+          falseExplanations += `<div class="false-choice-item"><strong>Choice ${letter}:</strong> ${expText}</div>`;
+        }
+
+        return { letter, html, rawOptionHtml: ch.rawOptionHtml || '', isCorrect: !!ch.isCorrect };
+      });
+
+      if (!correctExplanation && q.explanationText) correctExplanation = sanitizeContent(q.explanationText);
+
+      let combinedExplanationHTML = '';
+      if (correctExplanation) {
+        combinedExplanationHTML += `
+          <div class="exp-correct-title"><strong>&#10004; Correct Answer Explanation</strong></div>
+          <div>${correctExplanation}</div>
+        `;
+      }
+      if (falseExplanations) {
+        combinedExplanationHTML += `
+          <div class="exp-false-title"><strong>&#10006; False Answer Explanations</strong></div>
+          <div>${falseExplanations}</div>
+        `;
+      }
+      if (!combinedExplanationHTML) combinedExplanationHTML = '(No explanation provided)';
+
+      const hasOptionsHeader = !!foilHeader;
+      const hasMultiCellOptions = normalized.some(c => countTableCells(c.rawOptionHtml || '') > 1);
+      const useOptionsTable = hasOptionsHeader;
+
+      function renderChoices(asAnswer) {
+        if (useOptionsTable) {
+          let out = `<table class="becker-options-table"><thead>`;
+          if (foilHeader) {
+            out += `<tr><th class="optionLetter"></th>${renderHeaderCells(q.optionsHeader || '')}</tr>`;
+          }
+          out += `</thead><tbody>`;
+          normalized.forEach(c => {
+            const rowClass = asAnswer && c.isCorrect ? ' class="correct"' : '';
+            const cells = renderOptionCells(c.rawOptionHtml || '', c.html);
+            out += `<tr${rowClass}><td class="optionLetter">${c.letter}.</td>${cells}</tr>`;
+          });
+          out += `</tbody></table>`;
+          return out;
+        }
+
+        let out = '<ol class="choices">';
+        normalized.forEach(c => {
+          if (asAnswer) {
+            out += `<li class="${c.isCorrect ? 'correct' : ''}"><span class="letter">${c.letter}.</span><span class="choice-content">${c.html}</span></li>`;
+          } else {
+            out += `<li><span class="letter">${c.letter}.</span><span class="choice-content">${c.html}</span></li>`;
+          }
+        });
+        out += '</ol>';
+        return out;
+      }
+
+      qBody += `<div class="q-block">
+        <div class="q-header">Question ${seq} of ${total}</div>
+        <div class="q-text">${qText}</div>
+        ${renderChoices(false)}
+      </div><hr/>`;
+
+      aBody += `<div class="q-block">
+        <div class="q-header">Question ${seq} of ${total}</div>
+        <div class="q-text">${qText}</div>
+        ${renderChoices(true)}
+        <div class="explain-box">${combinedExplanationHTML}</div>
+      </div><hr/>`;
+    });
+
+    return { qBody, aBody, imageReports, count: processed.length };
+  }
+
+  function escapeHtml(s) {
+    return String(s || '').replace(/[&<>"']/g, ch => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[ch]));
+  }
+
+
+  function autoShrinkOverflowTablesScript(enabled) {
+    if (!enabled) return '';
+    return `<script>
+(function () {
+  function isExcludedTable(table) {
+    return table.closest('table.becker-options-table') ||
+      table.classList.contains('becker-options-table') ||
+      table.closest('ol.choices') ||
+      table.closest('.choice-content') ||
+      table.closest('.becker-options-table');
+  }
+
+  function unwrapExisting() {
+    document.querySelectorAll('.overflow-table-shrink-wrap').forEach(function (wrapper) {
+      var table = wrapper.querySelector(':scope > table');
+      if (!table) return;
+      table.style.transform = '';
+      table.style.transformOrigin = '';
+      table.style.display = '';
+      table.style.width = table.getAttribute('data-original-width') || '';
+      table.style.maxWidth = table.getAttribute('data-original-max-width') || '';
+      table.removeAttribute('data-auto-shrunk');
+      table.removeAttribute('data-original-width');
+      table.removeAttribute('data-original-max-width');
+      wrapper.parentNode.insertBefore(table, wrapper);
+      wrapper.remove();
+    });
+  }
+
+  function cssLengthToPx(value, base) {
+    if (!value || value === 'none') return 0;
+    var n = parseFloat(value);
+    if (!isFinite(n)) return 0;
+    if (/in$/i.test(value)) return n * 96;
+    if (/cm$/i.test(value)) return n * 37.7952755906;
+    if (/mm$/i.test(value)) return n * 3.77952755906;
+    if (/pt$/i.test(value)) return n * 1.3333333333;
+    if (/%$/i.test(value)) return (base || 0) * n / 100;
+    return n;
+  }
+
+  function availableWidthForTable(table) {
+    var rect = table.getBoundingClientRect();
+    var container = table.closest('.explain-box, .q-text, .q-block, .repQuestion') || document.body;
+    var cRect = container.getBoundingClientRect();
+    var pageBox = table.closest('.repQuestion') || document.body;
+    var pRect = pageBox.getBoundingClientRect();
+    var pStyle = window.getComputedStyle(pageBox);
+    var maxFromCss = cssLengthToPx(pStyle.maxWidth, pRect.width || 0);
+
+    // v2.5: bandingkan juga dengan lebar kertas yang dipilih di CSS.
+    // Ini penting untuk print Letter/A4 karena viewport browser bisa lebih lebar daripada area print.
+    var viewportWidth = Math.max(320, document.documentElement.clientWidth || window.innerWidth || 0);
+    var rightPadding = 24;
+    var availableByViewport = viewportWidth - Math.max(0, rect.left) - rightPadding;
+    var availableByContainer = cRect.width || container.clientWidth || 0;
+    var availableByPage = pRect.width || pageBox.clientWidth || 0;
+    if (maxFromCss > 0 && maxFromCss < availableByPage) availableByPage = maxFromCss;
+
+    var available = availableByViewport;
+    if (availableByContainer > 0) available = Math.min(available, availableByContainer);
+    if (availableByPage > 0) available = Math.min(available, availableByPage);
+    return Math.max(120, available);
+  }
+
+  function measuredTableWidth(table) {
+    var rect = table.getBoundingClientRect();
+    return Math.max(table.scrollWidth || 0, table.offsetWidth || 0, rect.width || 0);
+  }
+
+  function autoShrinkOverflowTables() {
+    unwrapExisting();
+
+    var tables = Array.prototype.slice.call(document.querySelectorAll('.er-question .repQuestion table'));
+    tables.forEach(function (table) {
+      if (isExcludedTable(table)) return;
+
+      var availableWidth = availableWidthForTable(table);
+      if (!availableWidth || availableWidth < 120) return;
+
+      var tableWidth = measuredTableWidth(table);
+      var rect = table.getBoundingClientRect();
+      var viewportWidth = document.documentElement.clientWidth || window.innerWidth || 0;
+      var actuallyCrossesRightEdge = rect.right > (viewportWidth - 8);
+
+      if (tableWidth <= availableWidth + 2 && !actuallyCrossesRightEdge) return;
+
+      var scale = availableWidth / tableWidth;
+      if (!isFinite(scale) || scale >= 1) return;
+
+      // Jangan terlalu kecil; kalau table sangat ekstrem, biarkan shrink secukupnya
+      // dan sisanya tetap bisa dilihat via horizontal scroll wrapper.
+      scale = Math.max(0.60, scale);
+
+      var originalHeight = table.offsetHeight || table.getBoundingClientRect().height;
+      var originalInlineWidth = table.style.width || '';
+      var originalInlineMaxWidth = table.style.maxWidth || '';
+
+      var wrapper = document.createElement('div');
+      wrapper.className = 'overflow-table-shrink-wrap';
+      wrapper.setAttribute('data-scale', String(scale));
+
+      table.parentNode.insertBefore(wrapper, table);
+      wrapper.appendChild(table);
+
+      table.setAttribute('data-original-width', originalInlineWidth);
+      table.setAttribute('data-original-max-width', originalInlineMaxWidth);
+      table.style.transformOrigin = 'top left';
+      table.style.transform = 'scale(' + scale + ')';
+      table.style.display = 'block';
+      table.style.width = tableWidth + 'px';
+      table.style.maxWidth = 'none';
+      table.setAttribute('data-auto-shrunk', 'true');
+
+      wrapper.style.height = Math.ceil(originalHeight * scale) + 'px';
+    });
+  }
+
+  // v2.6: jangan shrink permanen saat HTML dibuka, karena itu bisa membuat print preview
+  // mengecilkan table sebelum benar-benar perlu. Shrink hanya dilakukan saat print.
+  window.addEventListener('beforeprint', function () { setTimeout(autoShrinkOverflowTables, 0); });
+  window.addEventListener('afterprint', unwrapExisting);
+})();
+</script>`;
+  }
+
+  function wrapFullHtml(title, css, body, enableAutoShrink) {
+    return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="${BECKER_CSS_URL}">
+  <style>${css}</style>
+  <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [['\\\\(','\\\\)']],
+        displayMath: [['$$','$$']],
+        processEscapes: true
+      },
+      options: {
+        ignoreHtmlClass: 'tex2jax_ignore',
+        processHtmlClass: 'tex2jax_process'
+      }
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" id="MathJax-script" async></script>
+  ${autoShrinkOverflowTablesScript(enableAutoShrink)}
+</head>
+<body><div class="er-question er-question--no-symbol er-question--indent-mcqs"><div class="repQuestion">${body}</div></div></body>
+</html>`;
+  }
+
+  async function processOneFile(file, mode, wantPdf, autoDownload, openTabs, removeImg, enableAutoShrink) {
+    const txt = await file.text();
+    const parsed = parseJsonContent(txt);
+    const questions = normalizeQuestions(parsed);
+    const baseName = getBaseName(file.name);
+
+    if (!questions.length) {
+      return { file: file.name, count: 0, imageReports: [], skipped: true };
+    }
+
+    questions.sort((a, b) => {
+      const sa = Number(a.questionNumber || 0);
+      const sb = Number(b.questionNumber || 0);
+      return sa - sb;
+    });
+
+    const { qBody, aBody, imageReports, count } = buildBodies(questions, removeImg);
+    if (!qBody || !aBody) {
+      return { file: file.name, count: 0, imageReports, skipped: true };
+    }
+
+    const css = cssFor(mode);
+    const convQ = await convertImagesToBase64(qBody);
+    const convA = await convertImagesToBase64(aBody);
+
+    const htmlQ = wrapFullHtml(`${baseName} - Questions`, css, convQ.html, enableAutoShrink);
+    const htmlA = wrapFullHtml(`${baseName} - Answer`, css, convA.html, enableAutoShrink);
+
+    const qFileName = `${baseName} - Questions.html`;
+    const aFileName = `${baseName} - Answer.html`;
+
+    let winA = null;
+    if (openTabs || wantPdf) {
+      window.open(URL.createObjectURL(new Blob([htmlQ], { type: 'text/html' })), '_blank');
+      winA = window.open(URL.createObjectURL(new Blob([htmlA], { type: 'text/html' })), '_blank');
+    }
+
+    if (autoDownload) {
+      downloadBlob(new Blob([htmlQ], { type: 'text/html' }), qFileName);
+      downloadBlob(new Blob([htmlA], { type: 'text/html' }), aFileName);
+    }
+
+    if (wantPdf && winA) setTimeout(() => winA.print(), 1000);
+
+    return {
+      file: file.name,
+      count,
+      imageReports,
+      failedImages: [...convQ.failed, ...convA.failed],
+      skipped: false
+    };
+  }
+
+  async function handleFiles(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return alert('Upload file JSON terlebih dahulu.');
+
+    const mode = panel.querySelector("input[name='pb']:checked").value;
+    const wantPdf = !!panel.querySelector('#pdfChk').checked;
+    const autoDownload = !!autoDlChk.checked;
+    const openTabs = !!openTabChk.checked;
+    const enableAutoShrink = !!shrinkTablesChk.checked;
+    const removeImg = !!removeImgChk.checked;
+
+    setStatus(`Memproses ${files.length} file...`);
+
+    const allImageReports = [];
+    const allFailedImages = [];
+    let totalQuestions = 0;
+    let skippedFiles = 0;
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      setStatus(`Memproses ${i + 1}/${files.length}: ${file.name}`);
+      try {
+        const result = await processOneFile(file, mode, wantPdf, autoDownload, openTabs, removeImg, enableAutoShrink);
+        totalQuestions += result.count || 0;
+        if (result.skipped) skippedFiles++;
+        if (result.imageReports && result.imageReports.length) {
+          allImageReports.push(`File: ${file.name}`, ...result.imageReports);
+        }
+        if (result.failedImages && result.failedImages.length) {
+          allFailedImages.push(`File: ${file.name}`, ...result.failedImages.map(x => `- ${x}`));
+        }
+      } catch (e) {
+        console.error(e);
+        skippedFiles++;
+        alert(`Gagal memproses file: ${file.name}\n${e.message}`);
+      }
+    }
+
+    if (allImageReports.length) {
+      let msg = removeImg
+        ? 'PERHATIAN: Soal berikut memiliki gambar dan TELAH DIHAPUS dari hasil generate:\n\n'
+        : 'PERHATIAN: Terdapat gambar pada soal berikut:\n\n';
+      msg += allImageReports.slice(0, 40).join('\n');
+      if (allImageReports.length > 40) msg += `\n... dan ${allImageReports.length - 40} baris lainnya.`;
+      setTimeout(() => alert(msg), 500);
+    }
+
+    if (allFailedImages.length) {
+      console.warn('Images failed to convert:', allFailedImages.join('\n'));
+    }
+
+    setStatus(`Selesai. Total soal dibuat: ${totalQuestions}. File dilewati: ${skippedFiles}.`);
+  }
+
+  // ---------- Events ----------
+  genBtn.addEventListener('click', () => handleFiles(fileInput.files));
+  setStatus('Ready — Upload JSON per kategori lalu klik Generate.');
+})();
