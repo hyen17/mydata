@@ -1,0 +1,1099 @@
+(() => {
+  const BASE_URL = "https://cpa.becker.com/rest/flashcards/";
+
+  const existing = document.getElementById("becker-flashcard-print-ui");
+  if (existing) existing.remove();
+
+  const css = `
+    #becker-flashcard-print-ui * {
+      box-sizing: border-box;
+      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    #becker-flashcard-print-ui {
+      position: fixed;
+      inset: 0;
+      z-index: 2147483647;
+      background: rgba(15, 23, 42, 0.72);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    #becker-flashcard-print-ui .panel {
+      width: min(980px, 96vw);
+      max-height: 92vh;
+      overflow: auto;
+      background: #ffffff;
+      border-radius: 18px;
+      box-shadow: 0 24px 80px rgba(0,0,0,.35);
+      padding: 24px;
+      color: #111827;
+    }
+
+    #becker-flashcard-print-ui .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    #becker-flashcard-print-ui h2 {
+      margin: 0 0 6px;
+      font-size: 22px;
+      line-height: 1.25;
+    }
+
+    #becker-flashcard-print-ui h3 {
+      margin: 18px 0 10px;
+      font-size: 16px;
+      line-height: 1.25;
+    }
+
+    #becker-flashcard-print-ui .subtitle {
+      color: #6b7280;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    #becker-flashcard-print-ui .close-btn {
+      border: 0;
+      background: #f3f4f6;
+      color: #111827;
+      width: 36px;
+      height: 36px;
+      border-radius: 999px;
+      cursor: pointer;
+      font-size: 20px;
+      line-height: 1;
+    }
+
+    #becker-flashcard-print-ui .close-btn:hover {
+      background: #e5e7eb;
+    }
+
+    #becker-flashcard-print-ui .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    #becker-flashcard-print-ui .field {
+      margin-bottom: 16px;
+    }
+
+    #becker-flashcard-print-ui label {
+      display: block;
+      font-weight: 700;
+      font-size: 13px;
+      margin-bottom: 7px;
+      color: #374151;
+    }
+
+    #becker-flashcard-print-ui input,
+    #becker-flashcard-print-ui select,
+    #becker-flashcard-print-ui textarea {
+      width: 100%;
+      border: 1px solid #d1d5db;
+      border-radius: 12px;
+      padding: 11px 12px;
+      font-size: 14px;
+      outline: none;
+      background: #fff;
+      color: #111827;
+    }
+
+    #becker-flashcard-print-ui input:focus,
+    #becker-flashcard-print-ui select:focus,
+    #becker-flashcard-print-ui textarea:focus {
+      border-color: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, .16);
+    }
+
+    #becker-flashcard-print-ui textarea {
+      min-height: 92px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    #becker-flashcard-print-ui .hint {
+      margin-top: 6px;
+      color: #6b7280;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    #becker-flashcard-print-ui .actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 18px;
+    }
+
+    #becker-flashcard-print-ui .primary,
+    #becker-flashcard-print-ui .secondary {
+      border: 0;
+      border-radius: 12px;
+      padding: 11px 16px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 14px;
+    }
+
+    #becker-flashcard-print-ui .primary {
+      background: #2563eb;
+      color: #fff;
+    }
+
+    #becker-flashcard-print-ui .primary:hover {
+      background: #1d4ed8;
+    }
+
+    #becker-flashcard-print-ui .primary:disabled {
+      background: #9ca3af;
+      cursor: not-allowed;
+    }
+
+    #becker-flashcard-print-ui .secondary {
+      background: #f3f4f6;
+      color: #111827;
+    }
+
+    #becker-flashcard-print-ui .secondary:hover {
+      background: #e5e7eb;
+    }
+
+    #becker-flashcard-print-ui .status {
+      margin-top: 16px;
+      border-radius: 12px;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      padding: 12px;
+      font-size: 13px;
+      color: #374151;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+
+    #becker-flashcard-print-ui .module-preview {
+      margin-top: 16px;
+      border: 1px solid #e5e7eb;
+      border-radius: 14px;
+      overflow: hidden;
+      max-height: 260px;
+      overflow-y: auto;
+    }
+
+    #becker-flashcard-print-ui table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    #becker-flashcard-print-ui th,
+    #becker-flashcard-print-ui td {
+      border-bottom: 1px solid #e5e7eb;
+      padding: 9px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    #becker-flashcard-print-ui th {
+      background: #f9fafb;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      color: #374151;
+    }
+
+    #becker-flashcard-print-ui .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: #eff6ff;
+      color: #1d4ed8;
+      font-weight: 700;
+      font-size: 12px;
+    }
+
+    #becker-flashcard-print-ui .label-panel {
+      display: none;
+      margin-top: 18px;
+      border: 1px solid #dbeafe;
+      background: #eff6ff;
+      border-radius: 16px;
+      padding: 14px;
+    }
+
+    #becker-flashcard-print-ui .label-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    #becker-flashcard-print-ui .label-row {
+      display: grid;
+      grid-template-columns: 160px 1fr;
+      gap: 10px;
+      align-items: center;
+    }
+
+    #becker-flashcard-print-ui .label-row .module-id {
+      font-weight: 800;
+      color: #1e3a8a;
+      font-size: 13px;
+    }
+
+    @media (max-width: 760px) {
+      #becker-flashcard-print-ui .grid,
+      #becker-flashcard-print-ui .label-row {
+        grid-template-columns: 1fr;
+      }
+    }
+  `;
+
+  const style = document.createElement("style");
+  style.textContent = css;
+
+  const root = document.createElement("div");
+  root.id = "becker-flashcard-print-ui";
+  root.innerHTML = `
+    <div class="panel">
+      <div class="header">
+        <div>
+          <h2>Becker Flashcard Print Builder</h2>
+          <div class="subtitle">
+            Upload resources JSON/TXT, pilih module berdasarkan urutan atau module ID, lalu generate HTML siap print.
+          </div>
+        </div>
+        <button class="close-btn" title="Close">×</button>
+      </div>
+
+      <div class="grid">
+        <div class="field">
+          <label>Upload resources (.json / .txt)</label>
+          <input id="bfp-file" type="file" accept=".json,.txt,application/json,text/plain" />
+          <div class="hint">File harus berisi object dengan property <b>modules</b>.</div>
+        </div>
+
+        <div class="field">
+          <label>Mode pilih module</label>
+          <select id="bfp-mode">
+            <option value="order">Berdasarkan urutan module</option>
+            <option value="id">Berdasarkan module ID</option>
+          </select>
+          <div class="hint" id="bfp-mode-hint">Contoh: 1 atau 1-5 atau 1,3,5-7</div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Module yang mau diprint</label>
+        <input id="bfp-selection" type="text" placeholder="Contoh: 1-5" disabled />
+        <div class="hint">
+          Mode urutan memakai posisi module di array resources. Mode ID memakai angka moduleId asli, misalnya 968,979.
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="field">
+          <label>Judul print</label>
+          <input id="bfp-title" type="text" value="Becker Flashcards" />
+        </div>
+
+        <div class="field">
+          <label>Opsi</label>
+          <select id="bfp-autoprint">
+            <option value="yes">Buka dialog print otomatis</option>
+            <option value="no">Jangan print otomatis</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="primary" id="bfp-generate" disabled>Generate HTML Print</button>
+        <button class="secondary" id="bfp-sample">Isi contoh pilihan</button>
+        <span class="pill" id="bfp-count">Belum ada resources</span>
+      </div>
+
+      <div class="label-panel" id="bfp-label-panel">
+        <h3>Label module untuk ditampilkan di hasil print</h3>
+        <div class="hint">
+          Isi nama module sesuai keinginan. Kalau dikosongkan, hasilnya tetap memakai format default: <b>Module XXX</b>.
+        </div>
+        <div class="label-list" id="bfp-label-list"></div>
+        <div class="actions">
+          <button class="primary" id="bfp-continue-print">Lanjut Generate Print</button>
+          <button class="secondary" id="bfp-cancel-label">Batal</button>
+        </div>
+      </div>
+
+      <div class="status" id="bfp-status">Upload resources dulu.</div>
+
+      <div class="module-preview" id="bfp-preview" style="display:none;"></div>
+    </div>
+  `;
+
+  document.head.appendChild(style);
+  document.body.appendChild(root);
+
+  const $ = (sel) => root.querySelector(sel);
+
+  const fileInput = $("#bfp-file");
+  const modeSelect = $("#bfp-mode");
+  const selectionInput = $("#bfp-selection");
+  const generateBtn = $("#bfp-generate");
+  const sampleBtn = $("#bfp-sample");
+  const statusBox = $("#bfp-status");
+  const previewBox = $("#bfp-preview");
+  const countPill = $("#bfp-count");
+  const titleInput = $("#bfp-title");
+  const autoPrintSelect = $("#bfp-autoprint");
+  const labelPanel = $("#bfp-label-panel");
+  const labelList = $("#bfp-label-list");
+  const continuePrintBtn = $("#bfp-continue-print");
+  const cancelLabelBtn = $("#bfp-cancel-label");
+
+  let resources = null;
+  let pendingSelectedModules = null;
+
+  $(".close-btn").addEventListener("click", () => root.remove());
+
+  function setStatus(message) {
+    statusBox.textContent = message;
+  }
+
+  function decodeHtmlEntities(str) {
+    const textarea = document.createElement("textarea");
+    textarea.innerHTML = str || "";
+    return textarea.value;
+  }
+
+  function parseJSONLoose(text) {
+    const cleaned = String(text || "")
+      .trim()
+      .replace(/^\uFEFF/, "");
+
+    try {
+      return JSON.parse(cleaned);
+    } catch (err1) {
+      const firstBrace = cleaned.indexOf("{");
+      const lastBrace = cleaned.lastIndexOf("}");
+      if (firstBrace >= 0 && lastBrace > firstBrace) {
+        const sliced = cleaned.slice(firstBrace, lastBrace + 1);
+        return JSON.parse(sliced);
+      }
+      throw err1;
+    }
+  }
+
+  function validateResources(data) {
+    if (!data || typeof data !== "object") {
+      throw new Error("Resources bukan object JSON.");
+    }
+
+    if (!Array.isArray(data.modules)) {
+      throw new Error("Resources harus punya property modules berupa array.");
+    }
+
+    data.modules.forEach((mod, index) => {
+      if (!mod || typeof mod !== "object") {
+        throw new Error(`Module urutan ${index + 1} tidak valid.`);
+      }
+
+      if (mod.id === undefined || mod.id === null) {
+        throw new Error(`Module urutan ${index + 1} tidak punya id.`);
+      }
+
+      if (!Array.isArray(mod.flashcardIds)) {
+        throw new Error(`Module ${mod.id} tidak punya flashcardIds berupa array.`);
+      }
+    });
+  }
+
+  function renderPreview() {
+    if (!resources) {
+      previewBox.style.display = "none";
+      previewBox.innerHTML = "";
+      return;
+    }
+
+    const rows = resources.modules.map((mod, i) => `
+      <tr>
+        <td>${i + 1}</td>
+        <td>${escapeHtml(String(mod.id))}</td>
+        <td>${mod.flashcardIds.length}</td>
+        <td>${escapeHtml(mod.flashcardIds.slice(0, 8).join(", "))}${mod.flashcardIds.length > 8 ? " ..." : ""}</td>
+      </tr>
+    `).join("");
+
+    previewBox.style.display = "block";
+    previewBox.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Urutan</th>
+            <th>Module ID</th>
+            <th>Jumlah</th>
+            <th>Flashcard IDs awal</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function parseNumberSelection(input) {
+    const text = String(input || "").trim();
+
+    if (!text) {
+      throw new Error("Pilihan module masih kosong.");
+    }
+
+    const result = [];
+    const parts = text.split(",").map(x => x.trim()).filter(Boolean);
+
+    for (const part of parts) {
+      if (/^\d+$/.test(part)) {
+        result.push(Number(part));
+        continue;
+      }
+
+      const rangeMatch = part.match(/^(\d+)\s*-\s*(\d+)$/);
+      if (rangeMatch) {
+        const start = Number(rangeMatch[1]);
+        const end = Number(rangeMatch[2]);
+
+        if (end < start) {
+          throw new Error(`Range tidak valid: ${part}`);
+        }
+
+        for (let n = start; n <= end; n++) {
+          result.push(n);
+        }
+        continue;
+      }
+
+      throw new Error(`Format pilihan tidak valid: ${part}`);
+    }
+
+    return [...new Set(result)];
+  }
+
+  function getSelectedModules() {
+    if (!resources) {
+      throw new Error("Upload resources dulu.");
+    }
+
+    const numbers = parseNumberSelection(selectionInput.value);
+    const mode = modeSelect.value;
+
+    if (mode === "order") {
+      return numbers.map(orderNumber => {
+        const mod = resources.modules[orderNumber - 1];
+        if (!mod) {
+          throw new Error(`Module urutan ${orderNumber} tidak ditemukan.`);
+        }
+        return {
+          orderNumber,
+          moduleId: mod.id,
+          flashcardIds: mod.flashcardIds,
+          label: ""
+        };
+      });
+    }
+
+    const moduleById = new Map(resources.modules.map((mod, index) => [
+      String(mod.id),
+      {
+        orderNumber: index + 1,
+        moduleId: mod.id,
+        flashcardIds: mod.flashcardIds,
+        label: ""
+      }
+    ]));
+
+    return numbers.map(moduleId => {
+      const mod = moduleById.get(String(moduleId));
+      if (!mod) {
+        throw new Error(`Module ID ${moduleId} tidak ditemukan.`);
+      }
+      return mod;
+    });
+  }
+
+  function showModuleLabelForm(selectedModules) {
+    pendingSelectedModules = selectedModules;
+
+    labelList.innerHTML = selectedModules.map((mod, index) => `
+      <div class="label-row">
+        <div class="module-id">Module ${escapeHtml(mod.moduleId)}</div>
+        <input
+          type="text"
+          class="bfp-module-label-input"
+          data-index="${index}"
+          placeholder="Kosongkan untuk default: Module ${escapeHtml(mod.moduleId)}"
+        />
+      </div>
+    `).join("");
+
+    labelPanel.style.display = "block";
+    labelPanel.scrollIntoView({ behavior: "smooth", block: "center" });
+
+    setStatus(
+      `Module sudah dipilih.\n` +
+      `Silakan isi label module yang ingin ditampilkan di hasil print, lalu klik "Lanjut Generate Print".`
+    );
+  }
+
+  function collectModuleLabels() {
+    if (!pendingSelectedModules) return [];
+
+    const inputs = [...labelList.querySelectorAll(".bfp-module-label-input")];
+
+    return pendingSelectedModules.map((mod, index) => {
+      const input = inputs.find(el => Number(el.dataset.index) === index);
+      const customLabel = input ? input.value.trim() : "";
+
+      return {
+        ...mod,
+        label: customLabel || `Module ${mod.moduleId}`
+      };
+    });
+  }
+
+  async function fetchFlashcard(id, moduleLabelById) {
+    const response = await fetch(`${BASE_URL}${encodeURIComponent(id)}`, {
+      credentials: "include",
+      headers: {
+        "accept": "application/json, text/plain, */*"
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Gagal fetch flashcard ${id}: HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    const content = data && data.content ? data.content : data;
+
+    if (!content) {
+      throw new Error(`Format response flashcard ${id} tidak dikenali.`);
+    }
+
+    const moduleId = content.moduleId ?? "";
+
+    return {
+      id: content.id ?? id,
+      flashcardNumber: content.flashcardNumber ?? "",
+      moduleId,
+      moduleLabel: moduleLabelById.get(String(moduleId)) || `Module ${moduleId}`,
+      body: decodeHtmlEntities(content.body || ""),
+      explanation: decodeHtmlEntities(content.explanation || "")
+    };
+  }
+
+  function buildPrintableHtml({ title, flashcards, failed, autoPrint }) {
+    const cardsHtml = flashcards.map((card, index) => `
+      <article class="flashcard">
+        <div class="card-head">
+          <div class="number">${index + 1}</div>
+          <div>
+            <div class="meta">
+              ${escapeHtml(card.moduleLabel)}
+              ${card.flashcardNumber ? ` · #${escapeHtml(card.flashcardNumber)}` : ""}
+            </div>
+          </div>
+        </div>
+
+        <div class="qa-grid">
+          <section class="question">
+            <div class="section-label">Question</div>
+            <div class="content">${card.body || "<p><em>Body kosong.</em></p>"}</div>
+          </section>
+
+          <section class="answer">
+            <div class="section-label">Explanation</div>
+            <div class="content">${card.explanation || "<p><em>Explanation kosong.</em></p>"}</div>
+          </section>
+        </div>
+      </article>
+    `).join("");
+
+    const failedHtml = failed.length ? `
+      <section class="failed">
+        <h2>Flashcard gagal diambil</h2>
+        <ul>
+          ${failed.map(item => `<li><b>${escapeHtml(item.id)}</b>: ${escapeHtml(item.error)}</li>`).join("")}
+        </ul>
+      </section>
+    ` : "";
+
+    return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>${escapeHtml(title)}</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 12mm;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      background: #ffffff;
+      color: #111827;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 11pt;
+      line-height: 1.42;
+    }
+
+    body {
+      padding: 0;
+    }
+
+    .print-toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      gap: 10px;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      background: #111827;
+      color: white;
+      box-shadow: 0 2px 10px rgba(0,0,0,.18);
+    }
+
+    .print-toolbar button {
+      border: 0;
+      border-radius: 10px;
+      padding: 9px 13px;
+      background: #ffffff;
+      color: #111827;
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    .document {
+      padding: 16px;
+      max-width: 1120px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: 22pt;
+      line-height: 1.2;
+    }
+
+    .title-only {
+      margin-bottom: 14px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid #111827;
+    }
+
+    .flashcard {
+      page-break-inside: avoid;
+      break-inside: avoid;
+      display: block;
+      border: 1.5px solid #111827;
+      border-radius: 10px;
+      overflow: hidden;
+      margin: 0 0 10px;
+      background: #ffffff;
+    }
+
+    .card-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-bottom: 1px solid #d1d5db;
+      background: #f3f4f6;
+    }
+
+    .number {
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #ffffff;
+      background: #111827;
+      font-weight: 700;
+      flex: 0 0 auto;
+    }
+
+    .meta {
+      font-size: 9.8pt;
+      color: #374151;
+      font-weight: 700;
+    }
+
+    .qa-grid {
+      display: grid;
+      grid-template-columns: 1fr 1.1fr;
+      min-height: 80px;
+    }
+
+    .question,
+    .answer {
+      padding: 10px 12px;
+    }
+
+    .question {
+      border-right: 1px solid #d1d5db;
+    }
+
+    .section-label {
+      display: inline-block;
+      margin-bottom: 7px;
+      padding: 3px 7px;
+      border: 1px solid #9ca3af;
+      border-radius: 999px;
+      font-size: 8.5pt;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      color: #374151;
+      background: #ffffff;
+    }
+
+    .content > :first-child {
+      margin-top: 0;
+    }
+
+    .content > :last-child {
+      margin-bottom: 0;
+    }
+
+    p {
+      margin: 0 0 7px;
+    }
+
+    ol,
+    ul {
+      margin-top: 0;
+      margin-bottom: 7px;
+      padding-left: 22px;
+    }
+
+    li {
+      margin-bottom: 3px;
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 6px 0;
+      font-size: 9.5pt;
+    }
+
+    th,
+    td {
+      border: 1px solid #9ca3af;
+      padding: 5px 6px;
+      vertical-align: top;
+    }
+
+    img {
+      max-width: 100%;
+      height: auto;
+    }
+
+    .failed {
+      page-break-inside: avoid;
+      break-inside: avoid;
+      border: 1px solid #dc2626;
+      background: #fef2f2;
+      padding: 12px;
+      margin-top: 16px;
+      border-radius: 10px;
+      color: #7f1d1d;
+    }
+
+    .failed h2 {
+      margin: 0 0 8px;
+      font-size: 14pt;
+    }
+
+    @media print {
+      .print-toolbar {
+        display: none !important;
+      }
+
+      .document {
+        padding: 0;
+        max-width: none;
+      }
+
+      .title-only {
+        margin-bottom: 8mm;
+      }
+
+      .flashcard {
+        margin-bottom: 4mm;
+        border-radius: 6px;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+    }
+
+    @media screen {
+      body {
+        background: #e5e7eb;
+      }
+
+      .document {
+        background: #ffffff;
+        min-height: 100vh;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="print-toolbar">
+    <div>${escapeHtml(title)} · ${flashcards.length} flashcards</div>
+    <button onclick="window.print()">Print</button>
+  </div>
+
+  <main class="document">
+    <header class="title-only">
+      <h1>${escapeHtml(title)}</h1>
+    </header>
+
+    ${cardsHtml || "<p>Tidak ada flashcard yang berhasil dimuat.</p>"}
+    ${failedHtml}
+  </main>
+
+  ${autoPrint ? `
+  <script>
+    window.addEventListener("load", () => {
+      setTimeout(() => window.print(), 500);
+    });
+  <\/script>` : ""}
+</body>
+</html>`;
+  }
+
+  async function generatePrintHtml(selectedModules) {
+    let printWindow = null;
+
+    try {
+      const moduleLabelById = new Map(
+        selectedModules.map(mod => [String(mod.moduleId), mod.label || `Module ${mod.moduleId}`])
+      );
+
+      const ids = selectedModules.flatMap(mod => mod.flashcardIds);
+      const uniqueIds = [...new Set(ids.map(String))];
+
+      if (!uniqueIds.length) {
+        throw new Error("Module yang dipilih tidak punya flashcardIds.");
+      }
+
+      printWindow = window.open("", "_blank");
+      if (!printWindow) {
+        throw new Error("Popup diblokir browser. Izinkan popup untuk halaman ini, lalu coba lagi.");
+      }
+
+      printWindow.document.open();
+      printWindow.document.write(`
+        <!doctype html>
+        <html>
+          <head>
+            <title>Loading Flashcards...</title>
+            <style>
+              body {
+                font-family: Arial, sans-serif;
+                padding: 32px;
+                line-height: 1.5;
+              }
+            </style>
+          </head>
+          <body>
+            <h1>Mengambil flashcards...</h1>
+            <p>Tab ini akan otomatis berubah menjadi halaman print setelah selesai.</p>
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
+
+      generateBtn.disabled = true;
+      continuePrintBtn.disabled = true;
+
+      const flashcards = [];
+      const failed = [];
+
+      for (let i = 0; i < uniqueIds.length; i++) {
+        const id = uniqueIds[i];
+        setStatus(`Mengambil flashcard ${i + 1}/${uniqueIds.length}: ${id}`);
+
+        try {
+          const card = await fetchFlashcard(id, moduleLabelById);
+          flashcards.push(card);
+        } catch (err) {
+          failed.push({
+            id,
+            error: err.message || String(err)
+          });
+        }
+      }
+
+      const title = titleInput.value.trim() || "Becker Flashcards";
+      const autoPrint = autoPrintSelect.value === "yes";
+
+      const html = buildPrintableHtml({
+        title,
+        flashcards,
+        failed,
+        autoPrint
+      });
+
+      printWindow.document.open();
+      printWindow.document.write(html);
+      printWindow.document.close();
+
+      labelPanel.style.display = "none";
+      pendingSelectedModules = null;
+
+      setStatus(
+        `Selesai.\n` +
+        `Flashcard berhasil: ${flashcards.length}\n` +
+        `Flashcard gagal: ${failed.length}`
+      );
+    } catch (err) {
+      if (printWindow && !printWindow.closed) {
+        printWindow.close();
+      }
+
+      setStatus(`Error: ${err.message || String(err)}`);
+    } finally {
+      generateBtn.disabled = !resources;
+      continuePrintBtn.disabled = false;
+    }
+  }
+
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files && fileInput.files[0];
+
+    if (!file) return;
+
+    try {
+      setStatus(`Membaca file: ${file.name}`);
+      const text = await file.text();
+      const data = parseJSONLoose(text);
+      validateResources(data);
+
+      resources = data;
+
+      selectionInput.disabled = false;
+      generateBtn.disabled = false;
+      selectionInput.value = "1";
+      labelPanel.style.display = "none";
+      pendingSelectedModules = null;
+
+      const totalModules = resources.modules.length;
+      const totalFlashcards = resources.modules.reduce((sum, mod) => sum + mod.flashcardIds.length, 0);
+
+      countPill.textContent = `${totalModules} modules · ${totalFlashcards} flashcards`;
+      setStatus(
+        `Resources berhasil dibaca.\n` +
+        `Total modules: ${totalModules}\n` +
+        `Total flashcards: ${totalFlashcards}\n\n` +
+        `Silakan pilih module, contoh: 1-5 atau 968,979 sesuai mode.`
+      );
+
+      renderPreview();
+    } catch (err) {
+      resources = null;
+      selectionInput.disabled = true;
+      generateBtn.disabled = true;
+      labelPanel.style.display = "none";
+      pendingSelectedModules = null;
+      previewBox.style.display = "none";
+      countPill.textContent = "Resources error";
+      setStatus(`Error membaca resources: ${err.message || String(err)}`);
+    }
+  });
+
+  modeSelect.addEventListener("change", () => {
+    labelPanel.style.display = "none";
+    pendingSelectedModules = null;
+
+    if (modeSelect.value === "order") {
+      selectionInput.placeholder = "Contoh: 1-5 atau 1,3,5-7";
+      $("#bfp-mode-hint").textContent = "Contoh: 1 atau 1-5 atau 1,3,5-7";
+      if (resources) selectionInput.value = "1";
+    } else {
+      selectionInput.placeholder = "Contoh: 968,979";
+      $("#bfp-mode-hint").textContent = "Contoh: 968 atau 968,979";
+      if (resources && resources.modules[0]) selectionInput.value = String(resources.modules[0].id);
+    }
+  });
+
+  sampleBtn.addEventListener("click", () => {
+    labelPanel.style.display = "none";
+    pendingSelectedModules = null;
+
+    if (modeSelect.value === "order") {
+      selectionInput.value = "1-5";
+    } else if (resources && resources.modules.length >= 2) {
+      selectionInput.value = resources.modules.slice(0, 2).map(m => m.id).join(",");
+    } else {
+      selectionInput.value = "968,979";
+    }
+  });
+
+  selectionInput.addEventListener("input", () => {
+    labelPanel.style.display = "none";
+    pendingSelectedModules = null;
+  });
+
+  generateBtn.addEventListener("click", () => {
+    try {
+      const selectedModules = getSelectedModules();
+      showModuleLabelForm(selectedModules);
+    } catch (err) {
+      setStatus(`Error: ${err.message || String(err)}`);
+    }
+  });
+
+  continuePrintBtn.addEventListener("click", () => {
+    const selectedModules = collectModuleLabels();
+    generatePrintHtml(selectedModules);
+  });
+
+  cancelLabelBtn.addEventListener("click", () => {
+    labelPanel.style.display = "none";
+    pendingSelectedModules = null;
+    setStatus("Generate dibatalkan. Silakan ubah pilihan module atau klik Generate lagi.");
+  });
+
+  console.log("Becker Flashcard Print Builder siap digunakan.");
+})();
