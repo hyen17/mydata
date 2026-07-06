@@ -1,0 +1,358 @@
+(function () {
+  const API_BASE = "https://www.levelupbootcamps.com/wp-json/wp/v2/psw/";
+
+  const original = {
+    html: document.documentElement.innerHTML,
+    title: document.title,
+    url: location.href
+  };
+
+  const old = document.getElementById("pswFetcherUI");
+  if (old) old.remove();
+
+  const oldStyle = document.getElementById("pswFetcherStyle");
+  if (oldStyle) oldStyle.remove();
+
+  const style = document.createElement("style");
+  style.id = "pswFetcherStyle";
+  style.textContent = `
+    #pswFetcherUI {
+      position: fixed;
+      top: 80px;
+      right: 30px;
+      width: 390px;
+      background: #ffffff;
+      color: #222;
+      border-radius: 14px;
+      box-shadow: 0 18px 50px rgba(0,0,0,.28);
+      z-index: 2147483647;
+      font-family: Arial, sans-serif;
+      overflow: hidden;
+      border: 1px solid #ddd;
+    }
+    #pswFetcherHeader {
+      padding: 14px 16px;
+      background: linear-gradient(135deg,#667eea,#764ba2);
+      color: #fff;
+      font-weight: 700;
+      cursor: move;
+      user-select: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    #pswFetcherBody {
+      padding: 14px;
+    }
+    #pswFetcherUI input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 11px;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+      margin-bottom: 10px;
+      font-size: 13px;
+    }
+    #pswFetcherUI button {
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-weight: 700;
+      cursor: pointer;
+      margin: 4px 3px 4px 0;
+    }
+    .psw-primary { background:#667eea; color:white; }
+    .psw-success { background:#28a745; color:white; }
+    .psw-danger { background:#dc3545; color:white; }
+    .psw-gray { background:#e9ecef; color:#222; }
+    #pswStatus {
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: 8px;
+      background: #f6f7fb;
+      font-size: 12px;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+    #pswOpenBtn {
+      display: none;
+    }
+    #pswCloseBtn {
+      background: rgba(255,255,255,.2);
+      color: #fff;
+      border-radius: 50%;
+      width: 28px;
+      height: 28px;
+      padding: 0;
+    }
+    .psw-rendered-title {
+      font-family: Arial, sans-serif;
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1.3;
+      margin: 24px auto 24px auto;
+      max-width: 1100px;
+      padding: 0 20px;
+      color: #111;
+    }
+  `;
+  document.head.appendChild(style);
+
+  const ui = document.createElement("div");
+  ui.id = "pswFetcherUI";
+  ui.innerHTML = `
+    <div id="pswFetcherHeader">
+      <span>PSW Content Fetcher</span>
+      <button id="pswCloseBtn">×</button>
+    </div>
+    <div id="pswFetcherBody">
+      <input id="pswLinkInput" type="url" placeholder="Masukkan link halaman post..." />
+      <button class="psw-primary" id="pswProcessBtn">Proses</button>
+      <button class="psw-success" id="pswOpenBtn">Buka di Halaman Ini</button>
+      <button class="psw-danger" id="pswResetBtn">Reset</button>
+      <button class="psw-gray" id="pswRestoreBtn">Restore Original</button>
+      <div id="pswStatus">Masukkan link, lalu klik Proses.</div>
+    </div>
+  `;
+  document.body.appendChild(ui);
+
+  let fetchedContent = "";
+  let fetchedPostId = "";
+  let fetchedTitle = "";
+
+  const $ = (id) => document.getElementById(id);
+
+  function setStatus(msg, isError = false) {
+    $("pswStatus").style.background = isError ? "#ffe8e8" : "#f6f7fb";
+    $("pswStatus").style.color = isError ? "#b00020" : "#222";
+    $("pswStatus").innerHTML = msg;
+  }
+
+  function decodeHtml(text) {
+    const textarea = document.createElement("textarea");
+    textarea.innerHTML = text;
+    return textarea.value;
+  }
+
+  function escapeHtml(text) {
+    return String(text || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function formatOgTitle(ogTitle) {
+    if (!ogTitle) return "";
+
+    let title = decodeHtml(ogTitle).trim();
+
+    // Contoh:
+    // 6/30/26 - Fixed Inc - Credit Strategies Part II - LevelUp - Level 3 CFA® Exam Prep
+    const parts = title.split(" - ").map(x => x.trim()).filter(Boolean);
+
+    if (parts.length < 2) return title;
+
+    const datePart = parts[0];
+    const dateMatch = datePart.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+
+    if (!dateMatch) {
+      return parts.slice(0, 3).join(" - ");
+    }
+
+    let month = dateMatch[1].padStart(2, "0");
+    let day = dateMatch[2].padStart(2, "0");
+    let year = dateMatch[3];
+
+    if (year.length === 2) {
+      year = Number(year) >= 70 ? "19" + year : "20" + year;
+    }
+
+    const formattedDate = `${year}-${month}-${day}`;
+
+    // Ambil hanya:
+    // Date - Category - Topic
+    // Buang "- LevelUp - Level 3 CFA® Exam Prep"
+    return [formattedDate, parts[1], parts[2]].filter(Boolean).join(" - ");
+  }
+
+  async function fetchTextHidden(url) {
+    const res = await fetch(url, {
+      method: "GET",
+      credentials: "omit",
+      cache: "no-store"
+    });
+
+    if (!res.ok) {
+      throw new Error(`Gagal membuka link. HTTP ${res.status}`);
+    }
+
+    return await res.text();
+  }
+
+  async function fetchJsonHidden(url) {
+    const res = await fetch(url, {
+      method: "GET",
+      credentials: "omit",
+      cache: "no-store"
+    });
+
+    if (!res.ok) {
+      throw new Error(`Gagal membuka API. HTTP ${res.status}`);
+    }
+
+    return await res.json();
+  }
+
+  function findPostId(html) {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+
+    const el = doc.querySelector('[data-elementor-type="single-post"][class*="post-"]')
+      || doc.querySelector('[class*="post-"]');
+
+    if (!el) return null;
+
+    const classText = el.className || "";
+    const match = classText.match(/\bpost-(\d+)\b/);
+
+    return match ? match[1] : null;
+  }
+
+  function getOgTitleFromApi(json) {
+    return (
+      json.og_title ||
+      json.yoast_head_json?.og_title ||
+      json.rank_math_head_json?.og_title ||
+      json.title?.rendered ||
+      ""
+    );
+  }
+
+  async function processLink() {
+    const link = $("pswLinkInput").value.trim();
+
+    fetchedContent = "";
+    fetchedPostId = "";
+    fetchedTitle = "";
+    $("pswOpenBtn").style.display = "none";
+
+    if (!link) {
+      setStatus("Link masih kosong.", true);
+      return;
+    }
+
+    try {
+      new URL(link);
+    } catch {
+      setStatus("Format link tidak valid.", true);
+      return;
+    }
+
+    try {
+      setStatus("Membuka link di background...");
+
+      const html = await fetchTextHidden(link);
+      const postId = findPostId(html);
+
+      if (!postId) {
+        throw new Error("Tidak menemukan class post-ID seperti post-27781.");
+      }
+
+      fetchedPostId = postId;
+      const apiUrl = API_BASE + postId;
+
+      setStatus(`Post ID ditemukan: <b>${postId}</b><br>Mengambil content.rendered dan og_title dari API...`);
+
+      const json = await fetchJsonHidden(apiUrl);
+
+      if (!json.content || !json.content.rendered) {
+        throw new Error("Field content.rendered tidak ditemukan di API.");
+      }
+
+      const rawTitle = getOgTitleFromApi(json);
+      fetchedTitle = formatOgTitle(rawTitle);
+      fetchedContent = decodeHtml(json.content.rendered);
+
+      $("pswOpenBtn").style.display = "inline-block";
+      setStatus(`
+        Berhasil mengambil konten.<br>
+        Post ID: <b>${postId}</b><br>
+        Title: <b>${escapeHtml(fetchedTitle || "-")}</b><br>
+        API: <code>${apiUrl}</code><br><br>
+        Klik <b>Buka di Halaman Ini</b>.
+      `);
+    } catch (err) {
+      setStatus("Error: " + err.message, true);
+      console.error(err);
+    }
+  }
+
+  function openInCurrentPage() {
+    if (!fetchedContent) {
+      setStatus("Belum ada konten. Klik Proses dulu.", true);
+      return;
+    }
+
+    const uiNode = $("pswFetcherUI");
+    const styleNode = $("pswFetcherStyle");
+
+    const titleHtml = fetchedTitle
+      ? `<h1 class="psw-rendered-title">${escapeHtml(fetchedTitle)}</h1>`
+      : "";
+
+    document.body.innerHTML = titleHtml + fetchedContent;
+
+    document.body.appendChild(styleNode);
+    document.body.appendChild(uiNode);
+
+    setStatus(`Konten post <b>${fetchedPostId}</b> sudah dibuka di halaman ini. UI tetap aktif.`);
+  }
+
+  function resetTool() {
+    $("pswLinkInput").value = "";
+    fetchedContent = "";
+    fetchedPostId = "";
+    fetchedTitle = "";
+    $("pswOpenBtn").style.display = "none";
+    setStatus("Reset selesai. Masukkan link baru.");
+  }
+
+  function restoreOriginal() {
+    document.documentElement.innerHTML = original.html;
+    document.title = original.title;
+  }
+
+  $("pswProcessBtn").addEventListener("click", processLink);
+  $("pswOpenBtn").addEventListener("click", openInCurrentPage);
+  $("pswResetBtn").addEventListener("click", resetTool);
+  $("pswRestoreBtn").addEventListener("click", restoreOriginal);
+  $("pswCloseBtn").addEventListener("click", () => ui.remove());
+
+  $("pswLinkInput").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") processLink();
+  });
+
+  let dragging = false;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  $("pswFetcherHeader").addEventListener("mousedown", function (e) {
+    dragging = true;
+    offsetX = e.clientX - ui.offsetLeft;
+    offsetY = e.clientY - ui.offsetTop;
+  });
+
+  document.addEventListener("mousemove", function (e) {
+    if (!dragging) return;
+    ui.style.left = e.clientX - offsetX + "px";
+    ui.style.top = e.clientY - offsetY + "px";
+    ui.style.right = "auto";
+  });
+
+  document.addEventListener("mouseup", function () {
+    dragging = false;
+  });
+
+  console.log("PSW Content Fetcher loaded with formatted og_title.");
+})();
