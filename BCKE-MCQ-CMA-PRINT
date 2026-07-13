@@ -1,6 +1,6 @@
 (() => {
   // ================================================================
-  // JSON -> HTML Converter (Becker per-category JSON) v3.0
+  // JSON -> HTML Converter (Becker per-category JSON) v3.2
   // - Tidak combine/split category
   // - Setiap file JSON menghasilkan:
   //   <nama-json> - Questions.html
@@ -406,7 +406,7 @@
   `;
 
   panel.innerHTML = `
-    <div style="font-weight:700; font-size:15px; margin-bottom:8px;">Becker JSON → HTML v3.0</div>
+    <div style="font-weight:700; font-size:15px; margin-bottom:8px;">Becker JSON → HTML v3.2</div>
     <div style="font-size:13px; margin-bottom:8px;">Upload file JSON per kategori. Nama HTML otomatis mengikuti nama JSON.</div>
 
     <input id="fileInput" type="file" accept=".json,.txt,application/json" multiple style="width:100%; margin-bottom:10px;">
@@ -595,8 +595,24 @@
       .er-question .repQuestion .repo_indent_level3{ margin-left:30px; }
       .er-question .repQuestion .repo_border_bottom{ border-bottom:1px solid #001; }
       .er-question .repQuestion .repo_border_double_bottom{ border-bottom:3px double #001; }
-      .er-question .repQuestion table td p.dollarsign{ position:relative; padding-left:.625rem; }
-      .er-question .repQuestion table td p.dollarsign:before{ position:absolute; left:0; content:"$"; }
+      /* v3.2: cegah simbol currency dari class dollarsign menumpuk dengan angka.
+         Perubahan ini hanya menyentuh <p class="dollarsign">, tidak mengubah layout table lain. */
+      .er-question .repQuestion table td p.dollarsign{
+        position:relative !important;
+        display:inline-block !important;
+        min-width:7.25em !important;
+        padding-left:1em !important;
+        padding-right:0 !important;
+        box-sizing:border-box !important;
+        text-align:right !important;
+        white-space:nowrap !important;
+      }
+      .er-question .repQuestion table td p.dollarsign:before{
+        position:absolute !important;
+        left:0 !important;
+        right:auto !important;
+        content:"$";
+      }
       .er-question .repQuestion table tr.drrow>td:nth-child(2){ text-align:left; }
       .er-question .repQuestion table tr.drrow>td:nth-child(n+3){ padding-left:.8125rem; }
       .er-question .repQuestion table tr.crrow>td:nth-child(2){ text-align:left; padding-left:1.4375rem; }
@@ -946,7 +962,7 @@
     if (!enabled) return '';
     return `<script>
 (function () {
-  var STYLE_ID = 'becker-runtime-overflow-wrap-style-v31';
+  var STYLE_ID = 'becker-runtime-overflow-wrap-style-v32';
   var PREP_CLASS = 'becker-overflow-wrap-prep';
 
   function ensureRuntimeStyle() {
