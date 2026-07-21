@@ -1,0 +1,98 @@
+(function() {
+    if (document.getElementById('blogger-img-ui')) {
+        alert('UI Ekstraktor sudah aktif di pojok kanan bawah!');
+        return;
+    }
+
+    window.bloggerImgMemory = new Set();
+
+    const ui = document.createElement('div');
+    ui.id = 'blogger-img-ui';
+    ui.style.cssText = 'position:fixed; bottom:20px; right:20px; width:320px; background:#f9f9f9; border:1px solid #ccc; box-shadow:0 8px 16px rgba(0,0,0,0.2); z-index:999999; font-family:Arial, sans-serif; padding:15px; border-radius:8px; color: #333;';
+
+    ui.innerHTML = `
+        <h4 style="margin:0 0 12px 0; font-size:14px; border-bottom:2px solid #ddd; padding-bottom:8px; text-align:center;">Blogger Image Extractor (/s0/)</h4>
+        
+        <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
+            <button id="btn-extract-img" style="background:#007BFF; color:white; border:none; padding:8px; cursor:pointer; border-radius:4px; font-size:12px; width:48%; font-weight:bold;">Ekstrak Batch Baru</button>
+            <button id="btn-reset-img" style="background:#dc3545; color:white; border:none; padding:8px; cursor:pointer; border-radius:4px; font-size:12px; width:48%; font-weight:bold;">Reset Memori</button>
+        </div>
+        
+        <textarea id="output-img-urls" style="width:100%; height:120px; font-size:11px; box-sizing:border-box; margin-bottom:10px; padding:5px; border:1px solid #ccc; border-radius:4px; resize:none;" readonly placeholder="Hasil link /s0/ akan muncul di sini..."></textarea>
+        
+        <button id="btn-copy-img" style="background:#28a745; color:white; border:none; padding:10px; cursor:pointer; border-radius:4px; font-size:14px; width:100%; font-weight:bold;">Copy ke Clipboard</button>
+        
+        <div id="status-msg-img" style="font-size:12px; margin-top:10px; text-align:center; display:none; font-weight:bold;"></div>
+    `;
+
+    document.body.appendChild(ui);
+
+    function showStatus(text, color) {
+        const statusEl = document.getElementById('status-msg-img');
+        statusEl.textContent = text;
+        statusEl.style.color = color;
+        statusEl.style.display = "block";
+        setTimeout(() => { statusEl.style.display = 'none'; }, 3500);
+    }
+
+    document.getElementById('btn-extract-img').addEventListener('click', () => {
+        let content = "";
+        
+        const iframe = document.querySelector('iframe.editable');
+        if (iframe && iframe.contentDocument) {
+            content += iframe.contentDocument.body.innerHTML + " ";
+        }
+        
+        const textareas = document.querySelectorAll('textarea');
+        textareas.forEach(ta => content += ta.value + " ");
+        
+        content += document.body.innerHTML;
+
+        const urlRegex = /https:\/\/(?:blogger\.googleusercontent\.com\/img\/b\/|[^"'\s<>]+\.bp\.blogspot\.com\/)[^\s]+/gi;
+        const matches = content.match(urlRegex) || [];
+
+        const newLinks = new Set();
+        
+        matches.forEach(url => {
+            // PERBAIKAN: Menambahkan karakter backslash (\\) ke dalam regex pemotong
+            let cleanUrl = url.split(/["',{}<>\s\\]/)[0];
+            cleanUrl = cleanUrl.replace(/&quot;/g, '');
+            
+            let originalUrl = cleanUrl.replace(/\/(s\d+|w\d+-h\d+[^/]*)\//, '/s0/');
+            
+            if (originalUrl.includes('/s0/') && !window.bloggerImgMemory.has(originalUrl)) {
+                newLinks.add(originalUrl);
+                window.bloggerImgMemory.add(originalUrl); 
+            }
+        });
+
+        const outputEl = document.getElementById('output-img-urls');
+
+        if (newLinks.size === 0) {
+            outputEl.value = "";
+            showStatus("Tidak ada gambar baru di batch ini.", "#dc3545");
+        } else {
+            outputEl.value = Array.from(newLinks).join('\n');
+            showStatus(`Berhasil menemukan ${newLinks.size} gambar baru!`, "#28a745");
+        }
+    });
+
+    document.getElementById('btn-reset-img').addEventListener('click', () => {
+        window.bloggerImgMemory.clear();
+        document.getElementById('output-img-urls').value = "";
+        showStatus("Memori batch di-reset menjadi 0.", "#007BFF");
+    });
+
+    document.getElementById('btn-copy-img').addEventListener('click', () => {
+        const outputEl = document.getElementById('output-img-urls');
+        if (!outputEl.value) {
+            showStatus("Tidak ada link untuk di-copy!", "#dc3545");
+            return;
+        }
+        outputEl.select();
+        document.execCommand('copy');
+        showStatus("Link berhasil disalin ke clipboard!", "#28a745");
+    });
+
+    console.log("UI Blogger Image Extractor berhasil dimuat.");
+})();
