@@ -1,0 +1,120 @@
+(function() {
+    let iframe = document.querySelector('iframe[src*="vimeo.com/video/"]');
+    
+    // Fungsi utama untuk injeksi / ganti video
+    function updateVimeoId(videoId) {
+        const cleanId = videoId.trim();
+        if (!cleanId) return;
+
+        const vimeoSrc = `https://player.vimeo.com/video/${cleanId}?dnt=1&app_id=122963&autoplay=1`;
+
+        // JIKA IFRAME BELUM ADA -> BUAT SENDIRI
+        if (!iframe || !document.contains(iframe)) {
+            // Cari kontainer target di web Divi / WordPress
+            const container = document.querySelector('.fluid-width-video-wrapper') 
+                           || document.querySelector('.et_pb_video_box') 
+                           || document.querySelector('.et_pb_video');
+
+            iframe = document.createElement('iframe');
+            iframe.src = vimeoSrc;
+            iframe.style.width = '100%';
+            iframe.style.height = '100%';
+            iframe.style.border = '0';
+            iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture');
+
+            if (container) {
+                container.innerHTML = ''; // Bersihkan isi lama jika ada
+                container.appendChild(iframe);
+                console.log('[Vimeo Injector] Iframe baru berhasil disuntikkan ke dalam halaman.');
+            } else {
+                // JIKA TIDAK ADA CONTAINER SAMA SEKALI -> BUAT FLOATING PLAYER
+                const floatBox = document.createElement('div');
+                floatBox.id = 'vimeo-floating-player';
+                floatBox.style.cssText = `
+                    position: fixed;
+                    top: 50px;
+                    right: 20px;
+                    width: 480px;
+                    height: 270px;
+                    z-index: 999998;
+                    box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+                    border-radius: 8px;
+                    overflow: hidden;
+                    background: #000;
+                `;
+                floatBox.appendChild(iframe);
+                document.body.appendChild(floatBox);
+                console.log('[Vimeo Injector] Container tidak ditemukan. Membuat Floating Player.');
+            }
+        } else {
+            // JIKA IFRAME SUDAH ADA -> CUKUP GANTI SRC
+            iframe.src = vimeoSrc;
+        }
+
+        console.log(`[Vimeo Injector] Video ID diubah ke: ${cleanId}`);
+    }
+
+    // 1. Minta ID pertama kali via prompt
+    const initialId = prompt('Masukkan Vimeo Video ID (contoh: 753095678):', '753095678');
+    if (initialId) {
+        updateVimeoId(initialId);
+    }
+
+    // 2. Buat Panel Kontrol Mengambang
+    if (!document.getElementById('vimeo-injector-panel')) {
+        const panel = document.createElement('div');
+        panel.id = 'vimeo-injector-panel';
+        panel.style.cssText = `
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 999999;
+            background: #1e1e2e;
+            color: #fff;
+            padding: 12px 16px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            font-family: sans-serif;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        `;
+
+        panel.innerHTML = `
+            <span style="font-size: 12px; font-weight: bold;">Vimeo ID:</span>
+            <input type="text" id="vimeo-id-input" placeholder="753095678" style="
+                padding: 6px 10px;
+                border: 1px solid #444;
+                border-radius: 4px;
+                background: #2b2b3b;
+                color: #fff;
+                width: 120px;
+                outline: none;
+            " />
+            <button id="vimeo-btn-change" style="
+                padding: 6px 12px;
+                background: #00adef;
+                color: #fff;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-weight: bold;
+            ">Ganti</button>
+        `;
+
+        document.body.appendChild(panel);
+
+        const input = document.getElementById('vimeo-id-input');
+        const btn = document.getElementById('vimeo-btn-change');
+
+        btn.addEventListener('click', () => {
+            if (input.value) updateVimeoId(input.value);
+        });
+
+        input.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && input.value) {
+                updateVimeoId(input.value);
+            }
+        });
+    }
+})();
