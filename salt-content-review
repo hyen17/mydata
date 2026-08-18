@@ -1,0 +1,350 @@
+(function() {
+  const existingUI = document.getElementById('salt-exporter-panel');
+  if (existingUI) existingUI.remove();
+
+  // 1. Container UI
+  const panel = document.createElement('div');
+  panel.id = 'salt-exporter-panel';
+  panel.style.position = 'fixed';
+  panel.style.bottom = '20px';
+  panel.style.right = '20px';
+  panel.style.zIndex = '999999';
+  panel.style.backgroundColor = '#ffffff';
+  panel.style.border = '2px solid #334155';
+  panel.style.borderRadius = '8px';
+  panel.style.padding = '14px 16px';
+  panel.style.boxShadow = '0 6px 16px rgba(0,0,0,0.18)';
+  panel.style.display = 'flex';
+  panel.style.flexDirection = 'column';
+  panel.style.gap = '10px';
+  panel.style.width = '280px';
+  panel.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif';
+
+  // Input Teks Footer Cetak
+  const footerLabel = document.createElement('label');
+  footerLabel.textContent = 'Footer Cetak:';
+  footerLabel.style.fontSize = '12px';
+  footerLabel.style.fontWeight = 'bold';
+  footerLabel.style.color = '#334155';
+
+  const footerInput = document.createElement('input');
+  footerInput.type = 'text';
+  footerInput.value = 'Salt Solutions - CFA 2027 Level III';
+  footerInput.placeholder = 'Teks footer...';
+  footerInput.style.padding = '6px 8px';
+  footerInput.style.fontSize = '12px';
+  footerInput.style.border = '1px solid #cbd5e1';
+  footerInput.style.borderRadius = '4px';
+  footerInput.style.outline = 'none';
+
+  // 2. Tombol Print / Render
+  const btn = document.createElement('button');
+  btn.textContent = 'Fetch & Process';
+  btn.style.backgroundColor = '#1e293b';
+  btn.style.color = '#ffffff';
+  btn.style.border = 'none';
+  btn.style.padding = '9px 16px';
+  btn.style.fontSize = '13px';
+  btn.style.fontWeight = 'bold';
+  btn.style.borderRadius = '4px';
+  btn.style.cursor = 'pointer';
+
+  // Status Info
+  const status = document.createElement('div');
+  status.textContent = 'Ready';
+  status.style.fontSize = '11px';
+  status.style.color = '#64748b';
+  status.style.textAlign = 'center';
+
+  // Container Khusus Hasil Video ID
+  const videoResultBox = document.createElement('div');
+  videoResultBox.id = 'video-result-box';
+  videoResultBox.style.display = 'none';
+  videoResultBox.style.flexDirection = 'column';
+  videoResultBox.style.gap = '6px';
+  videoResultBox.style.padding = '10px';
+  videoResultBox.style.backgroundColor = '#f8fafc';
+  videoResultBox.style.border = '1px solid #e2e8f0';
+  videoResultBox.style.borderRadius = '6px';
+  videoResultBox.style.marginTop = '4px';
+
+  panel.appendChild(footerLabel);
+  panel.appendChild(footerInput);
+  panel.appendChild(btn);
+  panel.appendChild(status);
+  panel.appendChild(videoResultBox);
+  document.body.appendChild(panel);
+
+  // 3. Logic Fetch & Process
+  btn.addEventListener('click', async () => {
+    try {
+      btn.disabled = true;
+      btn.style.backgroundColor = '#94a3b8';
+      status.textContent = 'Fetching data...';
+      videoResultBox.style.display = 'none';
+      videoResultBox.innerHTML = '';
+
+      const res = await fetch("https://be.saltsolutions.com/json/study/get/section-or-content", {
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "content-type": "application/json",
+          "priority": "u=1, i",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-site"
+        },
+        "referrer": "https://account.saltsolutions.com/",
+        "body": JSON.stringify({
+          "breadcrumbs": ["review", "2831"],
+          "depth": 1,
+          "examName": "level-iii-private-wealth-2027",
+          "liveOnly": true
+        }),
+        "method": "POST",
+        "mode": "cors",
+        "credentials": "include"
+      });
+
+      if (!res.ok) {
+        throw new Error(`HTTP Error: ${res.status}`);
+      }
+
+      const json = await res.json();
+      const lastLesson = json?.data?.lastLesson || json?.data?.lastlesson;
+      const detail = lastLesson?.detail;
+      const title = detail?.name || lastLesson?.name || 'Untitled Lesson';
+      const contentCache = detail?.contentCache;
+      const providerId = detail?.providerId;
+      const footerText = footerInput.value.trim();
+
+      // KONDISI 1: JIKA KONTEN BERUPA VIDEO (providerId)
+      if (providerId) {
+        status.textContent = 'Video content detected!';
+        videoResultBox.style.display = 'flex';
+
+        const copyTextValue = `${title}\n${providerId}`;
+
+        videoResultBox.innerHTML = `
+          <div style="font-size: 11px; font-weight: bold; color: #1e3a8a;">VIDEO INFO</div>
+          <div style="font-size: 12px; font-weight: 600; color: #0f172a; word-break: break-word;">${title}</div>
+          <div style="font-size: 13px; font-family: monospace; color: #2563eb; background: #e0e7ff; padding: 4px 6px; border-radius: 4px; font-weight: bold;">${providerId}</div>
+          <button id="copy-video-btn" style="margin-top: 4px; padding: 6px; background-color: #2563eb; color: #fff; border: none; border-radius: 4px; font-size: 11px; font-weight: bold; cursor: pointer;">Copy Text & ID</button>
+        `;
+
+        document.getElementById('copy-video-btn').addEventListener('click', async (e) => {
+          try {
+            await navigator.clipboard.writeText(copyTextValue);
+            e.target.textContent = 'Copied to Clipboard!';
+            e.target.style.backgroundColor = '#16a34a';
+            setTimeout(() => {
+              e.target.textContent = 'Copy Text & ID';
+              e.target.style.backgroundColor = '#2563eb';
+            }, 2000);
+          } catch (err) {
+            prompt('Copy manual di bawah ini:', copyTextValue);
+          }
+        });
+
+        return;
+      }
+
+      // KONDISI 2: JIKA KONTEN BERUPA TEKS / ARTIKEL (contentCache)
+      if (contentCache) {
+        status.textContent = 'Opening new tab...';
+
+        const fullHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>${title}</title>
+  <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [['\\\\(', '\\\\)']],
+        displayMath: [['\\\\[', '\\\\]'], ['$$', '$$']],
+        processEscapes: true
+      },
+      svg: {
+        fontCache: 'global'
+      }
+    };
+  </script>
+  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <style>
+    body {
+      background: #ffffff;
+      color: #1e293b;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      padding: 40px 48px;
+      line-height: 1.7;
+      font-size: 16.5px;
+      max-width: 860px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: #0f172a;
+      margin-top: 0;
+      margin-bottom: 28px;
+      padding-bottom: 12px;
+      border-bottom: 2.5px solid #334155;
+      line-height: 1.25;
+    }
+
+    h2 {
+      margin-top: 36px;
+      margin-bottom: 14px;
+      font-size: 19px;
+      font-weight: 700;
+      color: #1e293b;
+      background-color: #ebeff5;
+      border-left: 4px solid #475569;
+      padding: 8px 14px;
+      border-radius: 0 4px 4px 0;
+      page-break-after: avoid;
+    }
+
+    h3 {
+      margin-top: 24px;
+      margin-bottom: 10px;
+      font-size: 16.5px;
+      font-weight: 700;
+      color: #334155;
+      border-bottom: 1px solid #e2e8f0;
+      padding-bottom: 4px;
+      page-break-after: avoid;
+    }
+
+    p {
+      margin-bottom: 14px;
+      text-align: justify;
+      orphans: 3;
+      widows: 3;
+    }
+
+    #content > *:last-child,
+    #content p:last-child {
+      margin-bottom: 0 !important;
+    }
+
+    em {
+      font-style: italic;
+    }
+
+    mjx-container svg {
+      stroke: #0f172a !important;
+      fill: #0f172a !important;
+    }
+
+    img {
+      max-width: 100% !important;
+      height: auto !important;
+      display: block;
+      margin: 20px auto;
+      object-fit: contain;
+      page-break-inside: avoid;
+    }
+
+    table, th, td {
+      border: 1px solid #cbd5e1;
+      border-collapse: collapse;
+      padding: 8px 12px;
+      color: #1e293b;
+    }
+
+    th {
+      background-color: #f1f5f9;
+      font-weight: 600;
+    }
+
+    table {
+      width: 100%;
+      margin: 18px 0;
+    }
+
+    blockquote {
+      background-color: #ebeff5;
+      padding: 12px 16px;
+      margin: 18px 0;
+      border-left: 4px solid #64748b;
+      color: #1e293b;
+      border-radius: 0 4px 4px 0;
+    }
+
+    .print-footer {
+      display: block;
+      text-align: center;
+      font-size: 12px;
+      color: #94a3b8;
+      margin-top: 30px;
+      padding-top: 12px;
+      border-top: 1px solid #e2e8f0;
+    }
+
+    @media print {
+      @page {
+        margin: 18mm 16mm 18mm 16mm;
+        size: auto;
+      }
+
+      body {
+        padding: 0 !important;
+        margin: 0 !important;
+        max-width: 100% !important;
+        font-size: 16.5px !important;
+      }
+
+      h2, blockquote {
+        background-color: #ebeff5 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      .print-footer {
+        display: block !important;
+        margin-top: 14px !important;
+        padding-top: 8px !important;
+        border-top: 1px solid #cbd5e1 !important;
+        font-size: 11px !important;
+        color: #94a3b8 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+        page-break-before: avoid !important;
+        page-break-inside: avoid !important;
+        break-before: avoid !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <h1>${title}</h1>
+  <div id="content">${contentCache}</div>
+  ${footerText ? `<div class="print-footer">${footerText}</div>` : ''}
+</body>
+</html>`;
+
+        const blob = new Blob([fullHtml], { type: 'text/html;charset=utf-8' });
+        const blobUrl = URL.createObjectURL(blob);
+        window.open(blobUrl, '_blank');
+
+        status.textContent = 'Success! Tab Opened.';
+        return;
+      }
+
+      throw new Error('Materi tidak memiliki contentCache maupun providerId.');
+
+    } catch (err) {
+      console.error(err);
+      status.textContent = 'Error: ' + err.message;
+    } finally {
+      btn.disabled = false;
+      btn.style.backgroundColor = '#1e293b';
+    }
+  });
+
+  console.log('Exporter UI with Video & Reading support injected.');
+})();
