@@ -1,0 +1,5324 @@
+(() => {
+  'use strict';
+
+  // ============================================================
+  // PRACTICE HTML EXPORTER - VERSION 5
+  //
+  // FEATURES
+  // ============================================================
+  //
+  // 1. Monitor:
+  //    /json/practice/exam/get
+  //
+  // 2. Output:
+  //    - Open in New Tabs (DEFAULT / Blob URL)
+  //    - Save HTML Files
+  //
+  // 3. Export:
+  //    - Questions
+  //    - Answers
+  //
+  // 4. HTML fields ONLY:
+  //    - groups[].text
+  //    - questionText
+  //    - answers[].text
+  //    - solutionText
+  //
+  //    Tidak memakai:
+  //    - questionTextSrc
+  //    - solutionTextSrc
+  //
+  // 5. Reading:
+  //    - Reading berdasarkan groupId
+  //    - Jika TIDAK ada reading, TIDAK ERROR
+  //    - Soal langsung ditampilkan
+  //    - Reading kedua dan seterusnya mulai halaman baru saat print
+  //
+  // 6. Answers:
+  //    - Correct choice diberi tanda ✓
+  //    - Correct Answer: A/B/C
+  //
+  // 7. MERGE QUIZ:
+  //    - Default OFF
+  //    - Jika ON:
+  //        muncul tombol "Save Current Quiz for Merge"
+  //
+  //    Workflow:
+  //
+  //      Quiz 1
+  //      -> centang Merge Quiz
+  //      -> Save Current Quiz for Merge
+  //
+  //      pindah ke Quiz 2
+  //      -> JSON Quiz 2 terdeteksi
+  //      -> Process
+  //
+  //      OUTPUT:
+  //      Quiz 1 + Quiz 2
+  //
+  //    - Penomoran merged quiz selalu dibuat ulang:
+  //      Question 1
+  //      Question 2
+  //      ...
+  //      Question 8
+  //      Question 9
+  //      ...
+  //
+  //      Jadi tidak akan kembali ke nomor 1.
+  //
+  // 8. Temporary saved quiz:
+  //    - sessionStorage
+  //    - tetap ada selama session/tab browser masih sama
+  //
+  // ============================================================
+
+
+  // ============================================================
+  // CONFIG
+  // ============================================================
+
+  const TARGET_PATH =
+    '/json/practice/exam/get';
+
+  const PANEL_ID =
+    'practice-html-exporter-panel';
+
+  const GLOBAL_KEY =
+    '__PRACTICE_HTML_EXPORTER_V5__';
+
+  const JSON_CACHE_KEY =
+    '__practice_html_exporter_latest_json_v5__';
+
+  const MERGE_CACHE_KEY =
+    '__practice_html_exporter_merge_quiz_v5__';
+
+
+  // ============================================================
+  // REMOVE OLD EXPORTER VERSIONS SAFELY
+  // ============================================================
+
+  const OLD_GLOBAL_KEYS = [
+    '__PRACTICE_HTML_EXPORTER__',
+    '__PRACTICE_HTML_EXPORTER_V2__',
+    '__PRACTICE_HTML_EXPORTER_V3__',
+    '__PRACTICE_HTML_EXPORTER_V4__',
+    '__PRACTICE_HTML_EXPORTER_V5__'
+  ];
+
+
+  let baseFetch = null;
+
+  let baseXhrOpen = null;
+
+  let baseXhrSend = null;
+
+
+  for (
+    const key
+    of OLD_GLOBAL_KEYS
+  ) {
+
+    const oldState =
+      window[key];
+
+
+    if (
+      !oldState
+    ) {
+      continue;
+    }
+
+
+    if (
+      !baseFetch &&
+      typeof oldState.originalFetch ===
+        'function'
+    ) {
+
+      baseFetch =
+        oldState.originalFetch;
+
+    }
+
+
+    if (
+      !baseXhrOpen &&
+      typeof oldState.originalXhrOpen ===
+        'function'
+    ) {
+
+      baseXhrOpen =
+        oldState.originalXhrOpen;
+
+    }
+
+
+    if (
+      !baseXhrSend &&
+      typeof oldState.originalXhrSend ===
+        'function'
+    ) {
+
+      baseXhrSend =
+        oldState.originalXhrSend;
+
+    }
+
+  }
+
+
+  if (
+    baseFetch
+  ) {
+
+    window.fetch =
+      baseFetch;
+
+  }
+
+
+  if (
+    baseXhrOpen
+  ) {
+
+    XMLHttpRequest.prototype.open =
+      baseXhrOpen;
+
+  }
+
+
+  if (
+    baseXhrSend
+  ) {
+
+    XMLHttpRequest.prototype.send =
+      baseXhrSend;
+
+  }
+
+
+  for (
+    const key
+    of OLD_GLOBAL_KEYS
+  ) {
+
+    try {
+
+      delete window[key];
+
+    } catch (_) {
+
+      window[key] =
+        undefined;
+
+    }
+
+  }
+
+
+  const existingPanel =
+    document.getElementById(
+      PANEL_ID
+    );
+
+
+  if (
+    existingPanel
+  ) {
+
+    existingPanel.remove();
+
+  }
+
+
+  // ============================================================
+  // STATE
+  // ============================================================
+
+  const state = {
+
+    installed:
+      true,
+
+    latestJson:
+      null,
+
+    latestUrl:
+      '',
+
+    latestCapturedAt:
+      null,
+
+    savedQuiz:
+      null,
+
+    originalFetch:
+      baseFetch ||
+      window.fetch,
+
+    originalXhrOpen:
+      baseXhrOpen ||
+      XMLHttpRequest.prototype.open,
+
+    originalXhrSend:
+      baseXhrSend ||
+      XMLHttpRequest.prototype.send,
+
+    blobUrls:
+      []
+
+  };
+
+
+  window[GLOBAL_KEY] =
+    state;
+
+
+  // ============================================================
+  // BASIC UTILITIES
+  // ============================================================
+
+  function isTargetUrl(
+    url
+  ) {
+
+    try {
+
+      return String(
+        url ||
+        ''
+      ).includes(
+        TARGET_PATH
+      );
+
+    } catch (_) {
+
+      return false;
+
+    }
+
+  }
+
+
+  function escapeHtml(
+    value
+  ) {
+
+    return String(
+      value ??
+      ''
+    )
+      .replace(
+        /&/g,
+        '&amp;'
+      )
+      .replace(
+        /</g,
+        '&lt;'
+      )
+      .replace(
+        />/g,
+        '&gt;'
+      )
+      .replace(
+        /"/g,
+        '&quot;'
+      )
+      .replace(
+        /'/g,
+        '&#039;'
+      );
+
+  }
+
+
+  function choiceLabel(
+    index
+  ) {
+
+    if (
+      index >= 0 &&
+      index < 26
+    ) {
+
+      return String.fromCharCode(
+        65 + index
+      );
+
+    }
+
+
+    return String(
+      index + 1
+    );
+
+  }
+
+
+  function cleanFilename(
+    name
+  ) {
+
+    return String(
+      name ||
+      'Practice Exam'
+    )
+      .replace(
+        /[\\/:*?"<>|]/g,
+        '-'
+      )
+      .replace(
+        /\s+/g,
+        ' '
+      )
+      .trim();
+
+  }
+
+
+  function deepClone(
+    value
+  ) {
+
+    return JSON.parse(
+      JSON.stringify(
+        value
+      )
+    );
+
+  }
+
+
+  function getDataRoot(
+    json
+  ) {
+
+    return (
+      json?.data ||
+      json ||
+      {}
+    );
+
+  }
+
+
+  // ============================================================
+  // SIMPLE HASH
+  //
+  // Digunakan untuk mengenali apakah Current Quiz
+  // berbeda dari Saved Quiz.
+  // ============================================================
+
+  function hashString(
+    input
+  ) {
+
+    let hash =
+      2166136261;
+
+
+    const text =
+      String(
+        input ||
+        ''
+      );
+
+
+    for (
+      let i = 0;
+      i < text.length;
+      i++
+    ) {
+
+      hash ^=
+        text.charCodeAt(
+          i
+        );
+
+
+      hash +=
+        (
+          hash << 1
+        ) +
+        (
+          hash << 4
+        ) +
+        (
+          hash << 7
+        ) +
+        (
+          hash << 8
+        ) +
+        (
+          hash << 24
+        );
+
+    }
+
+
+    return (
+      hash >>> 0
+    ).toString(
+      16
+    );
+
+  }
+
+
+  // ============================================================
+  // EXTRACT QUIZ BUNDLE FROM JSON
+  // ============================================================
+
+  function extractQuizBundle(
+    json
+  ) {
+
+    const data =
+      getDataRoot(
+        json
+      );
+
+
+    const questions =
+      Array.isArray(
+        data?.questions
+      )
+        ? data.questions
+        : [];
+
+
+    const groups =
+      data?.groups &&
+      typeof data.groups ===
+        'object'
+
+        ? Object.values(
+            data.groups
+          )
+
+        : [];
+
+
+    const sections =
+      data?.sections &&
+      typeof data.sections ===
+        'object'
+
+        ? Object.values(
+            data.sections
+          )
+
+        : [];
+
+
+    const topSection =
+      sections.find(
+        section =>
+          section?.name
+      );
+
+
+    const questionSection =
+      questions.find(
+        question =>
+          question
+            ?.sections
+            ?.[0]
+            ?.name
+      )
+        ?.sections
+        ?.[0];
+
+
+    const title =
+
+      topSection?.name
+
+      ||
+
+      questionSection?.name
+
+      ||
+
+      'Practice Exam';
+
+
+    const cors =
+
+      data?.cors &&
+      typeof data.cors ===
+        'object'
+
+        ? data.cors
+
+        : {};
+
+
+    const fingerprintSource =
+      [
+        title,
+
+        questions.length,
+
+        ...questions.map(
+          question => {
+
+            return [
+              question?.id ?? '',
+              question?.groupId ?? '',
+              question?.questionText ?? ''
+            ].join(
+              ':'
+            );
+
+          }
+        )
+      ].join(
+        '|'
+      );
+
+
+    const fingerprint =
+      hashString(
+        fingerprintSource
+      );
+
+
+    return {
+
+      title,
+
+      questions,
+
+      groups,
+
+      cors,
+
+      fingerprint
+
+    };
+
+  }
+
+
+  // ============================================================
+  // GET CURRENT QUIZ
+  // ============================================================
+
+  function getCurrentQuiz() {
+
+    if (
+      !state.latestJson
+    ) {
+      return null;
+    }
+
+
+    return extractQuizBundle(
+      state.latestJson
+    );
+
+  }
+
+
+  // ============================================================
+  // RESTORE LATEST JSON CACHE
+  // ============================================================
+
+  try {
+
+    const cached =
+      JSON.parse(
+
+        sessionStorage.getItem(
+          JSON_CACHE_KEY
+        ) ||
+
+        'null'
+
+      );
+
+
+    if (
+      cached?.json
+    ) {
+
+      state.latestJson =
+        cached.json;
+
+
+      state.latestUrl =
+        cached.url ||
+        '';
+
+
+      state.latestCapturedAt =
+        cached.capturedAt ||
+        '';
+
+    }
+
+  } catch (
+    err
+  ) {
+
+    console.warn(
+      '[Practice Exporter] JSON cache restore failed:',
+      err
+    );
+
+  }
+
+
+  // ============================================================
+  // RESTORE SAVED MERGE QUIZ
+  // ============================================================
+
+  try {
+
+    const saved =
+      JSON.parse(
+
+        sessionStorage.getItem(
+          MERGE_CACHE_KEY
+        ) ||
+
+        'null'
+
+      );
+
+
+    if (
+      saved?.bundle
+    ) {
+
+      state.savedQuiz =
+        saved;
+
+    }
+
+  } catch (
+    err
+  ) {
+
+    console.warn(
+      '[Practice Exporter] Merge cache restore failed:',
+      err
+    );
+
+  }
+
+
+  // ============================================================
+  // UPDATE MERGE UI
+  // ============================================================
+
+  function updateMergeUI() {
+
+    const mergeCheckbox =
+      document.getElementById(
+        'phe-merge-checkbox'
+      );
+
+
+    const saveMergeButton =
+      document.getElementById(
+        'phe-save-merge-button'
+      );
+
+
+    const mergeInfo =
+      document.getElementById(
+        'phe-merge-info'
+      );
+
+
+    if (
+      !mergeCheckbox ||
+      !saveMergeButton ||
+      !mergeInfo
+    ) {
+
+      return;
+
+    }
+
+
+    const enabled =
+      mergeCheckbox.checked;
+
+
+    saveMergeButton.style.display =
+      enabled
+        ? 'block'
+        : 'none';
+
+
+    mergeInfo.style.display =
+      enabled
+        ? 'block'
+        : 'none';
+
+
+    if (
+      !enabled
+    ) {
+
+      return;
+
+    }
+
+
+    const current =
+      getCurrentQuiz();
+
+
+    if (
+      !state.savedQuiz?.bundle
+    ) {
+
+      mergeInfo.innerHTML = `
+
+        <div
+          style="
+            color:#64748b;
+          "
+        >
+          No quiz saved for merge.
+        </div>
+
+      `;
+
+
+      return;
+
+    }
+
+
+    const saved =
+      state.savedQuiz.bundle;
+
+
+    const sameQuiz =
+
+      current &&
+
+      current.fingerprint ===
+        saved.fingerprint;
+
+
+    mergeInfo.innerHTML = `
+
+      <div
+        style="
+          font-weight:700;
+          color:#334155;
+          margin-bottom:4px;
+        "
+      >
+        Saved Merge Quiz
+      </div>
+
+
+      <div>
+        ${escapeHtml(
+          saved.title
+        )}
+      </div>
+
+
+      <div
+        style="
+          color:#64748b;
+          margin-top:2px;
+        "
+      >
+        ${saved.questions.length}
+        questions
+      </div>
+
+
+      ${
+        current
+
+          ? `
+
+            <div
+              style="
+                margin-top:6px;
+                padding-top:6px;
+                border-top:1px solid #e2e8f0;
+                font-weight:700;
+                color:${
+                  sameQuiz
+                    ? '#b45309'
+                    : '#15803d'
+                };
+              "
+            >
+
+              ${
+                sameQuiz
+
+                  ? 'Current quiz is the saved quiz — it will not be duplicated.'
+
+                  : 'New quiz detected — Process will merge both quizzes.'
+              }
+
+            </div>
+
+          `
+
+          : ''
+      }
+
+    `;
+
+  }
+
+
+  // ============================================================
+  // UPDATE MAIN PANEL
+  // ============================================================
+
+  function updatePanel() {
+
+    const status =
+      document.getElementById(
+        'phe-status'
+      );
+
+
+    const info =
+      document.getElementById(
+        'phe-capture-info'
+      );
+
+
+    if (
+      !status ||
+      !info
+    ) {
+
+      updateMergeUI();
+
+      return;
+
+    }
+
+
+    if (
+      !state.latestJson
+    ) {
+
+      status.textContent =
+        `Waiting for ${TARGET_PATH} ...`;
+
+
+      status.style.color =
+        '#64748b';
+
+
+      info.innerHTML = `
+        No matching JSON captured yet.
+      `;
+
+
+      updateMergeUI();
+
+
+      return;
+
+    }
+
+
+    const quiz =
+      getCurrentQuiz();
+
+
+    status.textContent =
+      'Latest practice JSON captured';
+
+
+    status.style.color =
+      '#15803d';
+
+
+    info.innerHTML = `
+
+      <div
+        style="
+          margin-bottom:5px;
+        "
+      >
+
+        <strong>
+          Section:
+        </strong>
+
+        ${escapeHtml(
+          quiz?.title ||
+          ''
+        )}
+
+      </div>
+
+
+      <div>
+
+        <strong>
+          Readings:
+        </strong>
+
+        ${quiz?.groups?.length || 0}
+
+      </div>
+
+
+      <div>
+
+        <strong>
+          Questions:
+        </strong>
+
+        ${quiz?.questions?.length || 0}
+
+      </div>
+
+
+      <div>
+
+        <strong>
+          Captured:
+        </strong>
+
+        ${escapeHtml(
+          state.latestCapturedAt ||
+          ''
+        )}
+
+      </div>
+
+
+      <div
+        style="
+          margin-top:5px;
+          word-break:break-all;
+        "
+      >
+
+        <strong>
+          URL:
+        </strong>
+
+        ${escapeHtml(
+          state.latestUrl ||
+          ''
+        )}
+
+      </div>
+
+    `;
+
+
+    updateMergeUI();
+
+  }
+
+
+  // ============================================================
+  // CAPTURE JSON
+  // ============================================================
+
+  function captureJson(
+    json,
+    url
+  ) {
+
+    if (
+      !json ||
+      typeof json !==
+        'object'
+    ) {
+
+      return;
+
+    }
+
+
+    const data =
+      getDataRoot(
+        json
+      );
+
+
+    if (
+      !Array.isArray(
+        data?.questions
+      )
+    ) {
+
+      return;
+
+    }
+
+
+    state.latestJson =
+      json;
+
+
+    state.latestUrl =
+      String(
+        url ||
+        TARGET_PATH
+      );
+
+
+    state.latestCapturedAt =
+      new Date()
+        .toLocaleString();
+
+
+    try {
+
+      sessionStorage.setItem(
+
+        JSON_CACHE_KEY,
+
+        JSON.stringify({
+
+          json:
+            state.latestJson,
+
+          url:
+            state.latestUrl,
+
+          capturedAt:
+            state.latestCapturedAt
+
+        })
+
+      );
+
+    } catch (
+      err
+    ) {
+
+      console.warn(
+        '[Practice Exporter] JSON cache failed:',
+        err
+      );
+
+    }
+
+
+    updatePanel();
+
+
+    console.log(
+      '[Practice Exporter] Latest quiz captured:',
+      getCurrentQuiz()
+    );
+
+  }
+
+
+  // ============================================================
+  // INTERCEPT FETCH
+  // ============================================================
+
+  if (
+    typeof state.originalFetch ===
+      'function'
+  ) {
+
+    window.fetch =
+      async function (
+        ...args
+      ) {
+
+        const response =
+          await state
+            .originalFetch
+            .apply(
+              this,
+              args
+            );
+
+
+        try {
+
+          const firstArg =
+            args[0];
+
+
+          const requestUrl =
+
+            typeof firstArg ===
+              'string'
+
+              ? firstArg
+
+              : (
+                  firstArg?.url ||
+                  response?.url ||
+                  ''
+                );
+
+
+          const responseUrl =
+            response?.url ||
+            '';
+
+
+          if (
+
+            isTargetUrl(
+              requestUrl
+            )
+
+            ||
+
+            isTargetUrl(
+              responseUrl
+            )
+
+          ) {
+
+            response
+              .clone()
+              .json()
+              .then(
+                json => {
+
+                  captureJson(
+
+                    json,
+
+                    responseUrl ||
+                    requestUrl
+
+                  );
+
+                }
+              )
+              .catch(
+                err => {
+
+                  console.warn(
+                    '[Practice Exporter] Fetch response parse failed:',
+                    err
+                  );
+
+                }
+              );
+
+          }
+
+        } catch (
+          err
+        ) {
+
+          console.warn(
+            '[Practice Exporter] Fetch interceptor error:',
+            err
+          );
+
+        }
+
+
+        return response;
+
+      };
+
+  }
+
+
+  // ============================================================
+  // INTERCEPT XHR
+  // ============================================================
+
+  XMLHttpRequest.prototype.open =
+    function (
+      method,
+      url,
+      ...rest
+    ) {
+
+      this.__pheUrl =
+        String(
+          url ||
+          ''
+        );
+
+
+      return state
+        .originalXhrOpen
+        .call(
+          this,
+          method,
+          url,
+          ...rest
+        );
+
+    };
+
+
+  XMLHttpRequest.prototype.send =
+    function (
+      body
+    ) {
+
+      const xhr =
+        this;
+
+
+      if (
+        isTargetUrl(
+          xhr.__pheUrl
+        )
+      ) {
+
+        xhr.addEventListener(
+
+          'load',
+
+          function () {
+
+            try {
+
+              let json;
+
+
+              if (
+                xhr.responseType ===
+                  'json'
+              ) {
+
+                json =
+                  xhr.response;
+
+              } else {
+
+                json =
+                  JSON.parse(
+                    xhr.responseText
+                  );
+
+              }
+
+
+              captureJson(
+
+                json,
+
+                xhr.responseURL ||
+                xhr.__pheUrl
+
+              );
+
+            } catch (
+              err
+            ) {
+
+              console.warn(
+                '[Practice Exporter] XHR response parse failed:',
+                err
+              );
+
+            }
+
+          },
+
+          {
+            once:
+              true
+          }
+
+        );
+
+      }
+
+
+      return state
+        .originalXhrSend
+        .call(
+          xhr,
+          body
+        );
+
+    };
+
+
+  // ============================================================
+  // SAVE CURRENT QUIZ FOR MERGE
+  // ============================================================
+
+  function saveCurrentQuizForMerge() {
+
+    const current =
+      getCurrentQuiz();
+
+
+    if (
+      !current ||
+      !current.questions.length
+    ) {
+
+      alert(
+        'Belum ada quiz yang dapat disimpan.'
+      );
+
+      return;
+
+    }
+
+
+    const bundle =
+      deepClone(
+        current
+      );
+
+
+    const savedData = {
+
+      bundle,
+
+      savedAt:
+        new Date()
+          .toLocaleString()
+
+    };
+
+
+    try {
+
+      sessionStorage.setItem(
+
+        MERGE_CACHE_KEY,
+
+        JSON.stringify(
+          savedData
+        )
+
+      );
+
+
+      state.savedQuiz =
+        savedData;
+
+
+      const status =
+        document.getElementById(
+          'phe-status'
+        );
+
+
+      if (
+        status
+      ) {
+
+        status.textContent =
+          `Saved ${bundle.questions.length} questions for merge`;
+
+        status.style.color =
+          '#2563eb';
+
+      }
+
+
+      updateMergeUI();
+
+
+      console.log(
+        '[Practice Exporter] Quiz saved for merge:',
+        bundle
+      );
+
+    } catch (
+      err
+    ) {
+
+      console.error(
+        '[Practice Exporter] Unable to save quiz for merge:',
+        err
+      );
+
+
+      alert(
+        'Quiz tidak dapat disimpan ke sessionStorage. Kemungkinan ukuran JSON terlalu besar.'
+      );
+
+    }
+
+  }
+
+
+  // ============================================================
+  // GET CORRECT ANSWER
+  // ============================================================
+
+  function getCorrectAnswerInfo(
+    questionEntry
+  ) {
+
+    const question =
+      questionEntry.question;
+
+
+    const answers =
+      Array.isArray(
+        question?.answers
+      )
+        ? question.answers
+        : [];
+
+
+    if (
+      !answers.length
+    ) {
+
+      return null;
+
+    }
+
+
+    let correctIndex =
+      answers.findIndex(
+        answer =>
+          answer?.isCorrect ===
+            true
+      );
+
+
+    if (
+      correctIndex === -1 &&
+      questionEntry.correctAnswerId != null
+    ) {
+
+      correctIndex =
+        answers.findIndex(
+          answer =>
+
+            String(
+              answer?.id
+            )
+
+            ===
+
+            String(
+              questionEntry.correctAnswerId
+            )
+        );
+
+    }
+
+
+    if (
+      correctIndex === -1
+    ) {
+
+      return null;
+
+    }
+
+
+    return {
+
+      index:
+        correctIndex,
+
+      label:
+        choiceLabel(
+          correctIndex
+        ),
+
+      answer:
+        answers[
+          correctIndex
+        ]
+
+    };
+
+  }
+
+
+  // ============================================================
+  // CONVERT QUIZ BUNDLE INTO SEGMENTS
+  //
+  // Segment:
+  // - readingHtml
+  // - questions
+  //
+  // Jika tidak ada reading:
+  // - readingHtml = ''
+  // - questions tetap dirender
+  //
+  // ============================================================
+
+  function createSegmentsFromQuiz(
+    quiz
+  ) {
+
+    const questions =
+      Array.isArray(
+        quiz?.questions
+      )
+        ? quiz.questions
+        : [];
+
+
+    const groups =
+      Array.isArray(
+        quiz?.groups
+      )
+        ? quiz.groups
+        : [];
+
+
+    const cors =
+      quiz?.cors ||
+      {};
+
+
+    const entries =
+      questions.map(
+        (
+          question,
+          originalIndex
+        ) => {
+
+          const correctAnswerId =
+
+            cors?.[
+              question?.id
+            ]
+
+            ??
+
+            cors?.[
+              String(
+                question?.id
+              )
+            ];
+
+
+          return {
+
+            question,
+
+            originalIndex,
+
+            correctAnswerId,
+
+            exportNumber:
+              null
+
+          };
+
+        }
+      );
+
+
+    // ----------------------------------------------------------
+    // IMPORTANT:
+    // NO READING CASE
+    //
+    // groups kosong -> langsung satu segment tanpa reading.
+    // Tidak akan error.
+    // ----------------------------------------------------------
+
+    if (
+      !groups.length
+    ) {
+
+      return [
+
+        {
+
+          readingHtml:
+            '',
+
+          questions:
+            entries
+
+        }
+
+      ];
+
+    }
+
+
+    const questionMap =
+      new Map();
+
+
+    entries.forEach(
+      entry => {
+
+        const groupId =
+          String(
+            entry
+              .question
+              ?.groupId ??
+            ''
+          );
+
+
+        if (
+          !questionMap.has(
+            groupId
+          )
+        ) {
+
+          questionMap.set(
+            groupId,
+            []
+          );
+
+        }
+
+
+        questionMap
+          .get(
+            groupId
+          )
+          .push(
+            entry
+          );
+
+      }
+    );
+
+
+    const sortedGroups =
+      [...groups].sort(
+        (
+          a,
+          b
+        ) => {
+
+          const positionA =
+            Number(
+              a?.questionsPositionStart
+            );
+
+
+          const positionB =
+            Number(
+              b?.questionsPositionStart
+            );
+
+
+          const safeA =
+            Number.isFinite(
+              positionA
+            )
+              ? positionA
+              : Number.MAX_SAFE_INTEGER;
+
+
+          const safeB =
+            Number.isFinite(
+              positionB
+            )
+              ? positionB
+              : Number.MAX_SAFE_INTEGER;
+
+
+          return (
+            safeA -
+            safeB
+          );
+
+        }
+      );
+
+
+    const handledEntries =
+      new Set();
+
+
+    const segments =
+      [];
+
+
+    sortedGroups.forEach(
+      group => {
+
+        const groupId =
+          String(
+            group?.id ??
+            ''
+          );
+
+
+        const groupQuestions =
+          questionMap.get(
+            groupId
+          ) ||
+          [];
+
+
+        if (
+          !groupQuestions.length
+        ) {
+
+          return;
+
+        }
+
+
+        groupQuestions.forEach(
+          entry =>
+            handledEntries.add(
+              entry
+            )
+        );
+
+
+        segments.push({
+
+          // HANYA group.text
+          readingHtml:
+            group?.text ||
+            '',
+
+          questions:
+            groupQuestions
+
+        });
+
+      }
+    );
+
+
+    // ----------------------------------------------------------
+    // QUESTIONS YANG GROUP-NYA TIDAK DITEMUKAN
+    // ----------------------------------------------------------
+
+    const orphans =
+      entries.filter(
+        entry =>
+          !handledEntries.has(
+            entry
+          )
+      );
+
+
+    if (
+      orphans.length
+    ) {
+
+      segments.push({
+
+        readingHtml:
+          '',
+
+        questions:
+          orphans
+
+      });
+
+    }
+
+
+    // ----------------------------------------------------------
+    // Jika groups ada tetapi tidak satupun cocok,
+    // tetap render semua questions.
+    // ----------------------------------------------------------
+
+    if (
+      !segments.length
+    ) {
+
+      segments.push({
+
+        readingHtml:
+          '',
+
+        questions:
+          entries
+
+      });
+
+    }
+
+
+    return segments;
+
+  }
+
+
+  // ============================================================
+  // BUILD DOCUMENT MODEL
+  //
+  // mergeActive = true:
+  // Question numbers diubah menjadi 1,2,3,... global.
+  //
+  // mergeActive = false:
+  // memakai questionDisplayNumber asli.
+  // ============================================================
+
+  function buildDocumentModel(
+    quizzes,
+    mergeActive
+  ) {
+
+    const segments =
+      [];
+
+
+    quizzes.forEach(
+      quiz => {
+
+        const quizSegments =
+          createSegmentsFromQuiz(
+            quiz
+          );
+
+
+        quizSegments.forEach(
+          segment =>
+            segments.push(
+              segment
+            )
+        );
+
+      }
+    );
+
+
+    const allEntries =
+      segments.flatMap(
+        segment =>
+          segment.questions
+      );
+
+
+    if (
+      mergeActive
+    ) {
+
+      allEntries.forEach(
+        (
+          entry,
+          index
+        ) => {
+
+          entry.exportNumber =
+            String(
+              index + 1
+            );
+
+        }
+      );
+
+    } else {
+
+      allEntries.forEach(
+        (
+          entry,
+          index
+        ) => {
+
+          entry.exportNumber =
+
+            entry
+              .question
+              ?.questionDisplayNumber
+
+            ||
+
+            entry
+              .question
+              ?.ordinal
+
+            ||
+
+            String(
+              index + 1
+            );
+
+        }
+      );
+
+    }
+
+
+    return {
+
+      segments,
+
+      totalQuestions:
+        allEntries.length
+
+    };
+
+  }
+
+
+  // ============================================================
+  // RENDER CHOICES
+  // ============================================================
+
+  function renderChoices(
+    questionEntry,
+    answerMode
+  ) {
+
+    const question =
+      questionEntry.question;
+
+
+    const answers =
+      Array.isArray(
+        question?.answers
+      )
+        ? question.answers
+        : [];
+
+
+    if (
+      !answers.length
+    ) {
+
+      return '';
+
+    }
+
+
+    const correctInfo =
+      getCorrectAnswerInfo(
+        questionEntry
+      );
+
+
+    return `
+
+      <div
+        class="choices"
+      >
+
+        ${answers.map(
+          (
+            answer,
+            index
+          ) => {
+
+            const label =
+              choiceLabel(
+                index
+              );
+
+
+            const isCorrect =
+              Boolean(
+
+                answerMode
+
+                &&
+
+                correctInfo
+
+                &&
+
+                correctInfo.index ===
+                  index
+
+              );
+
+
+            return `
+
+              <div
+                class="
+                  choice-row
+                  ${
+                    isCorrect
+                      ? 'choice-correct'
+                      : ''
+                  }
+                "
+              >
+
+                <div
+                  class="choice-letter"
+                >
+                  ${label}.
+                </div>
+
+
+                <div
+                  class="choice-content"
+                >
+                  ${answer?.text || ''}
+                </div>
+
+
+                <div
+                  class="choice-mark"
+                >
+                  ${
+                    isCorrect
+                      ? '✓'
+                      : ''
+                  }
+                </div>
+
+              </div>
+
+            `;
+
+          }
+        ).join('')}
+
+      </div>
+
+    `;
+
+  }
+
+
+  // ============================================================
+  // CORRECT ANSWER LABEL
+  // ============================================================
+
+  function renderCorrectAnswerLabel(
+    questionEntry
+  ) {
+
+    const correctInfo =
+      getCorrectAnswerInfo(
+        questionEntry
+      );
+
+
+    return `
+
+      <div
+        class="correct-answer-line"
+      >
+
+        <strong>
+          Correct Answer:
+        </strong>
+
+        <span>
+          ${
+            correctInfo
+
+              ? escapeHtml(
+                  correctInfo.label
+                )
+
+              : 'Not found'
+          }
+        </span>
+
+      </div>
+
+    `;
+
+  }
+
+
+  // ============================================================
+  // EXPLANATION / MODEL ANSWER
+  //
+  // HANYA solutionText
+  // ============================================================
+
+  function renderAnswerContent(
+    question
+  ) {
+
+    const answers =
+      Array.isArray(
+        question?.answers
+      )
+        ? question.answers
+        : [];
+
+
+    const isMcq =
+
+      question
+        ?.questionType
+        ?.id === 1
+
+      ||
+
+      answers.length > 0;
+
+
+    const solutionHtml =
+      question?.solutionText ||
+      '';
+
+
+    if (
+      !solutionHtml
+    ) {
+
+      return '';
+
+    }
+
+
+    if (
+      isMcq
+    ) {
+
+      return `
+
+        <div
+          class="explanation-box"
+        >
+
+          <div
+            class="box-title"
+          >
+            Explanation
+          </div>
+
+
+          <div
+            class="solution-content"
+          >
+            ${solutionHtml}
+          </div>
+
+        </div>
+
+      `;
+
+    }
+
+
+    return `
+
+      <div
+        class="model-answer-box"
+      >
+
+        <div
+          class="box-title"
+        >
+          Model Answer / Explanation
+        </div>
+
+
+        <div
+          class="solution-content"
+        >
+          ${solutionHtml}
+        </div>
+
+      </div>
+
+    `;
+
+  }
+
+
+  // ============================================================
+  // RUBRIC
+  // ============================================================
+
+  function renderRubric(
+    question
+  ) {
+
+    const rubrics =
+      Array.isArray(
+        question?.rubricScores
+      )
+        ? question.rubricScores
+        : [];
+
+
+    if (
+      !rubrics.length
+    ) {
+
+      return '';
+
+    }
+
+
+    return `
+
+      <div
+        class="rubric-box"
+      >
+
+        <div
+          class="box-title"
+        >
+          Scoring Rubric
+        </div>
+
+
+        <div
+          class="rubric-items"
+        >
+
+          ${rubrics.map(
+            rubric => `
+
+              <div
+                class="rubric-item"
+              >
+                ${rubric?.text || ''}
+              </div>
+
+            `
+          ).join('')}
+
+        </div>
+
+      </div>
+
+    `;
+
+  }
+
+
+  // ============================================================
+  // RENDER QUESTION
+  //
+  // HANYA questionText
+  // ============================================================
+
+  function renderQuestion(
+    questionEntry,
+    answerMode
+  ) {
+
+    const question =
+      questionEntry.question;
+
+
+    const number =
+      questionEntry.exportNumber;
+
+
+    const questionHtml =
+      question?.questionText ||
+      '';
+
+
+    const answers =
+      Array.isArray(
+        question?.answers
+      )
+        ? question.answers
+        : [];
+
+
+    const isMcq =
+
+      question
+        ?.questionType
+        ?.id === 1
+
+      ||
+
+      answers.length > 0;
+
+
+    return `
+
+      <section
+        class="question-block"
+      >
+
+        <div
+          class="question-number"
+        >
+          Question ${escapeHtml(
+            number
+          )}
+        </div>
+
+
+        <div
+          class="question-text"
+        >
+          ${questionHtml}
+        </div>
+
+
+        ${
+          renderChoices(
+            questionEntry,
+            answerMode
+          )
+        }
+
+
+        ${
+          answerMode &&
+          isMcq
+
+            ? renderCorrectAnswerLabel(
+                questionEntry
+              )
+
+            : ''
+        }
+
+
+        ${
+          answerMode
+
+            ? renderAnswerContent(
+                question
+              )
+
+            : ''
+        }
+
+
+        ${
+          answerMode &&
+          !isMcq
+
+            ? renderRubric(
+                question
+              )
+
+            : ''
+        }
+
+      </section>
+
+    `;
+
+  }
+
+
+  // ============================================================
+  // RENDER SEGMENTS
+  //
+  // Jika readingHtml kosong:
+  // langsung render questions.
+  //
+  // Tidak dibuat fake "Reading".
+  // ============================================================
+
+  function renderSegments(
+    documentModel,
+    answerMode
+  ) {
+
+    const segments =
+      documentModel.segments;
+
+
+    let html =
+      '';
+
+
+    let readingNumber =
+      0;
+
+
+    segments.forEach(
+      segment => {
+
+        const hasReading =
+          Boolean(
+            String(
+              segment?.readingHtml ||
+              ''
+            ).trim()
+          );
+
+
+        if (
+          hasReading
+        ) {
+
+          readingNumber++;
+
+
+          const firstEntry =
+            segment.questions[
+              0
+            ];
+
+
+          const lastEntry =
+            segment.questions[
+              segment.questions.length - 1
+            ];
+
+
+          const firstNumber =
+            firstEntry
+              ?.exportNumber ||
+            '';
+
+
+          const lastNumber =
+            lastEntry
+              ?.exportNumber ||
+            '';
+
+
+          let rangeText =
+            '';
+
+
+          if (
+            firstNumber &&
+            lastNumber
+          ) {
+
+            rangeText =
+
+              firstNumber ===
+                lastNumber
+
+                ? `Q${firstNumber}`
+
+                : `Q${firstNumber}–Q${lastNumber}`;
+
+          }
+
+
+          const readingClass =
+
+            readingNumber === 1
+
+              ? 'first-reading'
+
+              : 'new-reading';
+
+
+          html += `
+
+            <section
+              class="
+                reading-section
+                ${readingClass}
+              "
+            >
+
+              <div
+                class="reading-heading"
+              >
+
+                <span
+                  class="reading-number"
+                >
+                  Reading ${readingNumber}
+                </span>
+
+
+                <span
+                  class="reading-range"
+                >
+                  ${escapeHtml(
+                    rangeText
+                  )}
+                </span>
+
+              </div>
+
+
+              <div
+                class="reading-content"
+              >
+                ${segment.readingHtml}
+              </div>
+
+            </section>
+
+          `;
+
+        }
+
+
+        segment.questions.forEach(
+          questionEntry => {
+
+            html +=
+              renderQuestion(
+
+                questionEntry,
+
+                answerMode
+
+              );
+
+          }
+        );
+
+      }
+    );
+
+
+    return html;
+
+  }
+
+
+  // ============================================================
+  // DETERMINE DOCUMENT TITLE
+  // ============================================================
+
+  function getDocumentTitle(
+    quizzes,
+    merged
+  ) {
+
+    if (
+      !merged ||
+      quizzes.length <= 1
+    ) {
+
+      return (
+        quizzes[0]?.title ||
+        'Practice Exam'
+      );
+
+    }
+
+
+    const titles =
+      [
+        ...new Set(
+          quizzes.map(
+            quiz =>
+              quiz?.title ||
+              'Practice Exam'
+          )
+        )
+      ];
+
+
+    if (
+      titles.length === 1
+    ) {
+
+      return (
+        `${titles[0]} - Merged Quiz`
+      );
+
+    }
+
+
+    return (
+      `${titles.join(' + ')} - Merged Quiz`
+    );
+
+  }
+
+
+  // ============================================================
+  // BUILD COMPLETE HTML
+  // ============================================================
+
+  function buildHtml({
+
+    title,
+
+    documentModel,
+
+    answerMode
+
+  }) {
+
+    const documentType =
+
+      answerMode
+
+        ? 'Answers'
+
+        : 'Questions';
+
+
+    const docTitle =
+      `${title} - ${documentType}`;
+
+
+    return `<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+  <meta charset="UTF-8">
+
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  >
+
+
+  <title>
+    ${escapeHtml(
+      docTitle
+    )}
+  </title>
+
+
+  <!-- ======================================================
+       MATHJAX
+       ====================================================== -->
+
+  <script>
+
+    window.MathJax = {
+
+      tex: {
+
+        inlineMath: [
+          ['\\\\(', '\\\\)']
+        ],
+
+        displayMath: [
+          ['\\\\[', '\\\\]'],
+          ['$$', '$$']
+        ],
+
+        processEscapes:
+          true
+
+      },
+
+      svg: {
+
+        fontCache:
+          'global'
+
+      }
+
+    };
+
+  <\/script>
+
+
+  <script
+    id="MathJax-script"
+    async
+    src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"
+  ><\/script>
+
+
+  <style>
+
+    /* ========================================================
+       GLOBAL
+       ======================================================== */
+
+    * {
+
+      box-sizing:
+        border-box;
+
+    }
+
+
+    html {
+
+      background:
+        #ffffff;
+
+    }
+
+
+    body {
+
+      background:
+        #ffffff;
+
+      color:
+        #1e293b;
+
+      font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        Roboto,
+        Arial,
+        sans-serif;
+
+      padding:
+        40px
+        48px;
+
+      line-height:
+        1.7;
+
+      font-size:
+        16.5px;
+
+      max-width:
+        900px;
+
+      margin:
+        0
+        auto;
+
+    }
+
+
+    h1 {
+
+      font-size:
+        28px;
+
+      font-weight:
+        800;
+
+      letter-spacing:
+        -0.02em;
+
+      color:
+        #0f172a;
+
+      margin:
+        0
+        0
+        32px;
+
+      padding-bottom:
+        12px;
+
+      border-bottom:
+        2.5px
+        solid
+        #334155;
+
+      line-height:
+        1.25;
+
+    }
+
+
+    p {
+
+      margin-top:
+        0;
+
+      margin-bottom:
+        14px;
+
+      text-align:
+        justify;
+
+      orphans:
+        3;
+
+      widows:
+        3;
+
+    }
+
+
+    ul,
+    ol {
+
+      margin-top:
+        10px;
+
+      margin-bottom:
+        14px;
+
+    }
+
+
+    strong {
+
+      font-weight:
+        700;
+
+    }
+
+
+    em,
+    i {
+
+      font-style:
+        italic;
+
+    }
+
+
+    /* ========================================================
+       READING
+       ======================================================== */
+
+    .reading-section {
+
+      display:
+        block;
+
+      margin-top:
+        42px;
+
+      margin-bottom:
+        28px;
+
+      break-inside:
+        auto;
+
+      page-break-inside:
+        auto;
+
+    }
+
+
+    .reading-section.first-reading {
+
+      margin-top:
+        0;
+
+    }
+
+
+    .reading-heading {
+
+      display:
+        flex;
+
+      justify-content:
+        space-between;
+
+      align-items:
+        center;
+
+      gap:
+        16px;
+
+      background:
+        #1e293b;
+
+      color:
+        #ffffff;
+
+      padding:
+        10px
+        14px;
+
+      border-radius:
+        6px
+        6px
+        0
+        0;
+
+      break-after:
+        avoid;
+
+      page-break-after:
+        avoid;
+
+    }
+
+
+    .reading-number {
+
+      font-size:
+        17px;
+
+      font-weight:
+        800;
+
+      line-height:
+        1.35;
+
+    }
+
+
+    .reading-range {
+
+      flex-shrink:
+        0;
+
+      font-size:
+        13px;
+
+      font-weight:
+        700;
+
+      color:
+        #e2e8f0;
+
+      white-space:
+        nowrap;
+
+    }
+
+
+    .reading-content {
+
+      padding:
+        18px
+        20px;
+
+      background:
+        #f8fafc;
+
+      border-left:
+        1px
+        solid
+        #cbd5e1;
+
+      border-right:
+        1px
+        solid
+        #cbd5e1;
+
+      border-bottom:
+        1px
+        solid
+        #cbd5e1;
+
+      border-radius:
+        0
+        0
+        6px
+        6px;
+
+      break-inside:
+        auto;
+
+      page-break-inside:
+        auto;
+
+    }
+
+
+    .reading-content
+    > *:first-child {
+
+      margin-top:
+        0;
+
+    }
+
+
+    .reading-content
+    > *:last-child {
+
+      margin-bottom:
+        0;
+
+    }
+
+
+    /* ========================================================
+       QUESTIONS
+       ======================================================== */
+
+    .question-block {
+
+      display:
+        block;
+
+      margin:
+        0
+        0
+        34px;
+
+      padding:
+        0
+        0
+        28px;
+
+      border-bottom:
+        1px
+        solid
+        #e2e8f0;
+
+      break-inside:
+        avoid;
+
+      page-break-inside:
+        avoid;
+
+    }
+
+
+    .question-block:last-child {
+
+      border-bottom:
+        none;
+
+    }
+
+
+    .question-number {
+
+      display:
+        inline-block;
+
+      margin-bottom:
+        10px;
+
+      padding:
+        5px
+        10px;
+
+      background:
+        #ebeff5;
+
+      border-left:
+        4px
+        solid
+        #475569;
+
+      border-radius:
+        0
+        4px
+        4px
+        0;
+
+      font-size:
+        14px;
+
+      font-weight:
+        800;
+
+      color:
+        #1e293b;
+
+      line-height:
+        1.4;
+
+      break-after:
+        avoid;
+
+      page-break-after:
+        avoid;
+
+    }
+
+
+    .question-text {
+
+      margin-top:
+        0;
+
+    }
+
+
+    .question-text
+    > *:first-child {
+
+      margin-top:
+        0;
+
+    }
+
+
+    .question-text
+    > *:last-child {
+
+      margin-bottom:
+        0;
+
+    }
+
+
+    /* ========================================================
+       CHOICES
+       ======================================================== */
+
+    .choices {
+
+      display:
+        flex;
+
+      flex-direction:
+        column;
+
+      gap:
+        8px;
+
+      margin-top:
+        16px;
+
+      width:
+        100%;
+
+    }
+
+
+    .choice-row {
+
+      display:
+        grid;
+
+      grid-template-columns:
+        34px
+        minmax(0, 1fr)
+        34px;
+
+      align-items:
+        center;
+
+      column-gap:
+        8px;
+
+      width:
+        100%;
+
+      min-height:
+        44px;
+
+      padding:
+        8px
+        10px;
+
+      border:
+        1px
+        solid
+        #e2e8f0;
+
+      border-radius:
+        5px;
+
+      background:
+        #ffffff;
+
+      break-inside:
+        avoid;
+
+      page-break-inside:
+        avoid;
+
+    }
+
+
+    .choice-letter {
+
+      align-self:
+        center;
+
+      font-weight:
+        800;
+
+      color:
+        #334155;
+
+      line-height:
+        1.5;
+
+    }
+
+
+    .choice-content {
+
+      align-self:
+        center;
+
+      min-width:
+        0;
+
+      line-height:
+        1.6;
+
+    }
+
+
+    .choice-content
+    > * {
+
+      margin-top:
+        0;
+
+    }
+
+
+    .choice-content
+    > *:last-child {
+
+      margin-bottom:
+        0;
+
+    }
+
+
+    .choice-content p {
+
+      margin:
+        0;
+
+      text-align:
+        left;
+
+    }
+
+
+    .choice-mark {
+
+      display:
+        flex;
+
+      align-items:
+        center;
+
+      justify-content:
+        center;
+
+      align-self:
+        center;
+
+      width:
+        100%;
+
+      min-height:
+        28px;
+
+      font-size:
+        21px;
+
+      line-height:
+        1;
+
+      font-weight:
+        900;
+
+      color:
+        #16a34a;
+
+    }
+
+
+    .choice-correct {
+
+      background:
+        #f0fdf4;
+
+      border-color:
+        #86efac;
+
+      border-left:
+        4px
+        solid
+        #16a34a;
+
+    }
+
+
+    .choice-correct
+    .choice-letter {
+
+      color:
+        #166534;
+
+    }
+
+
+    /* ========================================================
+       CORRECT ANSWER
+       ======================================================== */
+
+    .correct-answer-line {
+
+      display:
+        inline-flex;
+
+      align-items:
+        center;
+
+      gap:
+        6px;
+
+      margin-top:
+        14px;
+
+      padding:
+        7px
+        11px;
+
+      background:
+        #f0fdf4;
+
+      border-left:
+        4px
+        solid
+        #16a34a;
+
+      border-radius:
+        0
+        4px
+        4px
+        0;
+
+      color:
+        #14532d;
+
+      break-inside:
+        avoid;
+
+      page-break-inside:
+        avoid;
+
+    }
+
+
+    .correct-answer-line strong {
+
+      font-weight:
+        800;
+
+    }
+
+
+    /* ========================================================
+       EXPLANATION
+       ======================================================== */
+
+    .explanation-box,
+    .model-answer-box,
+    .rubric-box {
+
+      margin-top:
+        18px;
+
+      padding:
+        14px
+        16px;
+
+      border-radius:
+        6px;
+
+      break-inside:
+        avoid;
+
+      page-break-inside:
+        avoid;
+
+    }
+
+
+    .explanation-box {
+
+      background:
+        #f8fafc;
+
+      border:
+        1px
+        solid
+        #cbd5e1;
+
+      border-left:
+        4px
+        solid
+        #64748b;
+
+    }
+
+
+    .model-answer-box {
+
+      background:
+        #f0fdf4;
+
+      border:
+        1px
+        solid
+        #bbf7d0;
+
+      border-left:
+        4px
+        solid
+        #16a34a;
+
+    }
+
+
+    .rubric-box {
+
+      background:
+        #fffbeb;
+
+      border:
+        1px
+        solid
+        #fde68a;
+
+      border-left:
+        4px
+        solid
+        #d97706;
+
+    }
+
+
+    .box-title {
+
+      margin-bottom:
+        9px;
+
+      font-size:
+        13px;
+
+      font-weight:
+        800;
+
+      text-transform:
+        uppercase;
+
+      letter-spacing:
+        0.04em;
+
+      color:
+        #334155;
+
+    }
+
+
+    .solution-content
+    > *:first-child {
+
+      margin-top:
+        0;
+
+    }
+
+
+    .solution-content
+    > *:last-child {
+
+      margin-bottom:
+        0;
+
+    }
+
+
+    .rubric-item
+    + .rubric-item {
+
+      margin-top:
+        10px;
+
+    }
+
+
+    .rubric-item
+    > *:first-child {
+
+      margin-top:
+        0;
+
+    }
+
+
+    .rubric-item
+    > *:last-child {
+
+      margin-bottom:
+        0;
+
+    }
+
+
+    /* ========================================================
+       IMAGE
+       ======================================================== */
+
+    img {
+
+      max-width:
+        100%
+        !important;
+
+      height:
+        auto
+        !important;
+
+      display:
+        block;
+
+      margin:
+        20px
+        auto;
+
+      object-fit:
+        contain;
+
+      break-inside:
+        avoid;
+
+      page-break-inside:
+        avoid;
+
+    }
+
+
+    /* ========================================================
+       TABLE
+       ======================================================== */
+
+    table {
+
+      width:
+        100%;
+
+      margin:
+        18px
+        0;
+
+      border-collapse:
+        collapse;
+
+      break-inside:
+        auto;
+
+      page-break-inside:
+        auto;
+
+    }
+
+
+    table,
+    th,
+    td {
+
+      border:
+        1px
+        solid
+        #cbd5e1;
+
+      padding:
+        8px
+        12px;
+
+      color:
+        #1e293b;
+
+    }
+
+
+    th {
+
+      background:
+        #f1f5f9;
+
+      font-weight:
+        600;
+
+    }
+
+
+    tr {
+
+      break-inside:
+        avoid;
+
+      page-break-inside:
+        avoid;
+
+    }
+
+
+    /* ========================================================
+       BLOCKQUOTE
+       ======================================================== */
+
+    blockquote {
+
+      background:
+        #ebeff5;
+
+      padding:
+        12px
+        16px;
+
+      margin:
+        18px
+        0;
+
+      border-left:
+        4px
+        solid
+        #64748b;
+
+      color:
+        #1e293b;
+
+      border-radius:
+        0
+        4px
+        4px
+        0;
+
+      break-inside:
+        avoid;
+
+      page-break-inside:
+        avoid;
+
+    }
+
+
+    /* ========================================================
+       MATHJAX
+       ======================================================== */
+
+    mjx-container {
+
+      max-width:
+        100%;
+
+      overflow-x:
+        auto;
+
+      overflow-y:
+        hidden;
+
+    }
+
+
+    mjx-container svg {
+
+      stroke:
+        #0f172a
+        !important;
+
+      fill:
+        #0f172a
+        !important;
+
+    }
+
+
+    /* ========================================================
+       PRINT / PDF
+       ======================================================== */
+
+    @media print {
+
+
+      @page {
+
+        margin:
+          18mm
+          16mm
+          18mm
+          16mm;
+
+        size:
+          auto;
+
+      }
+
+
+      html,
+      body {
+
+        background:
+          #ffffff
+          !important;
+
+      }
+
+
+      body {
+
+        padding:
+          0
+          !important;
+
+        margin:
+          0
+          !important;
+
+        max-width:
+          100%
+          !important;
+
+        font-size:
+          16.5px
+          !important;
+
+      }
+
+
+      /* ====================================================
+         READING PAGE BREAK
+
+         Reading 1:
+         tidak dipaksa.
+
+         Reading 2+:
+         SELALU halaman baru.
+         ==================================================== */
+
+      .reading-section.first-reading {
+
+        break-before:
+          auto
+          !important;
+
+        page-break-before:
+          auto
+          !important;
+
+      }
+
+
+      .reading-section.new-reading {
+
+        break-before:
+          page
+          !important;
+
+        page-break-before:
+          always
+          !important;
+
+        margin-top:
+          0
+          !important;
+
+      }
+
+
+      .reading-section {
+
+        display:
+          block
+          !important;
+
+        break-inside:
+          auto
+          !important;
+
+        page-break-inside:
+          auto
+          !important;
+
+      }
+
+
+      .reading-heading {
+
+        break-after:
+          avoid
+          !important;
+
+        page-break-after:
+          avoid
+          !important;
+
+      }
+
+
+      .reading-content {
+
+        break-inside:
+          auto
+          !important;
+
+        page-break-inside:
+          auto
+          !important;
+
+      }
+
+
+      .question-block {
+
+        break-inside:
+          avoid
+          !important;
+
+        page-break-inside:
+          avoid
+          !important;
+
+      }
+
+
+      .question-number {
+
+        break-after:
+          avoid
+          !important;
+
+        page-break-after:
+          avoid
+          !important;
+
+      }
+
+
+      .choice-row {
+
+        break-inside:
+          avoid
+          !important;
+
+        page-break-inside:
+          avoid
+          !important;
+
+      }
+
+
+      .correct-answer-line,
+      .explanation-box,
+      .model-answer-box,
+      .rubric-box {
+
+        break-inside:
+          avoid
+          !important;
+
+        page-break-inside:
+          avoid
+          !important;
+
+      }
+
+
+      .reading-heading,
+      .reading-content,
+      .question-number,
+      .choice-row,
+      .choice-correct,
+      .correct-answer-line,
+      .explanation-box,
+      .model-answer-box,
+      .rubric-box,
+      blockquote,
+      th {
+
+        -webkit-print-color-adjust:
+          exact
+          !important;
+
+        print-color-adjust:
+          exact
+          !important;
+
+      }
+
+    }
+
+  </style>
+
+</head>
+
+
+<body>
+
+
+  <h1>
+    ${escapeHtml(
+      docTitle
+    )}
+  </h1>
+
+
+  ${
+    renderSegments(
+      documentModel,
+      answerMode
+    )
+  }
+
+
+</body>
+
+</html>`;
+
+  }
+
+
+  // ============================================================
+  // CREATE BLOB URL
+  // ============================================================
+
+  function createBlobUrl(
+    html
+  ) {
+
+    const blob =
+      new Blob(
+
+        [
+          html
+        ],
+
+        {
+          type:
+            'text/html;charset=utf-8'
+        }
+
+      );
+
+
+    const url =
+      URL.createObjectURL(
+        blob
+      );
+
+
+    state.blobUrls.push(
+      url
+    );
+
+
+    return url;
+
+  }
+
+
+  // ============================================================
+  // OPEN HTML IN PREPARED TAB
+  // ============================================================
+
+  function openInPreparedTab(
+    tab,
+    html
+  ) {
+
+    if (
+      !tab
+    ) {
+
+      return false;
+
+    }
+
+
+    try {
+
+      const blobUrl =
+        createBlobUrl(
+          html
+        );
+
+
+      tab.location.href =
+        blobUrl;
+
+
+      return true;
+
+    } catch (
+      err
+    ) {
+
+      console.error(
+        '[Practice Exporter] Open Blob failed:',
+        err
+      );
+
+
+      return false;
+
+    }
+
+  }
+
+
+  // ============================================================
+  // SAVE HTML
+  // ============================================================
+
+  function saveHtml(
+    html,
+    filename
+  ) {
+
+    const blob =
+      new Blob(
+
+        [
+          html
+        ],
+
+        {
+          type:
+            'text/html;charset=utf-8'
+        }
+
+      );
+
+
+    const blobUrl =
+      URL.createObjectURL(
+        blob
+      );
+
+
+    const anchor =
+      document.createElement(
+        'a'
+      );
+
+
+    anchor.href =
+      blobUrl;
+
+
+    anchor.download =
+      filename;
+
+
+    anchor.style.display =
+      'none';
+
+
+    document.body.appendChild(
+      anchor
+    );
+
+
+    anchor.click();
+
+
+    anchor.remove();
+
+
+    setTimeout(
+      () => {
+
+        URL.revokeObjectURL(
+          blobUrl
+        );
+
+      },
+      10000
+    );
+
+  }
+
+
+  // ============================================================
+  // GET OUTPUT MODE
+  // ============================================================
+
+  function getOutputMode() {
+
+    return (
+
+      document.querySelector(
+        'input[name="phe-output-mode"]:checked'
+      )?.value
+
+      ||
+
+      'open'
+
+    );
+
+  }
+
+
+  // ============================================================
+  // IS MERGE ENABLED
+  // ============================================================
+
+  function isMergeEnabled() {
+
+    return Boolean(
+
+      document.getElementById(
+        'phe-merge-checkbox'
+      )?.checked
+
+    );
+
+  }
+
+
+  // ============================================================
+  // PROCESS CURRENT / MERGED QUIZ
+  // ============================================================
+
+  function processLatest() {
+
+    const current =
+      getCurrentQuiz();
+
+
+    if (
+      !current ||
+      !current.questions.length
+    ) {
+
+      alert(
+        `Belum ada response ${TARGET_PATH} yang valid.`
+      );
+
+      return;
+
+    }
+
+
+    const mergeEnabled =
+      isMergeEnabled();
+
+
+    let quizzes =
+      [
+        current
+      ];
+
+
+    let actuallyMerged =
+      false;
+
+
+    // ----------------------------------------------------------
+    // MERGE SAVED QUIZ + CURRENT QUIZ
+    // ----------------------------------------------------------
+
+    if (
+      mergeEnabled &&
+      state.savedQuiz?.bundle
+    ) {
+
+      const saved =
+        state.savedQuiz.bundle;
+
+
+      if (
+        saved.fingerprint !==
+        current.fingerprint
+      ) {
+
+        quizzes = [
+
+          deepClone(
+            saved
+          ),
+
+          deepClone(
+            current
+          )
+
+        ];
+
+
+        actuallyMerged =
+          true;
+
+      }
+
+    }
+
+
+    // ----------------------------------------------------------
+    // BUILD MODEL
+    //
+    // Jika benar-benar merge:
+    // numbering = 1,2,3,4...
+    // ----------------------------------------------------------
+
+    const documentModel =
+      buildDocumentModel(
+
+        quizzes,
+
+        actuallyMerged
+
+      );
+
+
+    const title =
+      getDocumentTitle(
+
+        quizzes,
+
+        actuallyMerged
+
+      );
+
+
+    const questionsHtml =
+      buildHtml({
+
+        title,
+
+        documentModel,
+
+        answerMode:
+          false
+
+      });
+
+
+    const answersHtml =
+      buildHtml({
+
+        title,
+
+        documentModel,
+
+        answerMode:
+          true
+
+      });
+
+
+    const safeTitle =
+      cleanFilename(
+        title
+      );
+
+
+    const questionsFilename =
+      `${safeTitle} - Questions.html`;
+
+
+    const answersFilename =
+      `${safeTitle} - Answers.html`;
+
+
+    const mode =
+      getOutputMode();
+
+
+    const status =
+      document.getElementById(
+        'phe-status'
+      );
+
+
+    // ==========================================================
+    // OPEN IN NEW TABS
+    // ==========================================================
+
+    if (
+      mode === 'open'
+    ) {
+
+      // Dibuka langsung dari click event agar
+      // kemungkinan popup blocking lebih kecil.
+
+      const questionsTab =
+        window.open(
+          'about:blank',
+          '_blank'
+        );
+
+
+      const answersTab =
+        window.open(
+          'about:blank',
+          '_blank'
+        );
+
+
+      if (
+        questionsTab
+      ) {
+
+        questionsTab.document.write(`
+
+          <!DOCTYPE html>
+
+          <html>
+
+          <head>
+
+            <title>
+              Preparing Questions...
+            </title>
+
+          </head>
+
+          <body
+            style="
+              font-family:Arial,sans-serif;
+              padding:40px;
+              color:#475569;
+            "
+          >
+
+            Preparing Questions...
+
+          </body>
+
+          </html>
+
+        `);
+
+
+        questionsTab.document.close();
+
+      }
+
+
+      if (
+        answersTab
+      ) {
+
+        answersTab.document.write(`
+
+          <!DOCTYPE html>
+
+          <html>
+
+          <head>
+
+            <title>
+              Preparing Answers...
+            </title>
+
+          </head>
+
+          <body
+            style="
+              font-family:Arial,sans-serif;
+              padding:40px;
+              color:#475569;
+            "
+          >
+
+            Preparing Answers...
+
+          </body>
+
+          </html>
+
+        `);
+
+
+        answersTab.document.close();
+
+      }
+
+
+      const qOpened =
+        openInPreparedTab(
+
+          questionsTab,
+
+          questionsHtml
+
+        );
+
+
+      const aOpened =
+        openInPreparedTab(
+
+          answersTab,
+
+          answersHtml
+
+        );
+
+
+      if (
+        qOpened &&
+        aOpened
+      ) {
+
+        if (
+          status
+        ) {
+
+          status.textContent =
+
+            actuallyMerged
+
+              ? `Merged ${documentModel.totalQuestions} questions and opened 2 tabs`
+
+              : `Opened ${documentModel.totalQuestions} questions in 2 tabs`;
+
+
+          status.style.color =
+            '#15803d';
+
+        }
+
+      } else {
+
+        if (
+          status
+        ) {
+
+          status.textContent =
+            'Popup blocked. Allow popups for this site.';
+
+
+          status.style.color =
+            '#dc2626';
+
+        }
+
+      }
+
+
+      return;
+
+    }
+
+
+    // ==========================================================
+    // SAVE FILES
+    // ==========================================================
+
+    saveHtml(
+
+      questionsHtml,
+
+      questionsFilename
+
+    );
+
+
+    setTimeout(
+      () => {
+
+        saveHtml(
+
+          answersHtml,
+
+          answersFilename
+
+        );
+
+      },
+      300
+    );
+
+
+    if (
+      status
+    ) {
+
+      status.textContent =
+
+        actuallyMerged
+
+          ? `Merged and saved ${documentModel.totalQuestions} questions`
+
+          : `Saved ${documentModel.totalQuestions} questions`;
+
+
+      status.style.color =
+        '#15803d';
+
+    }
+
+  }
+
+
+  // ============================================================
+  // CREATE PANEL
+  // ============================================================
+
+  const panel =
+    document.createElement(
+      'div'
+    );
+
+
+  panel.id =
+    PANEL_ID;
+
+
+  Object.assign(
+    panel.style,
+    {
+
+      position:
+        'fixed',
+
+      bottom:
+        '20px',
+
+      right:
+        '20px',
+
+      zIndex:
+        '2147483647',
+
+      backgroundColor:
+        '#ffffff',
+
+      border:
+        '2px solid #334155',
+
+      borderRadius:
+        '8px',
+
+      padding:
+        '14px 16px',
+
+      boxShadow:
+        '0 6px 18px rgba(0,0,0,.22)',
+
+      display:
+        'flex',
+
+      flexDirection:
+        'column',
+
+      gap:
+        '10px',
+
+      width:
+        '365px',
+
+      maxHeight:
+        '90vh',
+
+      overflowY:
+        'auto',
+
+      fontFamily:
+        '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif',
+
+      color:
+        '#1e293b'
+
+    }
+  );
+
+
+  // ============================================================
+  // TITLE
+  // ============================================================
+
+  const titleEl =
+    document.createElement(
+      'div'
+    );
+
+
+  titleEl.textContent =
+    'Practice HTML Exporter';
+
+
+  Object.assign(
+    titleEl.style,
+    {
+
+      fontWeight:
+        '800',
+
+      fontSize:
+        '14px',
+
+      color:
+        '#0f172a'
+
+    }
+  );
+
+
+  // ============================================================
+  // WATCH TARGET
+  // ============================================================
+
+  const targetEl =
+    document.createElement(
+      'div'
+    );
+
+
+  targetEl.textContent =
+    `Watching: ${TARGET_PATH}`;
+
+
+  Object.assign(
+    targetEl.style,
+    {
+
+      fontSize:
+        '11px',
+
+      color:
+        '#64748b',
+
+      wordBreak:
+        'break-all'
+
+    }
+  );
+
+
+  // ============================================================
+  // CURRENT QUIZ INFO
+  // ============================================================
+
+  const info =
+    document.createElement(
+      'div'
+    );
+
+
+  info.id =
+    'phe-capture-info';
+
+
+  Object.assign(
+    info.style,
+    {
+
+      fontSize:
+        '11px',
+
+      lineHeight:
+        '1.45',
+
+      background:
+        '#f8fafc',
+
+      border:
+        '1px solid #e2e8f0',
+
+      borderRadius:
+        '6px',
+
+      padding:
+        '8px'
+
+    }
+  );
+
+
+  // ============================================================
+  // OUTPUT MODE
+  // ============================================================
+
+  const outputContainer =
+    document.createElement(
+      'div'
+    );
+
+
+  Object.assign(
+    outputContainer.style,
+    {
+
+      display:
+        'flex',
+
+      flexDirection:
+        'column',
+
+      gap:
+        '6px',
+
+      padding:
+        '9px',
+
+      background:
+        '#f8fafc',
+
+      border:
+        '1px solid #e2e8f0',
+
+      borderRadius:
+        '6px'
+
+    }
+  );
+
+
+  const outputTitle =
+    document.createElement(
+      'div'
+    );
+
+
+  outputTitle.textContent =
+    'Output Mode';
+
+
+  Object.assign(
+    outputTitle.style,
+    {
+
+      fontSize:
+        '11px',
+
+      fontWeight:
+        '800',
+
+      color:
+        '#334155'
+
+    }
+  );
+
+
+  // ------------------------------------------------------------
+  // OPEN RADIO
+  // ------------------------------------------------------------
+
+  const openLabel =
+    document.createElement(
+      'label'
+    );
+
+
+  Object.assign(
+    openLabel.style,
+    {
+
+      display:
+        'flex',
+
+      alignItems:
+        'center',
+
+      gap:
+        '7px',
+
+      cursor:
+        'pointer',
+
+      fontSize:
+        '12px'
+
+    }
+  );
+
+
+  const openRadio =
+    document.createElement(
+      'input'
+    );
+
+
+  openRadio.type =
+    'radio';
+
+
+  openRadio.name =
+    'phe-output-mode';
+
+
+  openRadio.value =
+    'open';
+
+
+  openRadio.checked =
+    true;
+
+
+  const openText =
+    document.createElement(
+      'span'
+    );
+
+
+  openText.innerHTML = `
+
+    <strong>
+      Open in New Tabs
+    </strong>
+
+    <span
+      style="
+        color:#64748b;
+        font-size:10px;
+      "
+    >
+      (Blob, default)
+    </span>
+
+  `;
+
+
+  openLabel.append(
+    openRadio,
+    openText
+  );
+
+
+  // ------------------------------------------------------------
+  // SAVE FILE RADIO
+  // ------------------------------------------------------------
+
+  const saveLabel =
+    document.createElement(
+      'label'
+    );
+
+
+  Object.assign(
+    saveLabel.style,
+    {
+
+      display:
+        'flex',
+
+      alignItems:
+        'center',
+
+      gap:
+        '7px',
+
+      cursor:
+        'pointer',
+
+      fontSize:
+        '12px'
+
+    }
+  );
+
+
+  const saveRadio =
+    document.createElement(
+      'input'
+    );
+
+
+  saveRadio.type =
+    'radio';
+
+
+  saveRadio.name =
+    'phe-output-mode';
+
+
+  saveRadio.value =
+    'save';
+
+
+  const saveText =
+    document.createElement(
+      'span'
+    );
+
+
+  saveText.innerHTML = `
+
+    <strong>
+      Save HTML Files
+    </strong>
+
+    <span
+      style="
+        color:#64748b;
+        font-size:10px;
+      "
+    >
+      (Download)
+    </span>
+
+  `;
+
+
+  saveLabel.append(
+    saveRadio,
+    saveText
+  );
+
+
+  outputContainer.append(
+    outputTitle,
+    openLabel,
+    saveLabel
+  );
+
+
+  // ============================================================
+  // MERGE OPTION
+  // ============================================================
+
+  const mergeContainer =
+    document.createElement(
+      'div'
+    );
+
+
+  Object.assign(
+    mergeContainer.style,
+    {
+
+      display:
+        'flex',
+
+      flexDirection:
+        'column',
+
+      gap:
+        '8px',
+
+      padding:
+        '9px',
+
+      background:
+        '#f8fafc',
+
+      border:
+        '1px solid #e2e8f0',
+
+      borderRadius:
+        '6px'
+
+    }
+  );
+
+
+  const mergeLabel =
+    document.createElement(
+      'label'
+    );
+
+
+  Object.assign(
+    mergeLabel.style,
+    {
+
+      display:
+        'flex',
+
+      alignItems:
+        'center',
+
+      gap:
+        '8px',
+
+      cursor:
+        'pointer',
+
+      fontSize:
+        '12px'
+
+    }
+  );
+
+
+  const mergeCheckbox =
+    document.createElement(
+      'input'
+    );
+
+
+  mergeCheckbox.type =
+    'checkbox';
+
+
+  mergeCheckbox.id =
+    'phe-merge-checkbox';
+
+
+  // DEFAULT:
+  // TIDAK DICENTANG
+  mergeCheckbox.checked =
+    false;
+
+
+  const mergeText =
+    document.createElement(
+      'span'
+    );
+
+
+  mergeText.innerHTML = `
+
+    <strong>
+      Merge Quiz
+    </strong>
+
+    <span
+      style="
+        color:#64748b;
+        font-size:10px;
+      "
+    >
+      (optional)
+    </span>
+
+  `;
+
+
+  mergeLabel.append(
+    mergeCheckbox,
+    mergeText
+  );
+
+
+  // ============================================================
+  // MERGE INFO
+  // ============================================================
+
+  const mergeInfo =
+    document.createElement(
+      'div'
+    );
+
+
+  mergeInfo.id =
+    'phe-merge-info';
+
+
+  Object.assign(
+    mergeInfo.style,
+    {
+
+      display:
+        'none',
+
+      fontSize:
+        '10.5px',
+
+      lineHeight:
+        '1.4',
+
+      padding:
+        '7px',
+
+      background:
+        '#ffffff',
+
+      border:
+        '1px solid #e2e8f0',
+
+      borderRadius:
+        '5px'
+
+    }
+  );
+
+
+  // ============================================================
+  // SAVE CURRENT QUIZ FOR MERGE BUTTON
+  // ============================================================
+
+  const saveMergeButton =
+    document.createElement(
+      'button'
+    );
+
+
+  saveMergeButton.id =
+    'phe-save-merge-button';
+
+
+  saveMergeButton.textContent =
+    'Save Current Quiz for Merge';
+
+
+  Object.assign(
+    saveMergeButton.style,
+    {
+
+      display:
+        'none',
+
+      width:
+        '100%',
+
+      backgroundColor:
+        '#2563eb',
+
+      color:
+        '#ffffff',
+
+      border:
+        'none',
+
+      padding:
+        '8px 10px',
+
+      fontSize:
+        '11.5px',
+
+      fontWeight:
+        '800',
+
+      borderRadius:
+        '5px',
+
+      cursor:
+        'pointer'
+
+    }
+  );
+
+
+  saveMergeButton.addEventListener(
+
+    'click',
+
+    saveCurrentQuizForMerge
+
+  );
+
+
+  mergeCheckbox.addEventListener(
+
+    'change',
+
+    updateMergeUI
+
+  );
+
+
+  mergeContainer.append(
+    mergeLabel,
+    mergeInfo,
+    saveMergeButton
+  );
+
+
+  // ============================================================
+  // PROCESS BUTTON
+  // ============================================================
+
+  const processButton =
+    document.createElement(
+      'button'
+    );
+
+
+  processButton.textContent =
+    'Process Latest JSON';
+
+
+  Object.assign(
+    processButton.style,
+    {
+
+      backgroundColor:
+        '#1e293b',
+
+      color:
+        '#ffffff',
+
+      border:
+        'none',
+
+      padding:
+        '10px 14px',
+
+      fontSize:
+        '13px',
+
+      fontWeight:
+        '800',
+
+      borderRadius:
+        '5px',
+
+      cursor:
+        'pointer',
+
+      width:
+        '100%'
+
+    }
+  );
+
+
+  processButton.addEventListener(
+
+    'mouseenter',
+
+    () => {
+
+      processButton.style
+        .backgroundColor =
+        '#334155';
+
+    }
+
+  );
+
+
+  processButton.addEventListener(
+
+    'mouseleave',
+
+    () => {
+
+      processButton.style
+        .backgroundColor =
+        '#1e293b';
+
+    }
+
+  );
+
+
+  processButton.addEventListener(
+
+    'click',
+
+    processLatest
+
+  );
+
+
+  // ============================================================
+  // STATUS
+  // ============================================================
+
+  const status =
+    document.createElement(
+      'div'
+    );
+
+
+  status.id =
+    'phe-status';
+
+
+  Object.assign(
+    status.style,
+    {
+
+      fontSize:
+        '11px',
+
+      color:
+        '#64748b',
+
+      textAlign:
+        'center',
+
+      minHeight:
+        '16px',
+
+      lineHeight:
+        '1.4'
+
+    }
+  );
+
+
+  // ============================================================
+  // PANEL ASSEMBLY
+  // ============================================================
+
+  panel.append(
+    titleEl,
+    targetEl,
+    info,
+    outputContainer,
+    mergeContainer,
+    processButton,
+    status
+  );
+
+
+  document.body.appendChild(
+    panel
+  );
+
+
+  // ============================================================
+  // INITIAL UI
+  // ============================================================
+
+  updatePanel();
+
+
+  console.log(
+    `[Practice Exporter] Version 5 installed. Watching ${TARGET_PATH}`
+  );
+
+})();
