@@ -193,26 +193,42 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
 .qc-item { padding:12px 8px; margin-bottom:12px; border-radius:8px; border:1px solid #f0f0f0; background:#fff; break-inside: avoid; page-break-inside: avoid; }
 .qc-item h3 { margin:0 0 6px; font-size:16px; font-weight:700; }
 
-/* PERBAIKAN UTAMA: Gunakan !important pada setiap elemen teks */
-.qc-stem, .qc-stem * { font-size: 16px !important; line-height: 1.5 !important; }
-.qc-choices, .qc-choices * { font-size: 16px !important; line-height: 1.5 !important; }
+/* NORMALISASI TEKS TANPA MENGUBAH ELEMEN INTERNAL MATHJAX */
+.qc-stem { font-size:16px !important; line-height:1.5 !important; }
+.qc-choices { font-size:16px !important; line-height:1.5 !important; }
+.qc-expl { font-size:16px !important; line-height:1.5 !important; }
+
+/* Hanya elemen teks luar. Jangan gunakan selector * atau .qc-expl span. */
+.qc-stem > p,
+.qc-stem > div,
+.qc-stem > section,
+.qc-stem > ul,
+.qc-stem > ol,
+.qc-stem > li,
+.qc-expl > p,
+.qc-expl > div,
+.qc-expl > section,
+.qc-expl > ul,
+.qc-expl > ol,
+.qc-expl > li {
+    font-size:16px !important;
+    line-height:1.5 !important;
+}
 
 .qc-choices { margin:8px 0 0 0; padding:0; list-style:none; }
-.qc-choice { margin:6px 0; display:flex; gap:8px; }
+.qc-choice { margin:6px 0; display:flex; gap:8px; font-size:16px; line-height:1.5; }
 .qc-letter { font-weight:700; min-width:22px; }
+.qc-text { font-size:16px; line-height:1.5; }
 .qc-correct .qc-text { font-weight:700; }
 .qc-tick { font-weight:700; margin-left:6px; }
 .qc-answer-block { border-top:1px dashed #e5e7eb; margin-top:10px; padding:10px; background: var(--qc-gray); border-radius:8px; }
 
-/* MENIMPA CSS BAWAAN WEBSITE (NUCLEAR OPTION) */
-.qc-expl, 
-.qc-expl p, 
-.qc-expl div, 
-.qc-expl span, 
-.qc-expl section,
-.qc-expl li {
-    font-size: 16px !important;
-    line-height: 1.5 !important;
+/* Jangan override span internal MathJax. Biarkan style asli MathJax bekerja. */
+.qc-container .MathJax_CHTML,
+.qc-container .MathJax_CHTML *,
+.qc-container .mjx-chtml,
+.qc-container .mjx-chtml * {
+    /* sengaja kosong */
 }
 </style>`; 
                 return '<!doctype html><html><head><title>' + esc(title) + '</title>' + mjxCfg + originalHeadHTML + quizStyles + normalize + '</head><body>' + bodyHTML + '</body></html>'; 
