@@ -48,12 +48,78 @@
 
                 for (const block of questionBlocks) {
                     if (!window.isAutoAnswerRunning) break;
+
+                    // -------------------------------------------------------------
+                    // 1) MULTIPLE CHOICE
+                    // -------------------------------------------------------------
                     const radios = Array.from(block.querySelectorAll('input[type="radio"]'));
-                    if (radios.length > 0 && !radios.some(r => r.checked)) {
-                        const randomIdx = Math.floor(Math.random() * radios.length);
-                        radios[randomIdx].click();
-                        answersClicked++;
-                        await sleep(200); 
+                    if (radios.length > 0) {
+                        if (!radios.some(r => r.checked)) {
+                            const randomIdx = Math.floor(Math.random() * radios.length);
+                            radios[randomIdx].click();
+                            answersClicked++;
+                            await sleep(200);
+                        }
+                        continue;
+                    }
+
+                    // -------------------------------------------------------------
+                    // 2) ESSAY / CONSTRUCTED RESPONSE (QUILL)
+                    // -------------------------------------------------------------
+                    const essayEditor =
+                        block.querySelector('.quill .ql-editor[contenteditable="true"]') ||
+                        block.querySelector('.ql-editor[contenteditable="true"]') ||
+                        block.querySelector('[contenteditable="true"][class*="ql-editor"]');
+
+                    if (essayEditor) {
+                        const currentText = (essayEditor.innerText || essayEditor.textContent || '').trim();
+
+                        if (!currentText) {
+                            // Quill listens to DOM/input events. Put the requested answer
+                            // into the editable area and emit the events React/Quill expects.
+                            essayEditor.focus();
+                            essayEditor.innerHTML = '<p>answer</p>';
+
+                            essayEditor.dispatchEvent(new InputEvent('input', {
+                                bubbles: true,
+                                inputType: 'insertText',
+                                data: 'answer'
+                            }));
+                            essayEditor.dispatchEvent(new Event('change', { bubbles: true }));
+                            essayEditor.dispatchEvent(new Event('blur', { bubbles: true }));
+
+                            answersClicked++;
+                            await sleep(300);
+
+                            // Some React/Quill builds update state only after a real edit.
+                            // If the button is still Skip, use execCommand as a fallback.
+                            let navBtn = $('[data-test-id="runnner-footer-nextskip-button"]');
+                            let navText = (navBtn?.innerText || navBtn?.textContent || '').trim().toLowerCase();
+
+                            if (navText === 'skip') {
+                                essayEditor.focus();
+                                try {
+                                    document.execCommand('selectAll', false, null);
+                                    document.execCommand('insertText', false, 'answer');
+                                } catch (_) {}
+
+                                essayEditor.dispatchEvent(new InputEvent('input', {
+                                    bubbles: true,
+                                    inputType: 'insertText',
+                                    data: 'answer'
+                                }));
+                                essayEditor.dispatchEvent(new Event('change', { bubbles: true }));
+                                await sleep(300);
+                            }
+
+                            // Wait until Kaplan recognizes the essay as answered.
+                            await waitFor(() => {
+                                const btnNext = $('[data-test-id="runnner-footer-nextskip-button"]');
+                                if (!btnNext) return false;
+                                const txt = (btnNext.innerText || btnNext.textContent || '').trim().toLowerCase();
+                                return txt === 'next' || btnNext.className.includes('nextbtn');
+                            }, 3000, 100);
+                        }
                     }
                 }
 
@@ -77,9 +143,38 @@
                 }
 
                 if (nextBtn && !nextBtn.disabled) {
+                    const navLabel = (nextBtn.innerText || nextBtn.textContent || '').trim().toLowerCase();
+
+                    // For essay questions Kaplan initially shows "Skip".
+                    // Do not advance until the entered answer has been accepted and it becomes "Next".
+                    const pageHasEssay = questionBlocks.some(block =>
+                        block.querySelector('.ql-editor[contenteditable="true"]')
+                    );
+
+                    if (pageHasEssay && navLabel === 'skip') {
+                        await sleep(300);
+                        continue;
+                    }
+
                     const anyUnchecked = questionBlocks.some(block => {
                         const rs = Array.from(block.querySelectorAll('input[type="radio"]'));
-                        return rs.length > 0 && !rs.some(r => r.checked);
+
+                        // MCQ: unanswered when no radio is checked.
+                        if (rs.length > 0) {
+                            return !rs.some(r => r.checked);
+                        }
+
+                        // Essay: unanswered when the Quill editor is empty.
+                        const essayEditor =
+                            block.querySelector('.quill .ql-editor[contenteditable="true"]') ||
+                            block.querySelector('.ql-editor[contenteditable="true"]') ||
+                            block.querySelector('[contenteditable="true"][class*="ql-editor"]');
+
+                        if (essayEditor) {
+                            return !(essayEditor.innerText || essayEditor.textContent || '').trim();
+                        }
+
+                        return false;
                     });
 
                     if (!anyUnchecked) {
@@ -134,13 +229,13 @@
             function getFullCourseTitleImmediate() { const el = $('h1.CourseNodeHeader-module__courseTitleHeadingTwo--RL41B[data-test-id="course-module-name"]') || $('h1[data-test-id="course-module-name"]') || $('h1[class*="courseTitleHeadingTwo"]') || $('[class*="CourseNodeHeader-module__wrapper"] h1') || $('h1'); return pickText(el) || 'Quiz'; }
             async function getFullCourseTitle() { const now = getFullCourseTitleImmediate(); if (now !== 'Quiz') return now; const el = await waitFor(() => $('h1[data-test-id="course-module-name"]') || $('h1[class*="courseTitleHeadingTwo"]') || null, 2000, 120); return el ? pickText(el) : 'Quiz'; }
             
-            function toShortModuleTitle(fullTitle) { 
-                const m = fullTitle.match(/(Module\s+\d+(?:\.\d+)*)(?::|$)/i); 
-                if (m) return m[1]; 
-                const beforeColon = fullTitle.split(':')[0].trim(); 
-                return beforeColon; 
+            function toSafeFileBase(fullTitle) {
+                return String(fullTitle || 'Quiz')
+                    .replace(/[:\\/*?"<>|]/g, '')
+                    .replace(/\s+/g, ' ')
+                    .trim() || 'Quiz';
             }
-            
+
             function parseQNumFromIndexText(s) { if (!s) return null; const m = s.match(/Question(?:\s*#)?\s*(\d+)/i); return m ? parseInt(m[1], 10) : null; }
             function getNextAriaNumber() { const btn = $('[data-test-id="attempt-review-footer-nextattempt"]') || $('button[class*="__nextbtn"]') || $('.RunFooter-module__rightButton--gMXAV'); if (!btn) return null; const aria = btn.getAttribute('aria-label') || ''; const m = aria.match(/Next item question #(\d+)/i); return m ? parseInt(m[1], 10) : null; }
             function getTotalQuestionsFromNav() { const table = $('table[data-test-id="exam-review-results"]') || $('.css-19cszzt'); if (!table) return null; const rows = $all('tbody tr', table); if (rows.length) return rows.length; const rowsById = $all('tbody tr[id^="exam-review-table-row-"]', table); if (rowsById.length) return rowsById.length; const nums = $all('tbody tr td:first-child span', table).map(s => parseInt((s.textContent || '').trim(), 10)).filter(n => Number.isFinite(n)); return nums.length ? Math.max(...nums) : null; }
@@ -216,9 +311,34 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
 }
 
 .qc-choices { margin:8px 0 0 0; padding:0; list-style:none; }
-.qc-choice { margin:6px 0; display:flex; gap:8px; font-size:16px; line-height:1.5; }
-.qc-letter { font-weight:700; min-width:22px; }
-.qc-text { font-size:16px; line-height:1.5; }
+.qc-choice {
+    margin:6px 0;
+    display:flex;
+    align-items:flex-start;
+    gap:8px;
+    font-size:16px;
+    line-height:1.5;
+}
+.qc-letter {
+    flex:0 0 28px;
+    width:28px;
+    font-weight:700;
+    line-height:1.5;
+}
+.qc-text {
+    flex:1 1 auto;
+    min-width:0;
+    display:block;
+    font-size:16px;
+    line-height:1.5;
+}
+.qc-text > p {
+    margin:0;
+    padding:0;
+    font-size:inherit;
+    line-height:inherit;
+}
+.qc-text > p + p { margin-top:6px; }
 .qc-correct .qc-text { font-weight:700; }
 .qc-tick { font-weight:700; margin-left:6px; }
 .qc-answer-block { border-top:1px dashed #e5e7eb; margin-top:10px; padding:10px; background: var(--qc-gray); border-radius:8px; }
@@ -234,8 +354,8 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
                 return '<!doctype html><html><head><title>' + esc(title) + '</title>' + mjxCfg + originalHeadHTML + quizStyles + normalize + '</head><body>' + bodyHTML + '</body></html>'; 
             }
             
-            function renderListHTML(records, title, mode) { 
-                let html = '<div class="qc-container"><h1 class="qc-title">' + esc(title) + '</h1>'; 
+            function renderListHTML(records, displayTitle, mode) { 
+                let html = '<div class="qc-container"><h1 class="qc-title">' + esc(displayTitle) + '</h1>'; 
                 let lastReadingKey = null, firstBlock = true; 
                 records.forEach((rec, i) => { 
                     if (rec.readingHTML && rec.readingHTML !== lastReadingKey) { 
@@ -264,18 +384,19 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
             function openTabWith(docHTML) { const win = window.open('', '_blank'); if (!win) { alert('Popup diblokir. Izinkan pop-up untuk situs ini.'); return; } const doc = win.document; doc.open(); doc.write(docHTML); doc.close(); try { if (win.MathJax && win.MathJax.typesetPromise) { win.MathJax.typesetPromise(); } } catch (_) {} }
 
             const fullTitle = await getFullCourseTitle();
-            const shortTitle = toShortModuleTitle(fullTitle);
+            const safeFileBase = toSafeFileBase(fullTitle);
             const records = await captureAll();
             if (!records || !records.length) { alert('Tidak ada pertanyaan yang tertangkap.'); return; }
             const originalHead = gatherOriginalHead();
-            
-            const questionsTitle = shortTitle + ' - Questions';
-            const questionsBody = renderListHTML(records, questionsTitle, 'Q');
-            openTabWith(getPageTemplate(questionsTitle, originalHead, questionsBody));
+
+            const questionsFileTitle = safeFileBase + ' - Questions';
+            const questionsBody = renderListHTML(records, fullTitle, 'Q');
+            openTabWith(getPageTemplate(questionsFileTitle, originalHead, questionsBody));
             await sleep(200);
-            const answersTitle = shortTitle + ' - Answers';
-            const answersBody = renderListHTML(records, answersTitle, 'A');
-            openTabWith(getPageTemplate(answersTitle, originalHead, answersBody));
+
+            const answersFileTitle = safeFileBase + ' - Answers';
+            const answersBody = renderListHTML(records, fullTitle, 'A');
+            openTabWith(getPageTemplate(answersFileTitle, originalHead, answersBody));
 
         } catch (err) {
             console.error(err);
@@ -283,6 +404,148 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
         } finally {
             const btn = document.getElementById('quiz-extractor-btn');
             if (btn) { btn.textContent = '🖨️ Ekstrak Quiz'; btn.disabled = false; }
+        }
+    }
+
+    // =================================================================================
+    // BAGIAN 3: AUTO GRADING ESSAY -> 0 POINTS
+    // =================================================================================
+    async function jalankanGradingNol() {
+        const btn = document.getElementById('quiz-grade-zero-btn');
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = '⏳ Grading 0...';
+        }
+
+        try {
+            // Pastikan tab Ungraded aktif bila tersedia.
+            const tabs = $all('[data-id="exam-review-section"]');
+            const ungradedTab = tabs.find(t => (t.innerText || t.textContent || '').trim().toLowerCase() === 'ungraded');
+            if (ungradedTab && ungradedTab.getAttribute('aria-selected') !== 'true') {
+                ungradedTab.click();
+                await sleep(500);
+            }
+
+            const getRows = () => $all('tr[data-test-id="exam-review-answer"]')
+                .filter(row => {
+                    const txt = (row.innerText || row.textContent || '').toLowerCase();
+                    return txt.includes('ungraded');
+                });
+
+            let safety = 0;
+
+            while (safety++ < 500) {
+                const rows = getRows();
+                if (!rows.length) break;
+
+                const row = rows[0];
+                const rowId = row.id || '';
+
+                row.click();
+
+                // Tunggu detail soal + score input muncul.
+                const scoreInput = await waitFor(() => {
+                    const candidates = $all('input[aria-label="Question count"], input[title="count value"], input.count-value');
+                    return candidates.find(el => el.offsetParent !== null) || candidates[0] || null;
+                }, 5000, 100);
+
+                if (!scoreInput) {
+                    console.warn('Score input tidak ditemukan untuk', rowId || row);
+                    await sleep(300);
+                    continue;
+                }
+
+                // Isi score = 0 dengan native setter agar React mengenali perubahan.
+                const nativeSetter = Object.getOwnPropertyDescriptor(
+                    window.HTMLInputElement.prototype,
+                    'value'
+                )?.set;
+
+                scoreInput.focus();
+
+                if (nativeSetter) {
+                    nativeSetter.call(scoreInput, '0');
+                } else {
+                    scoreInput.value = '0';
+                }
+
+                scoreInput.dispatchEvent(new InputEvent('input', {
+                    bubbles: true,
+                    inputType: 'insertText',
+                    data: '0'
+                }));
+                scoreInput.dispatchEvent(new Event('change', { bubbles: true }));
+                scoreInput.dispatchEvent(new Event('blur', { bubbles: true }));
+
+                await sleep(250);
+
+                // Jika React mengembalikan field kosong, coba fallback keyboard-like.
+                if ((scoreInput.value || '').trim() !== '0') {
+                    scoreInput.focus();
+                    try {
+                        document.execCommand('selectAll', false, null);
+                        document.execCommand('insertText', false, '0');
+                    } catch (_) {}
+
+                    scoreInput.dispatchEvent(new InputEvent('input', {
+                        bubbles: true,
+                        inputType: 'insertText',
+                        data: '0'
+                    }));
+                    scoreInput.dispatchEvent(new Event('change', { bubbles: true }));
+                    await sleep(250);
+                }
+
+                // Beberapa halaman langsung menyimpan score saat field berubah.
+                // Jika ada tombol eksplisit Save/Grade/Submit untuk grading, klik.
+                const actionBtn = $all('button').find(b => {
+                    if (b.disabled || b.offsetParent === null) return false;
+                    const t = (b.innerText || b.textContent || '').trim().toLowerCase();
+                    return ['save', 'grade', 'submit grade', 'save grade', 'apply'].includes(t);
+                });
+
+                if (actionBtn) {
+                    actionBtn.click();
+                    await sleep(500);
+                }
+
+                // Tunggu row tidak lagi "ungraded" bila state langsung diperbarui.
+                await waitFor(() => {
+                    const sameRow = rowId ? document.getElementById(rowId) : null;
+                    if (!sameRow) return true;
+                    const txt = (sameRow.innerText || sameRow.textContent || '').toLowerCase();
+                    return !txt.includes('ungraded');
+                }, 1500, 100);
+
+                // Refresh daftar dan lanjut ke row ungraded berikutnya.
+                await sleep(250);
+            }
+
+            if (safety >= 500) {
+                console.warn('Grading dihentikan oleh safety limit.');
+            }
+
+            const remaining = getRows().length;
+            if (remaining === 0) {
+                if (btn) btn.textContent = '✅ Grading 0 Selesai';
+            } else {
+                if (btn) btn.textContent = `⚠️ Sisa ${remaining}`;
+                alert(`Masih ada ${remaining} soal Ungraded. Kemungkinan halaman membutuhkan tombol simpan grading yang berbeda.`);
+            }
+
+        } catch (err) {
+            console.error(err);
+            alert('Gagal grading 0: ' + err.message);
+            if (btn) btn.textContent = '0️⃣ Grading 0';
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                setTimeout(() => {
+                    if (btn.textContent === '✅ Grading 0 Selesai') {
+                        btn.textContent = '0️⃣ Grading 0';
+                    }
+                }, 2000);
+            }
         }
     }
 
@@ -318,8 +581,19 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
             borderRadius: '5px', cursor: 'pointer', boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
         });
 
+        const btnGradeZero = document.createElement('button');
+        btnGradeZero.id = 'quiz-grade-zero-btn';
+        btnGradeZero.innerHTML = '0️⃣ Grading 0';
+        btnGradeZero.onclick = jalankanGradingNol;
+        Object.assign(btnGradeZero.style, {
+            padding: '10px 15px', fontSize: '14px', fontWeight: 'bold',
+            color: 'white', backgroundColor: '#6f42c1', border: 'none',
+            borderRadius: '5px', cursor: 'pointer', boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
+        });
+
         panel.appendChild(btnAnswer);
         panel.appendChild(btnExtract);
+        panel.appendChild(btnGradeZero);
         document.body.appendChild(panel);
     }
     buatPanelTombol();
