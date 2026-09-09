@@ -1,0 +1,1801 @@
+(() => {
+  const UI_ID = "__kaplanMultiPrintUI_v62";
+
+  document.getElementById(UI_ID)?.remove();
+
+  // ============================================================
+  // Utilities
+  // ============================================================
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const escapeHtml = (s) =>
+    String(s ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+
+  const kill = (el) => el?.parentNode?.removeChild(el);
+
+  const absolutize = (maybeUrl, base = location.href) => {
+    try {
+      return new URL(maybeUrl, base).href;
+    } catch {
+      return maybeUrl;
+    }
+  };
+
+  const pathKey = (href) => {
+    try {
+      const u = new URL(href, location.href);
+      return `${u.pathname}${u.search}${u.hash}`;
+    } catch {
+      return String(href || "");
+    }
+  };
+
+  const cleanFilename = (name) =>
+    String(name || "course-export")
+      .trim()
+      .replace(/[\\/:*?"<>|]+/g, "")
+      .replace(/\s+/g, " ")
+      .slice(0, 150) || "course-export";
+
+  const slugify = (text) =>
+    String(text || "section")
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || "section";
+
+  const waitUntil = async (fn, timeout = 15000, interval = 100) => {
+    const started = Date.now();
+    let lastError = null;
+
+    while (Date.now() - started < timeout) {
+      try {
+        const value = fn();
+        if (value) return value;
+      } catch (e) {
+        lastError = e;
+      }
+      await sleep(interval);
+    }
+
+    if (lastError) throw lastError;
+    throw new Error("Timeout waiting for page state.");
+  };
+
+  const blobToDataURL = (blob) =>
+    new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = reject;
+      fr.readAsDataURL(blob);
+    });
+
+  const fetchAsBlob = async (url) => {
+    const res = await fetch(url, {
+      credentials: "omit",
+      mode: "cors",
+    }).catch(() => null);
+
+    if (!res || !res.ok) throw new Error(`Fetch failed: ${url}`);
+    return res.blob();
+  };
+
+  // ============================================================
+  // DOM cleaner - based on the user's working single-page exporter
+  // ============================================================
+  const stripPrevNextAndExtras = (root) => {
+    const removeSelectors = [
+      'a[rel="next"]',
+      'a[rel="prev"]',
+      'button[rel="next"]',
+      'button[rel="prev"]',
+      '[aria-label*="next" i]',
+      '[aria-label*="previous" i]',
+      '[aria-label*="berikut" i]',
+      '[aria-label*="sebelum" i]',
+      '[data-testid*="next" i]',
+      '[data-testid*="prev" i]',
+      ".next",
+      ".prev",
+      ".previous",
+      ".pagination-next",
+      ".pagination-prev",
+      ".Pagination-module__next",
+      ".Pagination-module__prev",
+    ];
+
+    removeSelectors.forEach((sel) => root.querySelectorAll(sel).forEach(kill));
+
+    root.querySelectorAll('a,button,[role="button"]').forEach((el) => {
+      const t = (el.textContent || "").trim().toLowerCase();
+      if (/(^|\b)(next|previous|prev|berikut|sebelumnya)(\b|$)/i.test(t)) {
+        kill(el);
+      }
+    });
+
+    [
+      ".css-1j1yph6.ep2axm60",
+      ".CourseFooter-module__container--ODkSx",
+      ".CourseNode-module__toggleProgress--lJqih",
+      ".CourseNodeHeader-module__col--n5QDr",
+    ].forEach((sel) => root.querySelectorAll(sel).forEach(kill));
+  };
+
+  const inlineImagesInDom = async (root, onProgress) => {
+    const imgs = Array.from(root.querySelectorAll("img"));
+
+    for (let i = 0; i < imgs.length; i++) {
+      const img = imgs[i];
+      img.removeAttribute("srcset");
+      img.removeAttribute("sizes");
+
+      const src = img.getAttribute("src");
+      if (!src || src.startsWith("data:")) continue;
+
+      const abs = absolutize(src);
+      try {
+        const blob = await fetchAsBlob(abs);
+        img.setAttribute("src", await blobToDataURL(blob));
+      } catch {
+        // Keep original URL if CORS/404 blocks embedding.
+      }
+
+      onProgress?.(i + 1, imgs.length);
+      await sleep(0);
+    }
+  };
+
+  const buildCourseWrapper = () => {
+    const container = document.querySelector(
+      ".CourseNode-module__container--ZjeFP"
+    );
+
+    if (!container) {
+      throw new Error(
+        "Elemen .CourseNode-module__container--ZjeFP tidak ditemukan."
+      );
+    }
+
+    const clone = container.cloneNode(true);
+    stripPrevNextAndExtras(clone);
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "__exportWrapper";
+    wrapper.appendChild(clone);
+    return wrapper;
+  };
+
+  // ============================================================
+  // BASELINE snapshot
+  // Must happen BEFORE scan/navigation.
+  // ============================================================
+  const captureHeadSnapshot = () => ({
+    stylesheets: Array.from(document.querySelectorAll('link[rel="stylesheet"]'))
+      .filter((l) => l.href)
+      .map((l) => l.href),
+    styles: Array.from(document.head.querySelectorAll("style")).map(
+      (s) => s.innerHTML
+    ),
+  });
+
+  const BASELINE_HEAD = captureHeadSnapshot();
+
+  const BASELINE_BOOK_NAME =
+    (
+      document.querySelector('[data-test-id="course-name"]')?.textContent ||
+      document.querySelector('[data-id="toc-container"] [title]')?.getAttribute("title") ||
+      "Course"
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  // Capture the exact Kaplan header structure once. It is later reused for
+  // Topic and Reading title pages, so their blue header follows Kaplan CSS.
+  const captureDividerTemplate = () => {
+    const source = document.querySelector(
+      ".CourseNode-module__container--ZjeFP"
+    );
+    if (!source) return null;
+
+    const container = source.cloneNode(true);
+    stripPrevNextAndExtras(container);
+
+    const main = container.querySelector(".CourseNode-module__main--qTlT3");
+    const header = container.querySelector(
+      ".CourseNodeHeader-module__headerContainer--wVRFn"
+    );
+
+    if (!main || !header) return null;
+
+    const cleanHeader = header.cloneNode(true);
+    cleanHeader.querySelectorAll("button").forEach(kill);
+
+    main.removeAttribute("id");
+    main.innerHTML = "";
+    main.appendChild(cleanHeader);
+
+    return container;
+  };
+
+  const BASELINE_DIVIDER_TEMPLATE = captureDividerTemplate();
+
+  // IMPORTANT BUG FIX:
+  // Use a REAL newline "\n", not the two literal characters "\\n".
+  // Literal \\n text inside <head> is non-whitespace text and makes the HTML parser
+  // move following <meta>/<link>/<style> nodes into <body>.
+  const buildHeadFromBaseline = () => {
+    const headBits = [
+      '<meta charset="utf-8">',
+      '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    ];
+
+    BASELINE_HEAD.stylesheets.forEach((href) => {
+      headBits.push(`<link rel="stylesheet" href="${escapeHtml(href)}">`);
+    });
+
+    BASELINE_HEAD.styles.forEach((css) => {
+      headBits.push(`<style>${css}</style>`);
+    });
+
+    // Keep the same base additions as the user's working exporter.
+    // Extra CSS affects only our OUTER segment/divider elements, never the
+    // cloned Kaplan CourseNode content itself.
+    headBits.push(`<style>
+      :root { --font-ui: "Open Sans", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+      html, body {
+        margin:0;
+        padding:0;
+        width:100%;
+        max-width:100%;
+        font-family:var(--font-ui);
+        overflow-x:clip;
+      }
+
+      .__exportSegment {
+        display:block;
+        width:100%;
+        max-width:100%;
+        box-sizing:border-box;
+      }
+
+      .__exportWrapper {
+        padding:16px;
+        width:100%;
+        max-width:100%;
+        box-sizing:border-box;
+      }
+
+      /*
+       * Do not allow a cloned Kaplan layout container to enlarge the document
+       * beyond the current viewport / printable width.
+       */
+      .__coursePageSegment .CourseNode-module__container--ZjeFP,
+      .__coursePageSegment .CourseNode-module__main--qTlT3,
+      .__coursePageSegment .Content-module__container--L1Ylg,
+      .__coursePageSegment .Content-module__column--zj7m5,
+      .__coursePageSegment .Content-module__contentText--iH9YR {
+        max-width:100%;
+        box-sizing:border-box;
+      }
+
+      /*
+       * Example/callout boxes in the source commonly use inline background and
+       * border styles. content-box plus a border can otherwise add a few pixels
+       * beyond the available width in the standalone export.
+       */
+      .__coursePageSegment .Content-module__contentText--iH9YR > div {
+        max-width:100%;
+        box-sizing:border-box;
+      }
+
+      .__coursePageSegment img,
+      .__coursePageSegment svg,
+      .__coursePageSegment canvas,
+      .__coursePageSegment table,
+      .__coursePageSegment figure {
+        max-width:100%;
+      }
+
+      /*
+       * MathJax output is intentionally non-wrapping. The runtime helper below
+       * first moves an overflowing formula to its own line at the SAME size.
+       * Only a formula that is still wider than the parent is scaled.
+       */
+      .__coursePageSegment .MathJax_CHTML {
+        transform-origin:left center;
+      }
+
+      /*
+       * max-width alone cannot constrain tables whose intrinsic/min width is
+       * larger than the printable area. The runtime fitter below measures the
+       * real rendered table width and shrinks ONLY an over-wide table.
+       */
+      .__coursePageSegment table {
+        transform-origin:left top;
+      }
+
+      img { max-width:100%; height:auto; }
+
+      .__dividerSegment {
+        box-sizing:border-box;
+        min-height:72vh;
+        padding:16px;
+        background:#fff;
+      }
+
+      .__dividerSegment .CourseNode-module__container--ZjeFP {
+        width:100%;
+      }
+
+      .__dividerKicker {
+        color:rgba(255,255,255,.86);
+        font-size:12px;
+        font-weight:700;
+        letter-spacing:.14em;
+        text-transform:uppercase;
+        margin-bottom:8px;
+      }
+
+      .__topicDivider [data-test-id="course-module-name"] {
+        font-size:38px !important;
+        line-height:1.16 !important;
+        font-weight:600 !important;
+        bookmark-level:1;
+        bookmark-label:content(text);
+      }
+
+      .__readingDivider [data-test-id="course-module-name"] {
+        font-size:29px !important;
+        line-height:1.2 !important;
+        font-weight:600 !important;
+        bookmark-level:2;
+        bookmark-label:content(text);
+      }
+
+      @media print {
+        .__exportSegment + .__exportSegment {
+          break-before:page !important;
+          page-break-before:always !important;
+        }
+
+        .__dividerSegment {
+          min-height:88vh;
+        }
+      }
+    </style>`);
+
+    // REAL newline. Do not change this to "\\n".
+    return headBits.join("\n");
+  };
+
+  const buildDividerSegment = (kind, title, anchorId) => {
+    const segment = document.createElement("section");
+    segment.className = `__exportSegment __dividerSegment __${kind}Divider`;
+    segment.id = anchorId;
+
+    let container = BASELINE_DIVIDER_TEMPLATE?.cloneNode(true) || null;
+
+    if (container) {
+      const titleEl = container.querySelector('[data-test-id="course-module-name"]');
+      const bookEl = container.querySelector('[data-test-id="course-name"]');
+
+      if (titleEl) {
+        titleEl.textContent = title;
+        const kicker = document.createElement("div");
+        kicker.className = "__dividerKicker";
+        kicker.textContent = kind === "topic" ? "TOPIC" : "READING";
+        titleEl.parentElement?.insertBefore(kicker, titleEl);
+      }
+
+      if (bookEl) bookEl.textContent = BASELINE_BOOK_NAME;
+
+      segment.appendChild(container);
+    } else {
+      // Fallback if Kaplan changes the header DOM.
+      segment.innerHTML = `
+        <div style="padding:48px;background:linear-gradient(120deg,#29147e,#0868df);color:#fff;">
+          <div class="__dividerKicker">${kind === "topic" ? "TOPIC" : "READING"}</div>
+          <div style="font-size:${kind === "topic" ? "38px" : "29px"};font-weight:600;line-height:1.2;">${escapeHtml(title)}</div>
+          <div style="margin-top:10px;font-size:14px;font-weight:600;text-transform:uppercase;">${escapeHtml(BASELINE_BOOK_NAME)}</div>
+        </div>`;
+    }
+
+    return segment;
+  };
+
+  const wrapAsSegment = (wrapper, anchorId) => {
+    const section = document.createElement("section");
+    section.className = "__exportSegment __coursePageSegment";
+    if (anchorId) section.id = anchorId;
+    section.appendChild(wrapper);
+    return section;
+  };
+
+  // ============================================================
+  // MathJax fitting executed from the MAIN script.
+  // No JavaScript is injected into the temporary print document.
+  // This avoids secondary parse/runtime errors inside the print window.
+  // ============================================================
+  const cssNumber = (value) => {
+    const n = parseFloat(value);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const PRINT_PAPERS_MM = {
+    A4: { width: 210, height: 297 },
+    Legal: { width: 215.9, height: 355.6 },
+    Letter: { width: 215.9, height: 279.4 },
+    Tabloid: { width: 279.4, height: 431.8 },
+    A3: { width: 297, height: 420 },
+  };
+
+  const makePrintProfile = (paper = "A4", orientation = "portrait", marginMm = 12) => {
+    const base = PRINT_PAPERS_MM[paper] || PRINT_PAPERS_MM.A4;
+    const landscape = orientation === "landscape";
+    const pageWidthMm = landscape ? base.height : base.width;
+    const pageHeightMm = landscape ? base.width : base.height;
+    const safeMarginMm = Math.max(0, Math.min(35, Number(marginMm) || 0));
+    const printableWidthMm = Math.max(20, pageWidthMm - safeMarginMm * 2);
+    const printableHeightMm = Math.max(20, pageHeightMm - safeMarginMm * 2);
+    const MM_TO_CSS_PX = 96 / 25.4;
+    return {
+      paper,
+      orientation: landscape ? "landscape" : "portrait",
+      marginMm: safeMarginMm,
+      pageWidthMm,
+      pageHeightMm,
+      printableWidthMm,
+      printableHeightMm,
+      printableWidthPx: printableWidthMm * MM_TO_CSS_PX,
+    };
+  };
+
+  const getEffectiveMathLimit = (printWindow, math, printProfile) => {
+    const parent = math.closest("p, li, td, th, div") || math.parentElement;
+    if (!parent) return { parent: null, parentWidth: 0, limit: 0 };
+    const cs = printWindow.getComputedStyle(parent);
+    const parentWidth = Math.max(
+      0,
+      parent.clientWidth - cssNumber(cs.paddingLeft) - cssNumber(cs.paddingRight)
+    );
+    const paperLimit = printProfile?.printableWidthPx || Number.POSITIVE_INFINITY;
+    const limit = Math.max(0, Math.min(parentWidth || paperLimit, paperLimit));
+    return { parent, parentWidth, limit };
+  };
+
+  const fitMathInPrintWindow = (printWindow, printProfile = makePrintProfile()) => {
+    const doc = printWindow.document;
+    const maths = Array.from(
+      doc.querySelectorAll('.__coursePageSegment .MathJax_CHTML')
+    );
+
+    const reset = (math) => {
+      math.style.removeProperty('zoom');
+      math.style.removeProperty('display');
+      math.style.removeProperty('margin-top');
+      math.style.removeProperty('margin-bottom');
+      math.removeAttribute('data-export-fitted');
+    };
+
+    const contentWidth = (parent) => {
+      const cs = printWindow.getComputedStyle(parent);
+      return Math.max(
+        0,
+        parent.clientWidth - cssNumber(cs.paddingLeft) - cssNumber(cs.paddingRight)
+      );
+    };
+
+    const widthFromCurrentPosition = (math, parent) => {
+      const pr = parent.getBoundingClientRect();
+      const mr = math.getBoundingClientRect();
+      const cs = printWindow.getComputedStyle(parent);
+      return Math.max(0, pr.right - cssNumber(cs.paddingRight) - mr.left);
+    };
+
+    maths.forEach((math) => {
+      if (!math.isConnected) return;
+      reset(math);
+
+      const parent = math.closest('p, li, td, th, div') || math.parentElement;
+      if (!parent) return;
+
+      const rect = math.getBoundingClientRect();
+      const mathWidth = rect.width;
+      const availableAtPosition = widthFromCurrentPosition(math, parent);
+      const { limit: effectiveLimit } = getEffectiveMathLimit(printWindow, math, printProfile);
+      const available = Math.min(availableAtPosition || effectiveLimit, effectiveLimit);
+      const fullWidth = effectiveLimit;
+
+      if (!mathWidth || !available || !fullWidth) return;
+      if (mathWidth <= available + 1) return;
+
+      // If it only overflows because text precedes it, move it to a new line.
+      if (mathWidth <= fullWidth + 1) {
+        math.style.setProperty('display', 'block', 'important');
+        math.style.setProperty('margin-top', '0.22em', 'important');
+        math.style.setProperty('margin-bottom', '0.12em', 'important');
+        math.setAttribute('data-export-fitted', 'newline');
+        return;
+      }
+
+      // Intrinsically too wide: shrink ONLY this formula, never the page text.
+      const scale = Math.max(0.30, Math.min(1, (fullWidth - 2) / mathWidth));
+      math.style.setProperty('display', 'inline-block', 'important');
+      math.style.setProperty('zoom', String(scale), 'important');
+      math.setAttribute('data-export-fitted', 'scaled');
+
+      // Extreme-case final guard. If still wider after Chromium applies zoom,
+      // calculate one more correction, allowing scale below 30% only when needed
+      // to prevent clipping beyond the printable content width.
+      const after = math.getBoundingClientRect().width;
+      if (after > fullWidth + 1 && after > 0) {
+        const correction = (fullWidth - 2) / after;
+        const finalScale = Math.max(0.10, scale * correction);
+        math.style.setProperty('zoom', String(finalScale), 'important');
+        math.setAttribute('data-export-fitted', 'scaled-final');
+      }
+    });
+  };
+
+
+  // ============================================================
+  // Table fitting
+  // max-width:100% is not enough for tables with intrinsic width,
+  // fixed column widths, nowrap cells, long URLs, etc.
+  //
+  // IMPORTANT:
+  // - Do NOT resize the whole page.
+  // - Do NOT change normal tables.
+  // - Only an actually over-wide table is scaled down.
+  // - Printable paper width is used as the hard upper boundary.
+  // ============================================================
+  const getEffectiveTableLimit = (printWindow, table, printProfile) => {
+    const parent =
+      table.parentElement?.closest(
+        "td, th, li, .Content-module__contentText--iH9YR, .Content-module__column--zj7m5, .Content-module__container--L1Ylg, .CourseNode-module__main--qTlT3"
+      ) ||
+      table.parentElement;
+
+    if (!parent) {
+      return {
+        parent: null,
+        parentWidth: 0,
+        paperLimit: printProfile?.printableWidthPx || 0,
+        limit: printProfile?.printableWidthPx || 0,
+      };
+    }
+
+    const cs = printWindow.getComputedStyle(parent);
+    const parentWidth = Math.max(
+      0,
+      parent.clientWidth -
+        cssNumber(cs.paddingLeft) -
+        cssNumber(cs.paddingRight) -
+        cssNumber(cs.borderLeftWidth) -
+        cssNumber(cs.borderRightWidth)
+    );
+
+    const paperLimit =
+      printProfile?.printableWidthPx || Number.POSITIVE_INFINITY;
+
+    const limit = Math.max(
+      0,
+      Math.min(parentWidth || paperLimit, paperLimit)
+    );
+
+    return { parent, parentWidth, paperLimit, limit };
+  };
+
+  const resetTableForMeasurement = (table) => {
+    table.style.removeProperty("zoom");
+    table.style.removeProperty("transform");
+    table.style.removeProperty("transform-origin");
+    table.style.removeProperty("max-width");
+    table.removeAttribute("data-export-table-fitted");
+    table.removeAttribute("data-export-table-scale");
+  };
+
+  const fitTablesInPrintWindow = (
+    printWindow,
+    printProfile = makePrintProfile()
+  ) => {
+    const doc = printWindow.document;
+    const tables = Array.from(
+      doc.querySelectorAll(".__coursePageSegment table")
+    );
+
+    let fitted = 0;
+
+    tables.forEach((table) => {
+      if (!table.isConnected) return;
+
+      resetTableForMeasurement(table);
+
+      const { limit } = getEffectiveTableLimit(
+        printWindow,
+        table,
+        printProfile
+      );
+
+      if (!limit) return;
+
+      /*
+       * scrollWidth is important here. getBoundingClientRect().width can report
+       * the CSS box width while content inside the table still overflows it.
+       */
+      const rect = table.getBoundingClientRect();
+      const visualWidth = rect.width || 0;
+      const intrinsicWidth = Math.max(
+        table.scrollWidth || 0,
+        table.offsetWidth || 0,
+        visualWidth
+      );
+
+      if (!intrinsicWidth || intrinsicWidth <= limit + 1) return;
+
+      /*
+       * Chromium's zoom changes layout width as well as visual width, which is
+       * preferable to transform:scale() here because transform can leave the
+       * original oversized layout footprint behind.
+       */
+      let scale = Math.min(1, (limit - 2) / intrinsicWidth);
+      scale = Math.max(0.10, scale);
+
+      table.style.setProperty("transform-origin", "left top", "important");
+      table.style.setProperty("zoom", String(scale), "important");
+      table.style.setProperty("max-width", "none", "important");
+      table.setAttribute("data-export-table-fitted", "scaled");
+      table.setAttribute("data-export-table-scale", String(scale));
+
+      /*
+       * One correction pass after Chromium has applied zoom. This catches
+       * tables whose cells/colgroups recompute after zoom is set.
+       */
+      const afterRect = table.getBoundingClientRect();
+      const afterWidth = Math.max(
+        afterRect.width || 0,
+        (table.scrollWidth || 0) * scale
+      );
+
+      if (afterWidth > limit + 1 && afterWidth > 0) {
+        const correction = (limit - 2) / afterWidth;
+        scale = Math.max(0.05, scale * correction);
+        table.style.setProperty("zoom", String(scale), "important");
+        table.setAttribute("data-export-table-fitted", "scaled-final");
+        table.setAttribute("data-export-table-scale", String(scale));
+      }
+
+      fitted++;
+    });
+
+    return { total: tables.length, fitted };
+  };
+
+  const waitForPrintDocumentReady = async (printWindow, timeout = 20000) => {
+    const doc = printWindow.document;
+    const started = Date.now();
+
+    const waitImages = async () => {
+      const images = Array.from(doc.images || []);
+      await Promise.all(
+        images.map((img) => {
+          if (img.complete) return Promise.resolve();
+          return new Promise((resolve) => {
+            const done = () => resolve();
+            img.addEventListener("load", done, { once: true });
+            img.addEventListener("error", done, { once: true });
+            setTimeout(done, 5000);
+          });
+        })
+      );
+    };
+
+    await waitImages();
+
+    if (doc.fonts?.ready) {
+      await Promise.race([doc.fonts.ready.catch(() => null), sleep(7000)]);
+    }
+
+    // Give Chromium time to apply copied Kaplan CSS + generated MathJax CHTML.
+    await sleep(350);
+
+
+    while (Date.now() - started < timeout) {
+      const root = doc.body;
+      if (root && root.scrollHeight > 0) break;
+      await sleep(100);
+    }
+
+    await sleep(450);
+  };
+
+  const loadHtml2Canvas = async (printWindow) => {
+    if (typeof printWindow.html2canvas === "function") return printWindow.html2canvas;
+
+    await new Promise((resolve, reject) => {
+      const existing = printWindow.document.querySelector('script[data-kaplan-html2canvas="1"]');
+      if (existing) {
+        const started = Date.now();
+        const poll = setInterval(() => {
+          if (typeof printWindow.html2canvas === "function") {
+            clearInterval(poll);
+            resolve();
+          } else if (Date.now() - started > 12000) {
+            clearInterval(poll);
+            reject(new Error("html2canvas load timeout."));
+          }
+        }, 100);
+        return;
+      }
+
+      const script = printWindow.document.createElement("script");
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+      script.async = true;
+      script.dataset.kaplanHtml2canvas = "1";
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error("Could not load html2canvas."));
+      printWindow.document.head.appendChild(script);
+    });
+
+    if (typeof printWindow.html2canvas !== "function") {
+      throw new Error("html2canvas is unavailable.");
+    }
+
+    return printWindow.html2canvas;
+  };
+
+  const getMathParentContentWidth = (printWindow, math, printProfile = makePrintProfile()) => {
+    const { parent, parentWidth, limit } = getEffectiveMathLimit(printWindow, math, printProfile);
+    return { parent, fullWidth: limit, parentWidth, paperWidth: printProfile.printableWidthPx };
+  };
+
+  const resetMathForMeasurement = (math) => {
+    math.style.removeProperty("zoom");
+    math.style.removeProperty("display");
+    math.style.removeProperty("margin-top");
+    math.style.removeProperty("margin-bottom");
+    math.removeAttribute("data-export-fitted");
+  };
+
+  const convertMathToImage = async (printWindow, math, html2canvas, printProfile, forceBlock = false) => {
+    resetMathForMeasurement(math);
+
+    const { parent, fullWidth } = getMathParentContentWidth(printWindow, math, printProfile);
+    if (!parent || fullWidth <= 0) return false;
+
+    const rect = math.getBoundingClientRect();
+    if (!rect.width || !rect.height) return false;
+
+    const captureScale = Math.min(3, Math.max(2, printWindow.devicePixelRatio || 1));
+    const canvas = await html2canvas(math, {
+      backgroundColor: null,
+      logging: false,
+      useCORS: true,
+      scale: captureScale,
+      scrollX: 0,
+      scrollY: 0,
+      windowWidth: printWindow.document.documentElement.scrollWidth,
+      windowHeight: printWindow.document.documentElement.scrollHeight,
+    });
+
+    const img = printWindow.document.createElement("img");
+    img.src = canvas.toDataURL("image/png");
+    img.alt = math.getAttribute("aria-label") || "Mathematical formula";
+    img.className = "__mathjaxImage";
+    img.dataset.mathjaxImage = "1";
+    img.style.setProperty("max-width", "100%", "important");
+    img.style.setProperty("height", "auto", "important");
+    img.style.setProperty("object-fit", "contain", "important");
+    img.style.setProperty("box-sizing", "border-box", "important");
+
+    const targetWidth = Math.max(1, Math.min(rect.width, fullWidth - 2));
+    img.style.setProperty("width", `${targetWidth}px`, "important");
+
+    if (forceBlock || rect.width > fullWidth + 1) {
+      img.style.setProperty("display", "block", "important");
+      img.style.setProperty("margin", "0.22em 0 0.12em 0", "important");
+    } else {
+      img.style.setProperty("display", "inline-block", "important");
+      img.style.setProperty("vertical-align", "middle", "important");
+      img.style.setProperty("margin", "0", "important");
+    }
+
+    math.replaceWith(img);
+    return true;
+  };
+
+  const prepareMathForOutput = async (printWindow, mathMode, printProfile, setStatus) => {
+    const doc = printWindow.document;
+    const maths = Array.from(doc.querySelectorAll(".__coursePageSegment .MathJax_CHTML"));
+    if (!maths.length) return { converted: 0, failed: 0 };
+
+    if (mathMode === "original") {
+      return { converted: 0, failed: 0, original: true };
+    }
+
+    if (mathMode === "fit") {
+      fitMathInPrintWindow(printWindow, printProfile);
+      await sleep(200);
+      return { converted: 0, failed: 0 };
+    }
+
+    let html2canvas;
+    try {
+      setStatus?.("Loading MathJax image converter...");
+      html2canvas = await loadHtml2Canvas(printWindow);
+    } catch (e) {
+      console.warn("[Kaplan Export] MathJax image converter unavailable; falling back to fit mode.", e);
+      fitMathInPrintWindow(printWindow, printProfile);
+      await sleep(200);
+      return { converted: 0, failed: maths.length, fallback: true };
+    }
+
+    let converted = 0;
+    let failed = 0;
+
+    for (let i = 0; i < maths.length; i++) {
+      const math = maths[i];
+      if (!math.isConnected) continue;
+
+      resetMathForMeasurement(math);
+      const { fullWidth } = getMathParentContentWidth(printWindow, math, printProfile);
+      const rect = math.getBoundingClientRect();
+      // fullWidth is capped by physical printable paper width.
+      const overWide = fullWidth > 0 && rect.width > fullWidth + 1;
+      const shouldConvert = mathMode === "all-image" || (mathMode === "long-image" && overWide);
+
+      if (!shouldConvert) continue;
+
+      setStatus?.(`Converting MathJax to image ${i + 1}/${maths.length}...`);
+      try {
+        const ok = await convertMathToImage(
+          printWindow,
+          math,
+          html2canvas,
+          printProfile,
+          mathMode === "long-image" && overWide
+        );
+        if (ok) converted++;
+        else failed++;
+      } catch (e) {
+        failed++;
+        console.warn("[Kaplan Export] Could not convert one MathJax formula; keeping original formula.", e, math);
+      }
+
+      if (i % 5 === 0) await sleep(0);
+    }
+
+    // Fit every MathJax formula that remains as live CHTML.
+    fitMathInPrintWindow(printWindow, printProfile);
+    await sleep(250);
+
+    // Final safety check for generated images: never let their layout width exceed parent content width.
+    doc.querySelectorAll("img.__mathjaxImage").forEach((img) => {
+      const { fullWidth } = getMathParentContentWidth(printWindow, img, printProfile);
+      if (!fullWidth) return;
+      const rect = img.getBoundingClientRect();
+      if (rect.width > fullWidth + 1) {
+        img.style.setProperty("width", `${Math.max(1, fullWidth - 2)}px`, "important");
+      }
+      img.style.setProperty("max-width", "100%", "important");
+      img.style.setProperty("height", "auto", "important");
+    });
+
+    return { converted, failed };
+  };
+
+  const downloadCurrentPrintHtml = (printWindow, fname) => {
+    const safeName = cleanFilename(fname);
+    const html = "<!DOCTYPE html>\n" + printWindow.document.documentElement.outerHTML;
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${safeName}.html`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  };
+
+  const openPrintDocument = async (fname, headHtml, bodyHtml, mathMode = "fit", tableMode = "fit", printOptions = {}) => {
+    const safeName = cleanFilename(fname);
+    const printProfile = makePrintProfile(
+      printOptions.paper || "A4",
+      printOptions.orientation || "portrait",
+      printOptions.marginMm ?? 12
+    );
+    const printWindow = window.open("about:blank", "_blank");
+
+    if (!printWindow) {
+      throw new Error(
+        "Print window diblokir browser. Izinkan pop-up untuk kaplanlearn.com lalu jalankan lagi."
+      );
+    }
+
+    const doc =
+      "<!DOCTYPE html><html><head>" +
+      `<title>${escapeHtml(safeName)}</title>` +
+      headHtml +
+      /* v6.3.1: Paper/orientation/margin are MEASUREMENT-ONLY settings.
+       * Do not inject @page rules, body widths, margins, padding, or layout overrides.
+       * The saved HTML and print document keep the original Kaplan/export layout.
+       * Only MathJax/Table elements may be adjusted when their selected modes
+       * permit it and they exceed the calculated physical printable-width threshold. */
+      `</head><body>${bodyHtml}</body></html>`;
+
+    printWindow.document.open();
+    printWindow.document.write(doc);
+    printWindow.document.close();
+
+    await waitForPrintDocumentReady(printWindow);
+
+    const mathResult = await prepareMathForOutput(printWindow, mathMode, printProfile, setStatus);
+
+    // Fit ONLY tables that exceed the same physical printable-width boundary.
+    // This does not change body/page width or normal-size tables.
+    let tableResult = { total: 0, fitted: 0 };
+    if (tableMode === "fit") {
+      tableResult = fitTablesInPrintWindow(printWindow, printProfile);
+      if (tableResult.fitted) {
+        setStatus(`Table fitting complete: ${tableResult.fitted}/${tableResult.total} over-wide table(s) fitted.`);
+      }
+    }
+
+    if (mathMode !== "fit" && mathMode !== "original") {
+      if (mathResult.fallback) {
+        setStatus("MathJax image conversion unavailable; using fitted MathJax instead.");
+      } else {
+        setStatus(`MathJax image conversion complete: ${mathResult.converted} converted${mathResult.failed ? `, ${mathResult.failed} kept as MathJax` : ""}.`);
+      }
+    }
+
+    // Wait once more because rasterized formulas can change line height/page breaks.
+    await waitForPrintDocumentReady(printWindow, 12000);
+
+    // Final fit on the exact ready-to-print DOM. Also repeat synchronously
+    // when Chromium enters print layout, because printable width can differ
+    // slightly from the temporary window viewport.
+    if (mathMode !== "original") {
+      fitMathInPrintWindow(printWindow, printProfile);
+    }
+    if (tableMode === "fit") {
+      fitTablesInPrintWindow(printWindow, printProfile);
+    }
+
+    printWindow.addEventListener("beforeprint", () => {
+      try {
+        if (mathMode !== "original") {
+          fitMathInPrintWindow(printWindow, printProfile);
+        }
+        if (tableMode === "fit") {
+          fitTablesInPrintWindow(printWindow, printProfile);
+        }
+      } catch (e) {
+        console.warn("[Kaplan Export] Final beforeprint content fit failed:", e);
+      }
+    });
+    await sleep(120);
+
+    // IMPORTANT: save the HTML FROM THE ACTUAL READY-TO-PRINT DOCUMENT.
+    // This is not rebuilt separately. It includes the same captured Kaplan DOM,
+    // copied CSS, rendered MathJax CHTML, and final fitting state used for print.
+    downloadCurrentPrintHtml(printWindow, safeName);
+
+    // Give the browser a moment to start the HTML download before opening
+    // the native print dialog.
+    await sleep(250);
+
+    printWindow.focus();
+    printWindow.print();
+
+    // Do not auto-close immediately: some Chromium builds return from print()
+    // before the native dialog fully completes. The user can close this blank
+    // temporary tab/window after printing, and a delayed cleanup handles most cases.
+    setTimeout(() => {
+      try {
+        if (!printWindow.closed) printWindow.close();
+      } catch {}
+    }, 60000);
+  };
+
+  // ============================================================
+  // TOC helpers
+  // ============================================================
+  const getTopicHeaders = () =>
+    Array.from(document.querySelectorAll('[data-test-id="index-topic-header"]'));
+
+  const getTopicTitle = (header) => {
+    const titled = header.querySelector('[data-test-id="title_node"] [title]');
+    if (titled?.getAttribute("title")) {
+      return titled.getAttribute("title").replace(/\s+/g, " ").trim();
+    }
+
+    const node = header.querySelector('[data-test-id="title_node"]');
+    return (node?.textContent || header.textContent || "Topic")
+      .replace(/\s+/g, " ")
+      .trim();
+  };
+
+  const findTopicHeader = (wantedTitle) =>
+    getTopicHeaders().find((h) => getTopicTitle(h) === wantedTitle) || null;
+
+  const getTopicContainer = (header) => header?.parentElement || null;
+
+  const ensureTopicOpen = async (wantedTitle) => {
+    let header = findTopicHeader(wantedTitle);
+    if (!header) throw new Error(`Topic tidak ditemukan: ${wantedTitle}`);
+
+    if (header.getAttribute("aria-expanded") !== "true") header.click();
+
+    await waitUntil(() => {
+      header = findTopicHeader(wantedTitle);
+      if (!header || header.getAttribute("aria-expanded") !== "true") return false;
+      return (
+        getTopicContainer(header)?.querySelector('[data-test-id="index-topic-body"]') ||
+        false
+      );
+    }, 12000, 120);
+
+    await sleep(300);
+    return findTopicHeader(wantedTitle);
+  };
+
+  const expandSessionsInTopic = async (header) => {
+    const container = getTopicContainer(header);
+    if (!container) return;
+
+    const closed = Array.from(
+      container.querySelectorAll(
+        '[data-test-id="index-session-button"][aria-expanded="false"]'
+      )
+    );
+
+    for (const button of closed) {
+      button.click();
+      await sleep(70);
+    }
+
+    if (closed.length) await sleep(300);
+  };
+
+  const getReadingTitleForLink = (link) => {
+    const body = link.closest('[data-test-id="index-session-body"]');
+    if (!body) return null;
+
+    // In this TOC build, session body is inside a wrapper DIV and the session
+    // button is the previous sibling of that wrapper.
+    let button = body.parentElement?.previousElementSibling || null;
+
+    if (!button?.matches?.('[data-test-id="index-session-button"]')) {
+      // Fallback: inspect nearby siblings in the common parent.
+      const parent = body.parentElement?.parentElement;
+      if (parent) {
+        const children = Array.from(parent.children);
+        const bodyWrapper = body.parentElement;
+        const bodyIndex = children.indexOf(bodyWrapper);
+        for (let i = bodyIndex - 1; i >= 0; i--) {
+          if (children[i].matches?.('[data-test-id="index-session-button"]')) {
+            button = children[i];
+            break;
+          }
+        }
+      }
+    }
+
+    if (!button) return null;
+
+    const titled = button.querySelector('[title]');
+    return (
+      titled?.getAttribute("title") ||
+      button.textContent ||
+      "Reading"
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+  };
+
+  const scanCoursePages = async (setStatus) => {
+    const headers = getTopicHeaders();
+    if (!headers.length) throw new Error("Table of Contents tidak ditemukan.");
+
+    const topicTitles = headers.map(getTopicTitle);
+    const pages = [];
+    const seen = new Set();
+
+    for (let ti = 0; ti < topicTitles.length; ti++) {
+      const topic = topicTitles[ti];
+      setStatus?.(`Scanning topic ${ti + 1}/${topicTitles.length}: ${topic}`);
+
+      let header = await ensureTopicOpen(topic);
+      await expandSessionsInTopic(header);
+      header = findTopicHeader(topic);
+
+      const container = getTopicContainer(header);
+      if (!container) continue;
+
+      await sleep(250);
+
+      // IMPORTANT: every /node/ link under the Topic is an exportable page.
+      // Do NOT filter by data-test-id or by title wording. This intentionally
+      // includes Module, Key Concepts, Warm-Up, Formulas, Appendices, Resources,
+      // and any future page type Kaplan adds.
+      const links = Array.from(
+        container.querySelectorAll('a[href*="/course/"][href*="/node/"]')
+      );
+
+      for (const link of links) {
+        const href = link.href || link.getAttribute("href") || "";
+        const title = (
+          link.getAttribute("title") ||
+          link.querySelector('[title]')?.getAttribute("title") ||
+          link.textContent ||
+          "Untitled"
+        )
+          .replace(/\s+/g, " ")
+          .trim();
+
+        if (!href || !title) continue;
+
+        const key = pathKey(href);
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        const reading = getReadingTitleForLink(link);
+
+        pages.push({
+          index: pages.length,
+          topic,
+          reading,
+          directTopicPage: !reading,
+          title,
+          href: absolutize(href),
+          pathKey: key,
+          sourceTestId: link.getAttribute("data-test-id") || "",
+        });
+      }
+    }
+
+    return pages;
+  };
+
+  const findPageLink = (item) => {
+    // Same rule as scanning: any course /node/ anchor can represent a page.
+    const links = Array.from(
+      document.querySelectorAll('a[href*="/course/"][href*="/node/"]')
+    );
+
+    return (
+      links.find((a) => pathKey(a.href || a.getAttribute("href") || "") === item.pathKey) ||
+      links.find((a) => {
+        const title = (
+          a.getAttribute("title") ||
+          a.querySelector('[title]')?.getAttribute("title") ||
+          a.textContent ||
+          ""
+        ).replace(/\s+/g, " ").trim();
+        return title === item.title;
+      }) ||
+      null
+    );
+  };
+
+  const waitForRenderedPage = async (item) => {
+    const nodeId = item.href.match(/\/node\/(\d+)/)?.[1] || null;
+
+    await waitUntil(() => {
+      const currentTitle = (
+        document.querySelector('[data-test-id="course-module-name"]')?.textContent || ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+
+      if (!(currentTitle === item.title || pathKey(location.href) === item.pathKey)) {
+        return false;
+      }
+
+      if (
+        nodeId &&
+        !document.querySelector(`#node-${CSS.escape(nodeId)}-content`)
+      ) {
+        return false;
+      }
+
+      return document.querySelector(".CourseNode-module__container--ZjeFP");
+    }, 30000, 120);
+
+    // Wait until React/MathJax DOM is stable.
+    let previous = -1;
+    let stableCount = 0;
+
+    for (let i = 0; i < 32; i++) {
+      const el = document.querySelector(".CourseNode-module__container--ZjeFP");
+      const len = el?.innerHTML.length || 0;
+
+      if (len > 0 && len === previous) stableCount++;
+      else stableCount = 0;
+
+      previous = len;
+      if (stableCount >= 3) break;
+      await sleep(250);
+    }
+
+    if (document.fonts?.ready) {
+      await Promise.race([document.fonts.ready.catch(() => null), sleep(2000)]);
+    }
+
+    await sleep(350);
+  };
+
+  const navigateToItem = async (item) => {
+    if (pathKey(location.href) === item.pathKey) {
+      await waitForRenderedPage(item);
+      return;
+    }
+
+    let link = findPageLink(item);
+
+    if (!link) {
+      let header = await ensureTopicOpen(item.topic);
+      await expandSessionsInTopic(header);
+      link = findPageLink(item);
+    }
+
+    if (!link) throw new Error(`Link tidak ditemukan: ${item.title}`);
+
+    link.click();
+    await waitForRenderedPage(item);
+  };
+
+  const currentPageIdentity = () => ({
+    pathKey: pathKey(location.href),
+  });
+
+  // ============================================================
+  // Hierarchy model
+  // ============================================================
+  const buildHierarchy = (pages) => {
+    const topicMap = new Map();
+    let readingId = 0;
+
+    pages.forEach((page) => {
+      if (!topicMap.has(page.topic)) {
+        topicMap.set(page.topic, {
+          id: topicMap.size,
+          title: page.topic,
+          pages: [],
+          readings: [],
+          readingMap: new Map(),
+        });
+      }
+
+      const topic = topicMap.get(page.topic);
+      topic.pages.push(page);
+
+      const readingName = page.reading || "Direct Topic Pages / Resources";
+      if (!topic.readingMap.has(readingName)) {
+        const reading = {
+          id: readingId++,
+          title: readingName,
+          synthetic: !page.reading,
+          pages: [],
+        };
+        topic.readingMap.set(readingName, reading);
+        topic.readings.push(reading);
+      }
+
+      topic.readingMap.get(readingName).pages.push(page);
+    });
+
+    return Array.from(topicMap.values()).map((topic) => {
+      delete topic.readingMap;
+      return topic;
+    });
+  };
+
+  // ============================================================
+  // UI state
+  // ============================================================
+  let pages = [];
+  let hierarchy = [];
+  let selectedKeys = new Set();
+  let busy = false;
+  let cancelled = false;
+
+  const ui = document.createElement("div");
+  ui.id = UI_ID;
+
+  Object.assign(ui.style, {
+    position: "fixed",
+    top: "18px",
+    right: "18px",
+    zIndex: "2147483647",
+    width: "520px",
+    maxWidth: "calc(100vw - 36px)",
+    maxHeight: "calc(100vh - 36px)",
+    display: "flex",
+    flexDirection: "column",
+    background: "#fff",
+    color: "#222",
+    border: "1px solid #cfcfcf",
+    borderRadius: "12px",
+    boxShadow: "0 10px 35px rgba(0,0,0,.25)",
+    fontFamily: "system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif",
+    fontSize: "13px",
+    lineHeight: "1.35",
+    overflow: "hidden",
+  });
+
+  ui.innerHTML = `
+    <div style="padding:12px 14px;border-bottom:1px solid #ddd;display:flex;gap:10px;align-items:center;">
+      <div style="font-weight:700;font-size:14px;flex:1;">Kaplan Complete Course Print + HTML v6.4</div>
+      <button data-act="close" title="Close" style="border:0;background:transparent;font-size:20px;line-height:1;cursor:pointer;">x</button>
+    </div>
+
+    <div style="padding:10px 14px;border-bottom:1px solid #eee;">
+      <div data-role="status" style="font-weight:600;">Ready.</div>
+      <div data-role="summary" style="margin-top:3px;color:#666;">All detected course pages are selected by default. Output goes directly to one print dialog.</div>
+    </div>
+
+    <div style="padding:9px 14px;border-bottom:1px solid #eee;display:flex;gap:6px;flex-wrap:wrap;">
+      <button data-act="scan">Scan / Rescan</button>
+      <button data-act="all">Select all</button>
+      <button data-act="clear">Clear</button>
+      <button data-act="expand">Expand all</button>
+      <button data-act="collapse">Collapse all</button>
+    </div>
+
+    <div style="padding:8px 14px;border-bottom:1px solid #eee;">
+      <input data-role="filter" type="search" placeholder="Search topic, reading, or page..." style="box-sizing:border-box;width:100%;padding:7px 9px;border:1px solid #ccc;border-radius:7px;font:inherit;">
+    </div>
+
+    <div data-role="list" style="overflow:auto;min-height:140px;max-height:48vh;padding:6px 0;">
+      <div style="padding:12px 14px;color:#666;">Scanning...</div>
+    </div>
+
+    <div style="padding:10px 14px;border-top:1px solid #eee;">
+      <label style="display:flex;gap:8px;align-items:flex-start;margin-bottom:8px;">
+        <input data-role="topicTitles" type="checkbox" checked style="margin-top:2px;">
+        <span><b>Add Topic title pages</b> (one separate page for each selected Topic).</span>
+      </label>
+
+      <label style="display:flex;gap:8px;align-items:flex-start;margin-bottom:8px;">
+        <input data-role="readingTitles" type="checkbox" checked style="margin-top:2px;">
+        <span><b>Add Reading title pages</b> (one separate page for each selected Reading).</span>
+      </label>
+
+      <label style="display:flex;gap:8px;align-items:flex-start;margin-bottom:9px;">
+        <input data-role="offline" type="checkbox" style="margin-top:2px;">
+        <span><b>Inline images</b> (optional; can make printing more self-contained).</span>
+      </label>
+
+      <div style="margin-bottom:10px;padding:9px;border:1px solid #e2e2e2;border-radius:8px;background:#fafafa;">
+        <span style="display:block;font-weight:700;margin-bottom:6px;">Print boundary</span>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;">
+          <label style="font-size:11px;color:#666;">Paper
+            <select data-role="paperSize" style="display:block;width:100%;margin-top:3px;padding:6px;border:1px solid #ccc;border-radius:6px;font:inherit;background:#fff;">
+              <option value="A4" selected>A4</option>
+              <option value="Legal">Legal</option>
+              <option value="Letter">Letter</option>
+              <option value="Tabloid">Tabloid</option>
+              <option value="A3">A3</option>
+            </select>
+          </label>
+          <label style="font-size:11px;color:#666;">Orientation
+            <select data-role="orientation" style="display:block;width:100%;margin-top:3px;padding:6px;border:1px solid #ccc;border-radius:6px;font:inherit;background:#fff;">
+              <option value="portrait" selected>Portrait</option>
+              <option value="landscape">Landscape</option>
+            </select>
+          </label>
+          <label style="font-size:11px;color:#666;">Margin (mm)
+            <input data-role="marginMm" type="number" min="0" max="35" step="1" value="12" style="display:block;box-sizing:border-box;width:100%;margin-top:3px;padding:6px;border:1px solid #ccc;border-radius:6px;font:inherit;">
+          </label>
+        </div>
+        <span style="display:block;margin-top:5px;color:#777;font-size:11px;">Measurement only: paper, orientation, and margin are used only to calculate the printable-width boundary for MathJax/Table fitting. They do not change HTML width, margins, padding, @page, or the page layout.</span>
+      </div>
+
+      <label style="display:block;margin-bottom:10px;">
+        <span style="display:block;font-weight:700;margin-bottom:4px;">MathJax output</span>
+        <select data-role="mathMode" style="box-sizing:border-box;width:100%;padding:7px 9px;border:1px solid #ccc;border-radius:7px;font:inherit;background:#fff;">
+          <option value="original">Original MathJax (do not modify)</option>
+          <option value="fit" selected>Fit MathJax (move/shrink only when too wide)</option>
+          <option value="long-image">Convert only over-wide MathJax formulas to image</option>
+          <option value="all-image">Convert all MathJax formulas to image</option>
+        </select>
+        <span style="display:block;margin-top:4px;color:#777;font-size:11px;">Original leaves Kaplan MathJax untouched. Other modes affect only MathJax and never resize the surrounding HTML/page.</span>
+      </label>
+
+      <label style="display:block;margin-bottom:10px;">
+        <span style="display:block;font-weight:700;margin-bottom:4px;">Table output</span>
+        <select data-role="tableMode" style="box-sizing:border-box;width:100%;padding:7px 9px;border:1px solid #ccc;border-radius:7px;font:inherit;background:#fff;">
+          <option value="original">Original tables (do not modify)</option>
+          <option value="fit" selected>Fit only over-wide tables</option>
+        </select>
+        <span style="display:block;margin-top:4px;color:#777;font-size:11px;">Original leaves every table untouched. Fit measures each table and shrinks only tables that exceed the selected printable-width boundary.</span>
+      </label>
+
+      <div style="display:flex;gap:8px;">
+        <button data-act="export" style="flex:1;font-weight:700;padding:9px 10px;">Collect, Save HTML & Print</button>
+        <button data-act="cancel" style="display:none;padding:9px 10px;">Cancel</button>
+      </div>
+
+      <div style="margin-top:7px;color:#777;font-size:12px;">
+        Every /node/ page under every Topic is included by default. The script captures the MathJax DOM already rendered by Kaplan, builds a temporary print document, waits for images/fonts/layout, then opens one browser print dialog for all selected pages.
+      </div>
+    </div>
+  `;
+
+  ui.querySelectorAll("button").forEach((button) => {
+    if (button.dataset.act === "close") return;
+    Object.assign(button.style, {
+      border: "1px solid #bbb",
+      borderRadius: "7px",
+      background: "#fafafa",
+      cursor: "pointer",
+      padding: button.style.padding || "6px 9px",
+      font: "inherit",
+    });
+  });
+
+  document.body.appendChild(ui);
+
+  const $ = (sel) => ui.querySelector(sel);
+  const statusEl = $('[data-role="status"]');
+  const summaryEl = $('[data-role="summary"]');
+  const listEl = $('[data-role="list"]');
+  const filterEl = $('[data-role="filter"]');
+  const cancelBtn = $('[data-act="cancel"]');
+
+  const setStatus = (text) => {
+    statusEl.textContent = text;
+    console.log(`[Kaplan Export] ${text}`);
+  };
+
+  const setBusy = (value) => {
+    busy = value;
+    ui.querySelectorAll("button,input").forEach((el) => {
+      if (el === cancelBtn) return;
+      el.disabled = value;
+    });
+    cancelBtn.style.display = value ? "block" : "none";
+  };
+
+  const countSelected = () =>
+    pages.reduce((n, p) => n + (selectedKeys.has(p.pathKey) ? 1 : 0), 0);
+
+  const updateSummary = () => {
+    const selected = countSelected();
+    const readingCount = hierarchy.reduce((n, t) => n + t.readings.length, 0);
+    summaryEl.textContent = `${hierarchy.length} Topics - ${readingCount} Readings/groups - ${pages.length} pages - ${selected} selected`;
+  };
+
+  const checkboxStateForPages = (groupPages) => {
+    const selected = groupPages.filter((p) => selectedKeys.has(p.pathKey)).length;
+    return {
+      checked: selected === groupPages.length && groupPages.length > 0,
+      indeterminate: selected > 0 && selected < groupPages.length,
+    };
+  };
+
+  const syncGroupCheckboxes = () => {
+    listEl.querySelectorAll('input[data-topic-id]').forEach((cb) => {
+      const topic = hierarchy[Number(cb.dataset.topicId)];
+      if (!topic) return;
+      const state = checkboxStateForPages(topic.pages);
+      cb.checked = state.checked;
+      cb.indeterminate = state.indeterminate;
+    });
+
+    listEl.querySelectorAll('input[data-reading-id]').forEach((cb) => {
+      const readingId = Number(cb.dataset.readingId);
+      const reading = hierarchy.flatMap((t) => t.readings).find((r) => r.id === readingId);
+      if (!reading) return;
+      const state = checkboxStateForPages(reading.pages);
+      cb.checked = state.checked;
+      cb.indeterminate = state.indeterminate;
+    });
+
+    updateSummary();
+  };
+
+  const renderList = () => {
+    const filter = (filterEl.value || "").trim().toLowerCase();
+    const bits = [];
+
+    hierarchy.forEach((topic) => {
+      const topicMatch = topic.title.toLowerCase().includes(filter);
+      const matchingReadings = topic.readings.filter((reading) => {
+        if (!filter || topicMatch) return true;
+        if (reading.title.toLowerCase().includes(filter)) return true;
+        return reading.pages.some((p) => p.title.toLowerCase().includes(filter));
+      });
+
+      if (filter && !topicMatch && !matchingReadings.length) return;
+
+      bits.push(`
+        <details data-topic-details="${topic.id}" open style="border-bottom:1px solid #e7e7e7;">
+          <summary style="list-style:none;display:flex;align-items:center;gap:8px;padding:9px 12px;background:#f2f4f8;cursor:pointer;">
+            <input type="checkbox" data-topic-id="${topic.id}" style="margin:0;">
+            <span style="font-weight:800;flex:1;">${escapeHtml(topic.title)}</span>
+            <span style="color:#777;font-size:11px;">${topic.pages.length} pages</span>
+          </summary>
+          <div>
+      `);
+
+      matchingReadings.forEach((reading) => {
+        const readingMatch = reading.title.toLowerCase().includes(filter);
+        const visiblePages = reading.pages.filter(
+          (p) => !filter || topicMatch || readingMatch || p.title.toLowerCase().includes(filter)
+        );
+
+        bits.push(`
+          <details data-reading-details="${reading.id}" open style="border-top:1px solid #eee;">
+            <summary style="list-style:none;display:flex;align-items:flex-start;gap:8px;padding:8px 14px 7px 28px;background:#fafafa;cursor:pointer;">
+              <input type="checkbox" data-reading-id="${reading.id}" style="margin-top:2px;">
+              <span style="font-weight:700;flex:1;">${escapeHtml(reading.title)}</span>
+              <span style="color:#888;font-size:11px;">${reading.pages.length}</span>
+            </summary>
+            <div>
+        `);
+
+        visiblePages.forEach((page) => {
+          bits.push(`
+            <label style="display:flex;gap:8px;padding:7px 14px 7px 48px;align-items:flex-start;cursor:pointer;">
+              <input type="checkbox" data-page-key="${escapeHtml(page.pathKey)}" ${selectedKeys.has(page.pathKey) ? "checked" : ""} style="margin-top:2px;">
+              <span style="min-width:0;">${escapeHtml(page.title)}</span>
+            </label>
+          `);
+        });
+
+        bits.push(`</div></details>`);
+      });
+
+      bits.push(`</div></details>`);
+    });
+
+    listEl.innerHTML = bits.join("") || '<div style="padding:12px 14px;color:#666;">No matching pages.</div>';
+    syncGroupCheckboxes();
+  };
+
+  // Prevent clicking a group checkbox from also collapsing its <details>.
+  listEl.addEventListener("click", (e) => {
+    if (e.target.matches('input[data-topic-id],input[data-reading-id]')) {
+      e.stopPropagation();
+    }
+  });
+
+  listEl.addEventListener("change", (e) => {
+    const target = e.target;
+
+    if (target.matches('input[data-page-key]')) {
+      if (target.checked) selectedKeys.add(target.dataset.pageKey);
+      else selectedKeys.delete(target.dataset.pageKey);
+      syncGroupCheckboxes();
+      return;
+    }
+
+    if (target.matches('input[data-topic-id]')) {
+      const topic = hierarchy[Number(target.dataset.topicId)];
+      topic?.pages.forEach((p) => {
+        if (target.checked) selectedKeys.add(p.pathKey);
+        else selectedKeys.delete(p.pathKey);
+      });
+      renderList();
+      return;
+    }
+
+    if (target.matches('input[data-reading-id]')) {
+      const id = Number(target.dataset.readingId);
+      const reading = hierarchy.flatMap((t) => t.readings).find((r) => r.id === id);
+      reading?.pages.forEach((p) => {
+        if (target.checked) selectedKeys.add(p.pathKey);
+        else selectedKeys.delete(p.pathKey);
+      });
+      renderList();
+    }
+  });
+
+  filterEl.addEventListener("input", renderList);
+
+  const doScan = async () => {
+    if (busy) return;
+
+    setBusy(true);
+    cancelled = false;
+
+    try {
+      pages = await scanCoursePages(setStatus);
+      hierarchy = buildHierarchy(pages);
+
+      // IMPORTANT: every detected page is selected by default.
+      // This includes Module, Reading X: Key Concepts, Warm-Up, resources, etc.
+      selectedKeys = new Set(pages.map((p) => p.pathKey));
+
+      renderList();
+      const directCount = pages.filter((p) => p.directTopicPage).length;
+      setStatus(`Scan complete: ${pages.length} pages detected (${directCount} direct Topic pages/resources).`);
+    } catch (e) {
+      console.error(e);
+      setStatus(`Scan failed: ${e.message}`);
+      alert(`Scan gagal:\n${e.message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doExport = async () => {
+    if (busy) return;
+
+    const selected = pages.filter((p) => selectedKeys.has(p.pathKey));
+    if (!selected.length) {
+      alert("Pilih minimal satu page.");
+      return;
+    }
+
+    const addTopicTitles = $('[data-role="topicTitles"]').checked;
+    const addReadingTitles = $('[data-role="readingTitles"]').checked;
+    const offline = $('[data-role="offline"]').checked;
+    const mathMode = $('[data-role="mathMode"]').value || "fit";
+    const tableMode = $('[data-role="tableMode"]').value || "fit";
+    const printOptions = {
+      paper: $('[data-role="paperSize"]')?.value || "A4",
+      orientation: $('[data-role="orientation"]')?.value || "portrait",
+      marginMm: Number($('[data-role="marginMm"]')?.value ?? 12),
+    };
+
+    const original = currentPageIdentity();
+    const originalItem = pages.find((p) => p.pathKey === original.pathKey) || null;
+
+    const headHtml = buildHeadFromBaseline();
+    const captured = new Map();
+
+    cancelled = false;
+    setBusy(true);
+
+    try {
+      for (let i = 0; i < selected.length; i++) {
+        if (cancelled) throw new Error("Export cancelled by user.");
+
+        const item = selected[i];
+        setStatus(`Loading ${i + 1}/${selected.length}: ${item.title}`);
+        await navigateToItem(item);
+
+        if (cancelled) throw new Error("Export cancelled by user.");
+
+        setStatus(`Capturing ${i + 1}/${selected.length}: ${item.title}`);
+        const wrapper = buildCourseWrapper();
+
+        if (offline) {
+          setStatus(`Inlining images ${i + 1}/${selected.length}: ${item.title}`);
+          await inlineImagesInDom(wrapper);
+        }
+
+        captured.set(item.pathKey, wrapper);
+        await sleep(40);
+      }
+
+      setStatus("Building hierarchical HTML...");
+
+      const segments = [];
+      const selectedKeySet = new Set(selected.map((p) => p.pathKey));
+
+      hierarchy.forEach((topic) => {
+        const selectedTopicPages = topic.pages.filter((p) => selectedKeySet.has(p.pathKey));
+        if (!selectedTopicPages.length) return;
+
+        if (addTopicTitles) {
+          segments.push(
+            buildDividerSegment(
+              "topic",
+              topic.title,
+              `topic-${slugify(topic.title)}`
+            ).outerHTML
+          );
+        }
+
+        topic.readings.forEach((reading) => {
+          const selectedReadingPages = reading.pages.filter((p) =>
+            selectedKeySet.has(p.pathKey)
+          );
+          if (!selectedReadingPages.length) return;
+
+          if (addReadingTitles && !reading.synthetic) {
+            segments.push(
+              buildDividerSegment(
+                "reading",
+                reading.title,
+                `reading-${slugify(topic.title)}-${slugify(reading.title)}`
+              ).outerHTML
+            );
+          }
+
+          selectedReadingPages.forEach((page) => {
+            const wrapper = captured.get(page.pathKey);
+            if (!wrapper) return;
+
+            segments.push(
+              wrapAsSegment(
+                wrapper,
+                `page-${slugify(topic.title)}-${slugify(reading.title)}-${slugify(page.title)}`
+              ).outerHTML
+            );
+          });
+        });
+      });
+
+      const bodyHtml = segments.join("\n");
+      const fileName = `${cleanFilename(BASELINE_BOOK_NAME)} - ${selected.length} pages`;
+      setStatus("Preparing shared HTML/print document...");
+      await openPrintDocument(fileName, headHtml, bodyHtml, mathMode, tableMode, printOptions);
+      setStatus(`HTML saved and print dialog opened: ${fileName}`);
+    } catch (e) {
+      console.error(e);
+
+      if (cancelled || /cancelled/i.test(e.message)) {
+        setStatus("Print cancelled.");
+      } else {
+        setStatus(`Export failed: ${e.message}`);
+        alert(`Print gagal:\n${e.message}\n\nLihat Console untuk detail.`);
+      }
+    } finally {
+      if (originalItem && pathKey(location.href) !== originalItem.pathKey) {
+        try {
+          setStatus("Returning to the original page...");
+          await navigateToItem(originalItem);
+        } catch (e) {
+          console.warn("Could not restore original page:", e);
+        }
+      }
+
+      setBusy(false);
+    }
+  };
+
+  // ============================================================
+  // UI actions
+  // ============================================================
+  $('[data-act="close"]').onclick = () => {
+    if (busy) {
+      alert("Scan/export masih berjalan. Cancel terlebih dahulu.");
+      return;
+    }
+    ui.remove();
+  };
+
+  $('[data-act="scan"]').onclick = doScan;
+
+  $('[data-act="all"]').onclick = () => {
+    selectedKeys = new Set(pages.map((p) => p.pathKey));
+    renderList();
+  };
+
+  $('[data-act="clear"]').onclick = () => {
+    selectedKeys.clear();
+    renderList();
+  };
+
+  $('[data-act="expand"]').onclick = () => {
+    listEl.querySelectorAll("details").forEach((d) => (d.open = true));
+  };
+
+  $('[data-act="collapse"]').onclick = () => {
+    listEl.querySelectorAll("details").forEach((d) => (d.open = false));
+  };
+
+  $('[data-act="export"]').onclick = doExport;
+
+  cancelBtn.onclick = () => {
+    cancelled = true;
+    setStatus("Cancelling after current operation...");
+  };
+
+  // Auto-scan.
+  doScan();
+})();
