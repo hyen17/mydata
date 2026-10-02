@@ -1,188 +1,4541 @@
-javascript:(async () => {
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const totalQuestions = document.querySelectorAll('#questionsSelect option').length;
-  const questionSelect = document.querySelector('#questionsSelect');
+(() => {
+  'use strict';
 
-  const delayBeforeClickAnswer = 1000;
-  const delayAfterClick = 1500;
-  const delayAfterChange = 1500;
+  /* =========================================================
+     QUIZ EXTRACTOR v7
+     =========================================================
 
-  const questions = [];
+     MODES
+     ---------------------------------------------------------
+     AUTO
+       - Breadcrumb "Mock Exams" => Mock Exam
+       - Otherwise => Quiz
 
-  const clickFirstChoice = () => {
-    const firstRadio = document.querySelector('#answerBody input[type=radio]');
-    if (firstRadio) firstRadio.click();
-  };
+     QUIZ
+       - Random answer if unanswered
+       - Wait for Feedback + correct answer
+       - Extract immediately
 
-  const waitForFeedback = async () => {
-    for (let i = 0; i < 10; i++) {
-      const feedback = document.querySelector('.feedback-container');
-      if (feedback && feedback.innerText.trim()) break;
-      await sleep(300);
-    }
-  };
+     MOCK EXAM - TAKING
+       - Random answer only
+       - DO NOT save/extract
+       - DO NOT require Feedback
+       - Stop at manually entered final question
+       - User submits exam manually
 
-  const parseRange = (input, max) => {
-    if (input.toLowerCase() === 'all') return Array.from({ length: max }, (_, i) => i);
-    const parts = input.split(',').flatMap(part => {
-      if (part.includes('-')) {
-        const [start, end] = part.split('-').map(n => parseInt(n.trim(), 10) - 1);
-        return Array.from({ length: end - start + 1 }, (_, i) => start + i);
-      } else {
-        const idx = parseInt(part.trim(), 10) - 1;
-        return isNaN(idx) ? [] : [idx];
-      }
-    });
-    return parts.filter(i => i >= 0 && i < max);
-  };
+     MOCK EXAM - REVIEW
+       - Auto detected from Feedback/correct-answer state
+       - DO NOT answer
+       - Extract question + choices + correct answer + explanation
 
-  // 🔧 PERUBAHAN DI SINI SAJA
-  const userInput = prompt(
-    `Which question numbers to save?\n\nExamples:\nall\n1-10\n1,3,5-7`,
-    'all'
-  );
-  if (!userInput) return;
+     SAFETY
+     ---------------------------------------------------------
+     - Manual Total Questions required
+     - Never click Next after final question
+     - Duplicate protection
+     - Wait for stable React rendering
+     - Mock Exam uses its own sequential counter
+     - Mock Exam always starts from first question
+     ========================================================= */
 
-  const selectedIndexes = parseRange(userInput, totalQuestions);
+  const SCRIPT_ID =
+    'quiz-extractor-modern-ui-v7';
 
-  const extractQuestionData = () => {
-    const questionText = document.querySelector('#description')?.innerHTML.trim() || '';
-    const answerBody = document.querySelector('#answerBody');
-    const labels = Array.from(answerBody?.querySelectorAll('label') || []);
-    const choices = [];
-    const letters = ['A', 'B', 'C', 'D', 'E', 'F'];
+  const STYLE_ID =
+    `${SCRIPT_ID}-style`;
 
-    labels.forEach((label, idx) => {
-      const isTable = label.querySelector('table');
-      const pTag = label.querySelector('p');
-      const hasBr = pTag && pTag.querySelector('br');
-      let wrapped;
+  /* =========================================================
+     REMOVE PREVIOUS VERSIONS
+     ========================================================= */
 
-      if (isTable) {
-        wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content">${label.innerHTML.trim()}</div></div>`;
-      } else if (pTag && hasBr) {
-        const htmlWithBr = pTag.innerHTML.trim();
-        wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content"><p>${htmlWithBr}</p></div></div>`;
-      } else if (pTag) {
-        const plainText = pTag.innerText.trim();
-        wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content"><p>${plainText}</p></div></div>`;
-      } else {
-        const rawText = label.innerText.trim();
-        wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content"><p>${rawText}</p></div></div>`;
-      }
+  document
+    .querySelectorAll(
+      '[id^="quiz-extractor-modern-ui-v"]'
+    )
+    .forEach(el => el.remove());
 
-      choices.push(wrapped);
-    });
+  document
+    .querySelectorAll(
+      'style[id^="quiz-extractor-modern-ui-v"]'
+    )
+    .forEach(el => el.remove());
 
-    const correctIndex = [...document.querySelectorAll('.choice-order')]
-      .findIndex(span => span.classList.contains('correct'));
-
-    const feedbackDivs = Array.from(
-      document.querySelectorAll('.feedback-element, .last-feedback-element')
-    );
-    const explanationHTML = feedbackDivs.map(div => div.outerHTML).join('<br>');
-
-    return {
-      questionText,
-      choices,
-      correctIndex,
-      explanation: explanationHTML
-    };
-  };
-
-  const generateHTML = (withAnswers = false) => {
-    const doc = document.implementation.createHTMLDocument();
-    const style = document.createElement('style');
-    style.textContent = `
-      body { font-family: Arial, sans-serif; font-size: 17px; margin: 40px; }
-      .question-block { page-break-inside: avoid; margin-bottom: 50px; }
-      .question-title { font-weight: bold; margin-bottom: 10px; }
-      .question-text { margin-bottom: 10px; }
-      .choice { display: flex; margin: 4px 0; }
-      .choice-letter { width: 30px; flex-shrink: 0; }
-      .choice-content p { margin: 0; }
-      .choice.correct { font-weight: bold; }
-      .explanation { margin-top: 15px; }
-      .explanation .feedback-element,
-      .explanation .last-feedback-element {
-        margin: 4px 0 !important;
-      }
-      .explanation p { margin: 0 !important; }
-      .explanation br { display: block; margin-top: 5px; }
-      td, tr { height: auto !important; }
-      table p { margin: 0 !important; }
-      .hr-line { border: 0; border-top: 2px solid #000; margin-top: 5px; margin-bottom: 15px; }
-    `;
-    doc.head.appendChild(style);
-
-    questions.forEach((q, index) => {
-      const block = doc.createElement('div');
-      block.className = 'question-block';
-
-      const title = document.createElement('div');
-      title.className = 'question-title';
-      title.textContent = `Question ${selectedIndexes[index] + 1} of ${totalQuestions}`;
-      block.appendChild(title);
-
-      const line = document.createElement('hr');
-      line.className = 'hr-line';
-      block.appendChild(line);
-
-      const qtext = document.createElement('div');
-      qtext.className = 'question-text';
-      qtext.innerHTML = q.questionText;
-      block.appendChild(qtext);
-
-      q.choices.forEach((choiceHTML, idx) => {
-        const wrapper = document.createElement('div');
-        wrapper.innerHTML = choiceHTML.trim();
-        const choiceDiv = wrapper.firstChild;
-        if (withAnswers && idx === q.correctIndex) {
-          choiceDiv.classList.add('correct');
-        }
-        block.appendChild(choiceDiv);
-      });
-
-      if (withAnswers && q.explanation) {
-        const exp = document.createElement('div');
-        exp.className = 'explanation';
-        exp.innerHTML = `<b><i>Explanation:</i></b><br>${q.explanation}`;
-        block.appendChild(exp);
-      }
-
-      doc.body.appendChild(block);
-    });
-
-    return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
-  };
-
-  const topicName =
-    document.querySelector('#topicName')?.innerText.trim() || 'Questions';
-
-  const saveHTMLAsTab = (html, name) => {
-    const win = window.open();
-    win.document.open();
-    win.document.write(html);
-    win.document.close();
-    win.document.title = name;
-  };
-
-  for (let i = 0; i < totalQuestions; i++) {
-    if (!selectedIndexes.includes(i)) continue;
-
-    questionSelect.selectedIndex = i;
-    questionSelect.dispatchEvent(new Event('change', { bubbles: true }));
-    await sleep(delayAfterChange);
-
-    await sleep(delayBeforeClickAnswer);
-    clickFirstChoice();
-    await sleep(delayAfterClick);
-    await waitForFeedback();
-
-    const data = extractQuestionData();
-    questions.push(data);
+  if (
+    window.__QUIZ_EXTRACTOR_STATE__
+  ) {
+    window
+      .__QUIZ_EXTRACTOR_STATE__
+      .stopRequested = true;
   }
 
-  saveHTMLAsTab(generateHTML(false), `${topicName} - Questions`);
-  saveHTMLAsTab(generateHTML(true), `${topicName} - Answers`);
+  /* =========================================================
+     STATE
+     ========================================================= */
+
+  const state = {
+    running: false,
+    stopRequested: false,
+
+    mode: null,
+    mockPhase: null,
+
+    totalQuestions: null,
+    startQuestion: null,
+
+    questionMap: new Map(),
+
+    quizTitle: '',
+
+    questionHTML: '',
+    answerHTML: ''
+  };
+
+  window.__QUIZ_EXTRACTOR_STATE__ =
+    state;
+
+  /* =========================================================
+     CONFIG
+     ========================================================= */
+
+  const CONFIG = {
+    stabilityPoll: 120,
+    stabilityChecks: 4,
+
+    questionReadyTimeout: 12000,
+    navigationTimeout: 12000,
+    feedbackTimeout: 15000,
+
+    afterNavigation: 450,
+    afterAnswerClick: 250,
+
+    maxQuestions: 3000
+  };
+
+  const sleep =
+    ms =>
+      new Promise(
+        resolve =>
+          setTimeout(
+            resolve,
+            ms
+          )
+      );
+
+  /* =========================================================
+     UI
+     ========================================================= */
+
+  const panel =
+    document.createElement(
+      'div'
+    );
+
+  panel.id =
+    SCRIPT_ID;
+
+  panel.innerHTML = `
+    <div class="qe-head">
+
+      <div>
+
+        <div class="qe-title">
+          Quiz Extractor
+        </div>
+
+        <div class="qe-subtitle">
+          Quiz + Mock Exam
+        </div>
+
+      </div>
+
+      <button
+        id="qe-close"
+        type="button"
+        title="Close"
+      >
+        ×
+      </button>
+
+    </div>
+
+    <div class="qe-body">
+
+      <div class="qe-status-box">
+
+        <div class="qe-status-label">
+          STATUS
+        </div>
+
+        <div id="qe-status">
+          Ready
+        </div>
+
+      </div>
+
+      <div class="qe-progress-wrap">
+
+        <div id="qe-progress-bar">
+        </div>
+
+      </div>
+
+      <div id="qe-counter">
+        Waiting to start
+      </div>
+
+      <div class="qe-settings">
+
+        <label class="qe-field qe-mode-field">
+
+          <span>
+            Mode
+          </span>
+
+          <select id="qe-mode">
+            <option value="auto">
+              Auto detect
+            </option>
+
+            <option value="quiz">
+              Quiz
+            </option>
+
+            <option value="mock">
+              Mock Exam
+            </option>
+          </select>
+
+        </label>
+
+        <label class="qe-field">
+
+          <span>
+            Total questions
+          </span>
+
+          <input
+            id="qe-total"
+            type="number"
+            min="1"
+            step="1"
+            placeholder="e.g. 125"
+          >
+
+        </label>
+
+        <label class="qe-option">
+
+          <input
+            id="qe-first"
+            type="checkbox"
+            checked
+          >
+
+          <span>
+            Start from Question 1
+          </span>
+
+        </label>
+
+        <label class="qe-field">
+
+          <span>
+            Output font size
+          </span>
+
+          <div class="qe-font-row">
+
+            <input
+              id="qe-font-size"
+              type="number"
+              value="12"
+              min="9"
+              max="18"
+              step="1"
+            >
+
+            <span>
+              pt
+            </span>
+
+          </div>
+
+        </label>
+
+      </div>
+
+      <div class="qe-detected">
+
+        <span>
+          Detected:
+        </span>
+
+        <strong id="qe-detected">
+          —
+        </strong>
+
+      </div>
+
+      <div class="qe-actions">
+
+        <button
+          id="qe-start"
+          type="button"
+          class="qe-primary"
+        >
+          Start
+        </button>
+
+        <button
+          id="qe-stop"
+          type="button"
+          class="qe-danger"
+          disabled
+        >
+          Stop
+        </button>
+
+      </div>
+
+      <div
+        id="qe-results"
+        class="qe-results"
+        style="display:none"
+      >
+
+        <div class="qe-results-title">
+          Result
+        </div>
+
+        <button
+          id="qe-open-q"
+          type="button"
+        >
+          Open Questions
+        </button>
+
+        <button
+          id="qe-open-a"
+          type="button"
+        >
+          Open Answers
+        </button>
+
+        <button
+          id="qe-download-q"
+          type="button"
+        >
+          Download Questions.html
+        </button>
+
+        <button
+          id="qe-download-a"
+          type="button"
+        >
+          Download Answers.html
+        </button>
+
+      </div>
+
+      <div class="qe-note">
+        Mock Exam taking phase only answers questions.
+        Extraction starts after the exam is submitted and
+        opened in Review.
+      </div>
+
+    </div>
+  `;
+
+  /* =========================================================
+     UI STYLE
+     ========================================================= */
+
+  const uiStyle =
+    document.createElement(
+      'style'
+    );
+
+  uiStyle.id =
+    STYLE_ID;
+
+  uiStyle.textContent = `
+    #${SCRIPT_ID} {
+      position: fixed;
+      top: 22px;
+      right: 22px;
+
+      width: 350px;
+
+      z-index: 2147483647;
+
+      font-family:
+        Inter,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        Arial,
+        sans-serif;
+
+      background: #ffffff;
+      color: #111827;
+
+      border:
+        1px solid #dbe2ea;
+
+      border-radius:
+        14px;
+
+      box-shadow:
+        0 20px 45px rgba(0,0,0,.18),
+        0 4px 12px rgba(0,0,0,.08);
+
+      overflow: hidden;
+    }
+
+    #${SCRIPT_ID} * {
+      box-sizing: border-box;
+    }
+
+    #${SCRIPT_ID} .qe-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+
+      padding:
+        14px 16px;
+
+      background:
+        #111827;
+
+      color:
+        #ffffff;
+    }
+
+    #${SCRIPT_ID} .qe-title {
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    #${SCRIPT_ID} .qe-subtitle {
+      margin-top: 2px;
+
+      font-size: 11px;
+
+      opacity: .7;
+    }
+
+    #${SCRIPT_ID} #qe-close {
+      width: 30px;
+      height: 30px;
+
+      padding: 0;
+
+      border: 0;
+
+      border-radius:
+        8px;
+
+      background:
+        rgba(255,255,255,.10);
+
+      color:
+        #ffffff;
+
+      font-size: 22px;
+
+      cursor: pointer;
+    }
+
+    #${SCRIPT_ID} .qe-body {
+      padding: 15px;
+    }
+
+    #${SCRIPT_ID} .qe-status-box {
+      padding:
+        10px 12px;
+
+      background:
+        #f4f6f8;
+
+      border:
+        1px solid #e5e7eb;
+
+      border-radius:
+        9px;
+    }
+
+    #${SCRIPT_ID} .qe-status-label {
+      margin-bottom: 4px;
+
+      color:
+        #6b7280;
+
+      font-size: 9px;
+      font-weight: 700;
+
+      letter-spacing:
+        .8px;
+    }
+
+    #${SCRIPT_ID} #qe-status {
+      min-height: 18px;
+
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    #${SCRIPT_ID} .qe-progress-wrap {
+      height: 6px;
+
+      margin-top: 12px;
+
+      background:
+        #e5e7eb;
+
+      border-radius:
+        999px;
+
+      overflow: hidden;
+    }
+
+    #${SCRIPT_ID} #qe-progress-bar {
+      width: 0%;
+      height: 100%;
+
+      background:
+        #2563eb;
+
+      border-radius:
+        inherit;
+
+      transition:
+        width .25s ease;
+    }
+
+    #${SCRIPT_ID} #qe-counter {
+      margin-top: 7px;
+
+      color:
+        #6b7280;
+
+      font-size: 11px;
+    }
+
+    #${SCRIPT_ID} .qe-settings {
+      margin-top: 14px;
+    }
+
+    #${SCRIPT_ID} .qe-field {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+
+      margin-top: 12px;
+
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    #${SCRIPT_ID} .qe-mode-field {
+      margin-top: 0;
+    }
+
+    #${SCRIPT_ID} #qe-mode {
+      width: 140px;
+      height: 34px;
+
+      padding: 4px 7px;
+
+      border:
+        1px solid #cfd5dd;
+
+      border-radius:
+        7px;
+
+      background:
+        #ffffff;
+
+      font-family:
+        inherit;
+
+      font-size:
+        12px;
+    }
+
+    #${SCRIPT_ID} #qe-total {
+      width: 100px;
+      height: 34px;
+
+      padding: 5px 8px;
+
+      border:
+        1px solid #cfd5dd;
+
+      border-radius:
+        7px;
+
+      font-family:
+        inherit;
+
+      font-size:
+        12px;
+
+      text-align:
+        center;
+    }
+
+    #${SCRIPT_ID} #qe-total.qe-error {
+      border-color:
+        #dc2626;
+
+      box-shadow:
+        0 0 0 2px rgba(220,38,38,.10);
+    }
+
+    #${SCRIPT_ID} .qe-option {
+      display: flex;
+      align-items: center;
+
+      gap: 8px;
+
+      margin-top: 12px;
+
+      font-size: 12px;
+
+      cursor: pointer;
+
+      user-select: none;
+    }
+
+    #${SCRIPT_ID} .qe-option input {
+      width: 15px;
+      height: 15px;
+    }
+
+    #${SCRIPT_ID} .qe-font-row {
+      display: flex;
+      align-items: center;
+
+      gap: 5px;
+    }
+
+    #${SCRIPT_ID} #qe-font-size {
+      width: 62px;
+      height: 31px;
+
+      padding: 4px 7px;
+
+      border:
+        1px solid #d1d5db;
+
+      border-radius:
+        7px;
+
+      font-family:
+        inherit;
+
+      font-size:
+        12px;
+
+      text-align:
+        center;
+    }
+
+    #${SCRIPT_ID} .qe-detected {
+      margin-top: 12px;
+
+      padding:
+        8px 10px;
+
+      background:
+        #f8fafc;
+
+      border:
+        1px solid #e5e7eb;
+
+      border-radius:
+        7px;
+
+      color:
+        #64748b;
+
+      font-size: 11px;
+    }
+
+    #${SCRIPT_ID} .qe-detected strong {
+      color:
+        #111827;
+    }
+
+    #${SCRIPT_ID} .qe-actions {
+      display: grid;
+
+      grid-template-columns:
+        1fr 1fr;
+
+      gap: 8px;
+
+      margin-top: 14px;
+    }
+
+    #${SCRIPT_ID} button {
+      font-family: inherit;
+    }
+
+    #${SCRIPT_ID} .qe-actions button,
+    #${SCRIPT_ID} .qe-results button {
+      min-height: 36px;
+
+      padding:
+        8px 10px;
+
+      border:
+        1px solid #d1d5db;
+
+      border-radius:
+        8px;
+
+      background:
+        #ffffff;
+
+      color:
+        #111827;
+
+      font-size: 12px;
+      font-weight: 600;
+
+      cursor: pointer;
+    }
+
+    #${SCRIPT_ID} .qe-actions button:disabled {
+      opacity: .45;
+
+      cursor:
+        not-allowed;
+    }
+
+    #${SCRIPT_ID} .qe-primary {
+      background:
+        #2563eb !important;
+
+      border-color:
+        #2563eb !important;
+
+      color:
+        #ffffff !important;
+    }
+
+    #${SCRIPT_ID} .qe-danger {
+      color:
+        #b91c1c !important;
+
+      border-color:
+        #fecaca !important;
+    }
+
+    #${SCRIPT_ID} .qe-results {
+      margin-top: 14px;
+      padding-top: 13px;
+
+      border-top:
+        1px solid #e5e7eb;
+    }
+
+    #${SCRIPT_ID} .qe-results-title {
+      margin-bottom: 8px;
+
+      color:
+        #166534;
+
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    #${SCRIPT_ID} .qe-results button {
+      display: block;
+
+      width: 100%;
+
+      margin-top: 6px;
+
+      text-align: left;
+    }
+
+    #${SCRIPT_ID} .qe-note {
+      margin-top: 13px;
+      padding-top: 10px;
+
+      border-top:
+        1px solid #e5e7eb;
+
+      color:
+        #6b7280;
+
+      font-size: 10px;
+      line-height: 1.45;
+    }
+  `;
+
+  document.head.appendChild(
+    uiStyle
+  );
+
+  document.body.appendChild(
+    panel
+  );
+
+  /* =========================================================
+     UI REFERENCES
+     ========================================================= */
+
+  const $ =
+    selector =>
+      panel.querySelector(
+        selector
+      );
+
+  const statusEl =
+    $('#qe-status');
+
+  const counterEl =
+    $('#qe-counter');
+
+  const progressBar =
+    $('#qe-progress-bar');
+
+  const modeInput =
+    $('#qe-mode');
+
+  const totalInput =
+    $('#qe-total');
+
+  const firstInput =
+    $('#qe-first');
+
+  const fontInput =
+    $('#qe-font-size');
+
+  const detectedEl =
+    $('#qe-detected');
+
+  const startBtn =
+    $('#qe-start');
+
+  const stopBtn =
+    $('#qe-stop');
+
+  const resultsEl =
+    $('#qe-results');
+
+  /* =========================================================
+     UI HELPERS
+     ========================================================= */
+
+  function setStatus(
+    text
+  ) {
+    statusEl.textContent =
+      text;
+  }
+
+  function setCounter(
+    text
+  ) {
+    counterEl.textContent =
+      text;
+  }
+
+  function setProgress(
+    value
+  ) {
+    progressBar.style.width =
+      `${Math.max(
+        0,
+        Math.min(
+          100,
+          value
+        )
+      )}%`;
+  }
+
+  function setDetected(
+    text
+  ) {
+    detectedEl.textContent =
+      text;
+  }
+
+  function updateSequentialProgress(
+    current,
+    total,
+    verb = 'processed'
+  ) {
+    const percentage =
+      total > 0
+        ? (
+            current /
+            total
+          ) * 100
+        : 0;
+
+    setProgress(
+      percentage
+    );
+
+    setCounter(
+      `${current} of ${total} ${verb}`
+    );
+  }
+
+  function getOutputFontSize() {
+    let size =
+      parseFloat(
+        fontInput.value
+      );
+
+    if (
+      !Number.isFinite(size)
+    ) {
+      size = 12;
+    }
+
+    return Math.max(
+      9,
+      Math.min(
+        18,
+        size
+      )
+    );
+  }
+
+  /* =========================================================
+     TOTAL QUESTIONS
+     ========================================================= */
+
+  function validateTotalQuestions() {
+    const raw =
+      totalInput.value.trim();
+
+    if (!raw) {
+      totalInput.classList.add(
+        'qe-error'
+      );
+
+      totalInput.focus();
+
+      setStatus(
+        'Please enter the total number of questions.'
+      );
+
+      return null;
+    }
+
+    const value =
+      Number(raw);
+
+    if (
+      !Number.isInteger(value) ||
+      value < 1
+    ) {
+      totalInput.classList.add(
+        'qe-error'
+      );
+
+      totalInput.focus();
+
+      setStatus(
+        'Total questions must be a whole number greater than 0.'
+      );
+
+      return null;
+    }
+
+    totalInput.classList.remove(
+      'qe-error'
+    );
+
+    return value;
+  }
+
+  totalInput.addEventListener(
+    'input',
+    () => {
+      totalInput.classList.remove(
+        'qe-error'
+      );
+    }
+  );
+
+  /* =========================================================
+     VISIBILITY
+     ========================================================= */
+
+  function isElementVisible(
+    el
+  ) {
+    if (!el) {
+      return false;
+    }
+
+    const style =
+      window.getComputedStyle(
+        el
+      );
+
+    if (
+      style.display ===
+        'none' ||
+      style.visibility ===
+        'hidden'
+    ) {
+      return false;
+    }
+
+    const rect =
+      el.getBoundingClientRect();
+
+    return (
+      rect.width > 0 &&
+      rect.height > 0
+    );
+  }
+
+  /* =========================================================
+     BREADCRUMB / MODE DETECTION
+     ========================================================= */
+
+  function getBreadcrumbText() {
+    const breadcrumb =
+      document.querySelector(
+        '[aria-label="breadcrumb"]'
+      );
+
+    return (
+      breadcrumb
+        ?.innerText
+        ?.trim() ||
+      ''
+    );
+  }
+
+  function autoDetectMode() {
+    const breadcrumb =
+      getBreadcrumbText()
+        .toLowerCase();
+
+    if (
+      breadcrumb.includes(
+        'mock exam'
+      ) ||
+      breadcrumb.includes(
+        'mock exams'
+      )
+    ) {
+      return 'mock';
+    }
+
+    return 'quiz';
+  }
+
+  function resolveMode() {
+    const selected =
+      modeInput.value;
+
+    if (
+      selected ===
+        'quiz' ||
+      selected ===
+        'mock'
+    ) {
+      return selected;
+    }
+
+    return autoDetectMode();
+  }
+
+  /* =========================================================
+     QUIZ CONTENT
+     ========================================================= */
+
+  function getQuizContent() {
+    const contents =
+      Array.from(
+        document.querySelectorAll(
+          '.FusePageCarded-content'
+        )
+      );
+
+    const visible =
+      contents.filter(
+        isElementVisible
+      );
+
+    return (
+      visible[
+        visible.length - 1
+      ] ||
+      contents[
+        contents.length - 1
+      ] ||
+      document
+    );
+  }
+
+  /* =========================================================
+     NAVIGATOR COMBOBOX
+     ========================================================= */
+
+  function getNavigatorCombobox() {
+    const combos =
+      Array.from(
+        document.querySelectorAll(
+          '[role="combobox"]'
+        )
+      )
+      .filter(el => {
+        const text =
+          el.textContent
+            ?.trim() ||
+          '';
+
+        /*
+          Quiz:
+            9
+
+          Mock:
+            1 ~ 125
+        */
+
+        return (
+          /^\d+$/.test(
+            text
+          ) ||
+          /^\d+\s*~\s*\d+$/.test(
+            text
+          )
+        );
+      });
+
+    const visible =
+      combos.filter(
+        isElementVisible
+      );
+
+    return (
+      visible[
+        visible.length - 1
+      ] ||
+      combos[
+        combos.length - 1
+      ] ||
+      null
+    );
+  }
+
+  /* =========================================================
+     QUIZ CURRENT NUMBER
+     ========================================================= */
+
+  function getQuizCurrentNumber() {
+    const combo =
+      getNavigatorCombobox();
+
+    if (!combo) {
+      return null;
+    }
+
+    const text =
+      combo.textContent
+        ?.trim() ||
+      '';
+
+    /*
+      Numeric only.
+
+      Mock's "1 ~ 125" is intentionally NOT treated as
+      current question.
+    */
+
+    if (
+      !/^\d+$/.test(
+        text
+      )
+    ) {
+      return null;
+    }
+
+    const value =
+      parseInt(
+        text,
+        10
+      );
+
+    return Number.isFinite(
+      value
+    )
+      ? value
+      : null;
+  }
+
+  /* =========================================================
+     RADIOGROUP
+     ========================================================= */
+
+  function getRadioGroup() {
+    const content =
+      getQuizContent();
+
+    let groups =
+      Array.from(
+        content.querySelectorAll(
+          '[role="radiogroup"]'
+        )
+      )
+      .filter(
+        group =>
+          group.querySelectorAll(
+            'input[type="radio"][name="answer"]'
+          ).length >= 2
+      );
+
+    const visible =
+      groups.filter(
+        isElementVisible
+      );
+
+    if (
+      visible.length
+    ) {
+      return visible[
+        visible.length - 1
+      ];
+    }
+
+    groups =
+      groups.filter(
+        el =>
+          el.isConnected
+      );
+
+    return (
+      groups[
+        groups.length - 1
+      ] ||
+      null
+    );
+  }
+
+  function getAnswerInputs() {
+    const group =
+      getRadioGroup();
+
+    if (!group) {
+      return [];
+    }
+
+    return Array.from(
+      group.querySelectorAll(
+        'input[type="radio"][name="answer"]'
+      )
+    );
+  }
+
+  function getChoiceLabels() {
+    return getAnswerInputs()
+      .map(input => {
+        if (!input.id) {
+          return null;
+        }
+
+        try {
+          return document.querySelector(
+            `label[for="${CSS.escape(input.id)}"]`
+          );
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  }
+
+  /* =========================================================
+     QUESTION IDENTITY
+     ========================================================= */
+
+  function getQuestionInternalId() {
+    const input =
+      getAnswerInputs()[0];
+
+    if (!input?.id) {
+      return '';
+    }
+
+    const marker =
+      '.answers.';
+
+    const index =
+      input.id.indexOf(
+        marker
+      );
+
+    if (
+      index >= 0
+    ) {
+      return input.id.slice(
+        0,
+        index
+      );
+    }
+
+    return input.id;
+  }
+
+  /* =========================================================
+     QUESTION TEXT
+     ========================================================= */
+
+  function getQuestionElement() {
+    const group =
+      getRadioGroup();
+
+    if (!group) {
+      return null;
+    }
+
+    let node =
+      group;
+
+    while (
+      node &&
+      node.parentElement &&
+      node.parentElement !==
+        document.body
+    ) {
+      const parent =
+        node.parentElement;
+
+      const children =
+        Array.from(
+          parent.children
+        );
+
+      const index =
+        children.indexOf(
+          node
+        );
+
+      if (
+        index >= 2
+      ) {
+        const candidate =
+          children[
+            index - 2
+          ];
+
+        if (candidate) {
+          const text =
+            candidate.innerText
+              ?.trim() ||
+            '';
+
+          if (
+            text &&
+            candidate.querySelector(
+              'p'
+            ) &&
+            !candidate.contains(
+              group
+            )
+          ) {
+            return candidate;
+          }
+        }
+      }
+
+      node =
+        parent;
+    }
+
+    /*
+      Fallback.
+    */
+
+    const content =
+      getQuizContent();
+
+    const candidates =
+      Array.from(
+        content.querySelectorAll(
+          'div[dir="ltr"]'
+        )
+      )
+      .filter(el => {
+        if (
+          el.contains(
+            group
+          )
+        ) {
+          return false;
+        }
+
+        const text =
+          el.innerText
+            ?.trim() ||
+          '';
+
+        if (!text) {
+          return false;
+        }
+
+        if (
+          !el.querySelector(
+            'p'
+          )
+        ) {
+          return false;
+        }
+
+        const relation =
+          el.compareDocumentPosition(
+            group
+          );
+
+        return !!(
+          relation &
+          Node.DOCUMENT_POSITION_FOLLOWING
+        );
+      });
+
+    return (
+      candidates[
+        candidates.length - 1
+      ] ||
+      null
+    );
+  }
+
+  /* =========================================================
+     FEEDBACK
+     ========================================================= */
+
+  function elementHasFeedbackHeading(
+    element
+  ) {
+    if (!element) {
+      return false;
+    }
+
+    return Array
+      .from(
+        element.querySelectorAll(
+          'p'
+        )
+      )
+      .some(
+        p =>
+          p.textContent
+            ?.trim()
+            .toLowerCase() ===
+          'feedback'
+      );
+  }
+
+  function getFeedbackSection() {
+    const group =
+      getRadioGroup();
+
+    if (!group) {
+      return null;
+    }
+
+    let parent =
+      group.parentElement;
+
+    for (
+      let depth = 0;
+      depth < 7 &&
+      parent;
+      depth++
+    ) {
+      for (
+        const child
+        of Array.from(
+          parent.children
+        )
+      ) {
+        if (
+          child === group ||
+          child.contains(
+            group
+          )
+        ) {
+          continue;
+        }
+
+        if (
+          elementHasFeedbackHeading(
+            child
+          )
+        ) {
+          return child;
+        }
+      }
+
+      parent =
+        parent.parentElement;
+    }
+
+    const content =
+      getQuizContent();
+
+    const headings =
+      Array
+        .from(
+          content.querySelectorAll(
+            'p'
+          )
+        )
+        .filter(
+          p =>
+            p.textContent
+              ?.trim()
+              .toLowerCase() ===
+            'feedback'
+        );
+
+    const visible =
+      headings.filter(
+        isElementVisible
+      );
+
+    const heading =
+      visible[
+        visible.length - 1
+      ] ||
+      headings[
+        headings.length - 1
+      ];
+
+    return (
+      heading
+        ?.parentElement ||
+      null
+    );
+  }
+
+  function getExplanationText() {
+    const section =
+      getFeedbackSection();
+
+    if (!section) {
+      return '';
+    }
+
+    return (
+      section.innerText
+        ?.replace(
+          /^\s*Feedback\s*/i,
+          ''
+        )
+        .trim() ||
+      ''
+    );
+  }
+
+  /* =========================================================
+     CORRECT ANSWER
+     ========================================================= */
+
+  function getCorrectIndex() {
+    const labels =
+      getChoiceLabels();
+
+    if (!labels.length) {
+      return -1;
+    }
+
+    /*
+      Primary:
+      Answer (c) is correct.
+    */
+
+    const feedback =
+      getExplanationText();
+
+    const match =
+      feedback.match(
+        /Answer\s*\(\s*([a-z])\s*\)\s*is\s+correct/i
+      );
+
+    if (match) {
+      const index =
+        match[1]
+          .toLowerCase()
+          .charCodeAt(0) -
+        'a'.charCodeAt(0);
+
+      if (
+        index >= 0 &&
+        index <
+          labels.length
+      ) {
+        return index;
+      }
+    }
+
+    /*
+      Correct normally:
+      font-bold without underline.
+    */
+
+    const correct =
+      labels.findIndex(
+        label => {
+          const classes =
+            String(
+              label.className ||
+              ''
+            );
+
+          return (
+            classes.includes(
+              'font-bold'
+            ) &&
+            !classes.includes(
+              'underline'
+            )
+          );
+        }
+      );
+
+    if (
+      correct >= 0
+    ) {
+      return correct;
+    }
+
+    /*
+      Selected correct answer:
+      one bold option only.
+    */
+
+    const bold =
+      [];
+
+    labels.forEach(
+      (
+        label,
+        index
+      ) => {
+        const classes =
+          String(
+            label.className ||
+            ''
+          );
+
+        if (
+          classes.includes(
+            'font-bold'
+          )
+        ) {
+          bold.push(
+            index
+          );
+        }
+      }
+    );
+
+    if (
+      bold.length === 1
+    ) {
+      return bold[0];
+    }
+
+    return -1;
+  }
+
+  /* =========================================================
+     MOCK PHASE DETECTION
+     ========================================================= */
+
+  function detectMockPhase() {
+    const feedback =
+      getExplanationText();
+
+    const correct =
+      getCorrectIndex();
+
+    /*
+      Review:
+      correct answer + explanation are visible.
+    */
+
+    if (
+      feedback &&
+      correct >= 0
+    ) {
+      return 'review';
+    }
+
+    /*
+      Taking phase:
+      ordinary selectable answers, no Feedback.
+    */
+
+    return 'taking';
+  }
+
+  /* =========================================================
+     STABILITY
+     ========================================================= */
+
+  function buildRenderSignature() {
+    const question =
+      getQuestionElement();
+
+    const questionText =
+      question
+        ?.innerText
+        ?.trim() ||
+      '';
+
+    const inputs =
+      getAnswerInputs();
+
+    const inputData =
+      inputs
+        .map(
+          input =>
+            [
+              input.id,
+              input.value,
+              input.checked
+                ? 'C'
+                : 'U',
+              input.disabled
+                ? 'D'
+                : 'E'
+            ].join(':')
+        )
+        .join('|');
+
+    const labels =
+      getChoiceLabels();
+
+    const choices =
+      labels
+        .map(
+          label =>
+            label.innerText
+              ?.trim() ||
+            ''
+        )
+        .join('|');
+
+    return [
+      getQuestionInternalId(),
+      questionText,
+      inputData,
+      choices
+    ].join(':::');
+  }
+
+  async function waitForQuestionStable(
+    timeout =
+      CONFIG.questionReadyTimeout
+  ) {
+    const started =
+      Date.now();
+
+    let lastSignature =
+      '';
+
+    let stableCount =
+      0;
+
+    while (
+      Date.now() - started <
+      timeout
+    ) {
+      if (
+        state.stopRequested
+      ) {
+        return false;
+      }
+
+      const group =
+        getRadioGroup();
+
+      const inputs =
+        getAnswerInputs();
+
+      const labels =
+        getChoiceLabels();
+
+      const question =
+        getQuestionElement();
+
+      const questionText =
+        question
+          ?.innerText
+          ?.trim() ||
+        '';
+
+      const ready =
+        !!group &&
+        inputs.length >= 2 &&
+        labels.length ===
+          inputs.length &&
+        !!questionText;
+
+      if (!ready) {
+        stableCount = 0;
+        lastSignature = '';
+
+        await sleep(
+          CONFIG.stabilityPoll
+        );
+
+        continue;
+      }
+
+      const signature =
+        buildRenderSignature();
+
+      if (
+        signature ===
+        lastSignature
+      ) {
+        stableCount++;
+      } else {
+        lastSignature =
+          signature;
+
+        stableCount = 1;
+      }
+
+      if (
+        stableCount >=
+        CONFIG.stabilityChecks
+      ) {
+        return true;
+      }
+
+      await sleep(
+        CONFIG.stabilityPoll
+      );
+    }
+
+    return false;
+  }
+
+  /* =========================================================
+     NAVIGATION BUTTONS
+     ========================================================= */
+
+  function getNavigationButtons() {
+    const combo =
+      getNavigatorCombobox();
+
+    if (!combo) {
+      return {
+        previous: null,
+        next: null
+      };
+    }
+
+    let parent =
+      combo.parentElement;
+
+    /*
+      Look for direct layout:
+      Prev | Combo | Next
+    */
+
+    for (
+      let depth = 0;
+      depth < 8 &&
+      parent;
+      depth++
+    ) {
+      const children =
+        Array.from(
+          parent.children
+        );
+
+      const comboIndex =
+        children.findIndex(
+          child =>
+            child === combo ||
+            child.contains(
+              combo
+            )
+        );
+
+      if (
+        comboIndex >= 0
+      ) {
+        const previous =
+          children
+            .slice(
+              0,
+              comboIndex
+            )
+            .reverse()
+            .find(
+              child =>
+                child.tagName ===
+                'BUTTON'
+            );
+
+        const next =
+          children
+            .slice(
+              comboIndex + 1
+            )
+            .find(
+              child =>
+                child.tagName ===
+                'BUTTON'
+            );
+
+        if (
+          previous &&
+          next
+        ) {
+          return {
+            previous,
+            next
+          };
+        }
+      }
+
+      parent =
+        parent.parentElement;
+    }
+
+    /*
+      Fallback DOM order.
+    */
+
+    parent =
+      combo.parentElement;
+
+    for (
+      let depth = 0;
+      depth < 8 &&
+      parent;
+      depth++
+    ) {
+      const elements =
+        Array
+          .from(
+            parent.querySelectorAll(
+              'button, [role="combobox"]'
+            )
+          )
+          .filter(
+            el =>
+              el === combo ||
+              isElementVisible(
+                el
+              )
+          );
+
+      const comboIndex =
+        elements.indexOf(
+          combo
+        );
+
+      if (
+        comboIndex > 0
+      ) {
+        const previous =
+          elements
+            .slice(
+              0,
+              comboIndex
+            )
+            .reverse()
+            .find(
+              el =>
+                el.tagName ===
+                  'BUTTON'
+            );
+
+        const next =
+          elements
+            .slice(
+              comboIndex + 1
+            )
+            .find(
+              el =>
+                el.tagName ===
+                  'BUTTON'
+            );
+
+        if (
+          previous &&
+          next
+        ) {
+          return {
+            previous,
+            next
+          };
+        }
+      }
+
+      parent =
+        parent.parentElement;
+    }
+
+    return {
+      previous: null,
+      next: null
+    };
+  }
+
+  function buttonLooksInactive(
+    button
+  ) {
+    if (!button) {
+      return true;
+    }
+
+    const classes =
+      String(
+        button.className ||
+        ''
+      );
+
+    return (
+      button.disabled ||
+      button.hasAttribute(
+        'disabled'
+      ) ||
+      button.getAttribute(
+        'aria-disabled'
+      ) === 'true' ||
+      classes.includes(
+        'cursor-default'
+      )
+    );
+  }
+
+  /* =========================================================
+     WAIT FOR QUESTION ID CHANGE
+     ========================================================= */
+
+  async function waitForQuestionIdentityChange(
+    oldId,
+    timeout =
+      CONFIG.navigationTimeout
+  ) {
+    const started =
+      Date.now();
+
+    while (
+      Date.now() - started <
+      timeout
+    ) {
+      if (
+        state.stopRequested
+      ) {
+        return false;
+      }
+
+      await sleep(100);
+
+      const newId =
+        getQuestionInternalId();
+
+      if (
+        newId &&
+        oldId &&
+        newId !==
+          oldId
+      ) {
+        const stable =
+          await waitForQuestionStable(
+            Math.min(
+              5000,
+              timeout
+            )
+          );
+
+        if (stable) {
+          await sleep(
+            CONFIG.afterNavigation
+          );
+
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /* =========================================================
+     WAIT FOR QUIZ SPECIFIC NUMBER
+     ========================================================= */
+
+  async function waitForQuizQuestionNumber(
+    expectedNumber,
+    oldId,
+    timeout =
+      CONFIG.navigationTimeout
+  ) {
+    const started =
+      Date.now();
+
+    while (
+      Date.now() - started <
+      timeout
+    ) {
+      if (
+        state.stopRequested
+      ) {
+        return false;
+      }
+
+      await sleep(100);
+
+      const number =
+        getQuizCurrentNumber();
+
+      const newId =
+        getQuestionInternalId();
+
+      if (
+        number ===
+          expectedNumber &&
+        newId &&
+        newId !==
+          oldId
+      ) {
+        const stable =
+          await waitForQuestionStable(
+            5000
+          );
+
+        if (stable) {
+          await sleep(
+            CONFIG.afterNavigation
+          );
+
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /* =========================================================
+     CLICK RANDOM ANSWER
+     ========================================================= */
+
+  async function chooseRandomAnswer() {
+    const stable =
+      await waitForQuestionStable();
+
+    if (!stable) {
+      throw new Error(
+        'Current question did not finish loading.'
+      );
+    }
+
+    /*
+      Already selected?
+      Leave it alone.
+    */
+
+    const inputs =
+      getAnswerInputs();
+
+    if (
+      inputs.some(
+        input =>
+          input.checked
+      )
+    ) {
+      return;
+    }
+
+    const available =
+      inputs.filter(
+        input =>
+          !input.disabled
+      );
+
+    if (!available.length) {
+      /*
+        In review mode radios can be disabled.
+      */
+
+      if (
+        getFeedbackSection()
+      ) {
+        return;
+      }
+
+      throw new Error(
+        'No selectable answer choices are available.'
+      );
+    }
+
+    const selected =
+      available[
+        Math.floor(
+          Math.random() *
+          available.length
+        )
+      ];
+
+    selected.click();
+
+    /*
+      Wait until website registers selection.
+    */
+
+    const started =
+      Date.now();
+
+    while (
+      Date.now() - started <
+      5000
+    ) {
+      if (
+        state.stopRequested
+      ) {
+        return;
+      }
+
+      const fresh =
+        getAnswerInputs();
+
+      const same =
+        fresh.find(
+          input =>
+            input.id ===
+              selected.id
+        );
+
+      if (
+        same?.checked
+      ) {
+        await sleep(
+          CONFIG.afterAnswerClick
+        );
+
+        return;
+      }
+
+      await sleep(100);
+    }
+
+    /*
+      Label fallback.
+    */
+
+    try {
+      const label =
+        document.querySelector(
+          `label[for="${CSS.escape(selected.id)}"]`
+        );
+
+      label?.click();
+    } catch {}
+
+    await sleep(300);
+
+    const final =
+      getAnswerInputs()
+        .find(
+          input =>
+            input.id ===
+              selected.id
+        );
+
+    if (
+      !final?.checked
+    ) {
+      throw new Error(
+        'Random answer was clicked but the site did not register it.'
+      );
+    }
+  }
+
+  /* =========================================================
+     WAIT FOR FEEDBACK + CORRECT ANSWER
+     ========================================================= */
+
+  async function waitForReviewDetails(
+    timeout =
+      CONFIG.feedbackTimeout
+  ) {
+    const started =
+      Date.now();
+
+    while (
+      Date.now() - started <
+      timeout
+    ) {
+      if (
+        state.stopRequested
+      ) {
+        return false;
+      }
+
+      const explanation =
+        getExplanationText();
+
+      const correct =
+        getCorrectIndex();
+
+      const choices =
+        getChoiceLabels();
+
+      if (
+        explanation &&
+        correct >= 0 &&
+        correct <
+          choices.length &&
+        choices.length >= 2
+      ) {
+        await sleep(180);
+
+        const explanationAgain =
+          getExplanationText();
+
+        const correctAgain =
+          getCorrectIndex();
+
+        if (
+          explanationAgain &&
+          correctAgain >= 0
+        ) {
+          return true;
+        }
+      }
+
+      await sleep(120);
+    }
+
+    return false;
+  }
+
+  /* =========================================================
+     QUIZ FIRST QUESTION
+     ========================================================= */
+
+  async function goQuizToFirst() {
+    let safety = 0;
+
+    while (
+      !state.stopRequested &&
+      safety <
+        CONFIG.maxQuestions
+    ) {
+      safety++;
+
+      const stable =
+        await waitForQuestionStable();
+
+      if (!stable) {
+        throw new Error(
+          'Question did not become stable while returning to Question 1.'
+        );
+      }
+
+      const current =
+        getQuizCurrentNumber();
+
+      if (
+        current === 1
+      ) {
+        return;
+      }
+
+      if (
+        !Number.isInteger(
+          current
+        )
+      ) {
+        throw new Error(
+          'Quiz question number could not be detected.'
+        );
+      }
+
+      const {
+        previous
+      } =
+        getNavigationButtons();
+
+      if (
+        !previous ||
+        buttonLooksInactive(
+          previous
+        )
+      ) {
+        throw new Error(
+          `Could not return from Question ${current} to Question 1.`
+        );
+      }
+
+      const oldId =
+        getQuestionInternalId();
+
+      previous.click();
+
+      const moved =
+        await waitForQuizQuestionNumber(
+          current - 1,
+          oldId
+        );
+
+      if (!moved) {
+        throw new Error(
+          `Could not navigate from Question ${current} to Question ${current - 1}.`
+        );
+      }
+    }
+  }
+
+  /* =========================================================
+     MOCK FIRST QUESTION
+     ========================================================= */
+
+  async function goMockToFirst() {
+    /*
+      Mock Exam does not expose current question number.
+      We therefore walk backwards until Previous becomes
+      cursor-default/disabled or no longer changes question.
+    */
+
+    let safety = 0;
+
+    while (
+      !state.stopRequested &&
+      safety <
+        CONFIG.maxQuestions
+    ) {
+      safety++;
+
+      const stable =
+        await waitForQuestionStable();
+
+      if (!stable) {
+        throw new Error(
+          'Mock Exam question did not become stable while locating Question 1.'
+        );
+      }
+
+      const {
+        previous
+      } =
+        getNavigationButtons();
+
+      if (!previous) {
+        throw new Error(
+          'Mock Exam Previous button could not be detected.'
+        );
+      }
+
+      /*
+        Screenshot supplied by user shows Question 1 Previous
+        button with cursor-default.
+      */
+
+      if (
+        buttonLooksInactive(
+          previous
+        )
+      ) {
+        return;
+      }
+
+      const oldId =
+        getQuestionInternalId();
+
+      previous.click();
+
+      const moved =
+        await waitForQuestionIdentityChange(
+          oldId,
+          5000
+        );
+
+      /*
+        No movement = already first question.
+      */
+
+      if (!moved) {
+        return;
+      }
+    }
+
+    throw new Error(
+      'Safety limit reached while locating the first Mock Exam question.'
+    );
+  }
+
+  /* =========================================================
+     CLEAN HTML
+     ========================================================= */
+
+  function cleanHTMLFromElement(
+    element
+  ) {
+    if (!element) {
+      return '';
+    }
+
+    const clone =
+      element.cloneNode(
+        true
+      );
+
+    clone
+      .querySelectorAll(
+        'script, button, input'
+      )
+      .forEach(
+        el =>
+          el.remove()
+      );
+
+    clone
+      .querySelectorAll('*')
+      .forEach(el => {
+        el.removeAttribute(
+          'class'
+        );
+
+        Array
+          .from(
+            el.attributes
+          )
+          .forEach(attr => {
+            const name =
+              attr.name
+                .toLowerCase();
+
+            if (
+              name.startsWith(
+                'data-'
+              ) ||
+              name.startsWith(
+                'aria-'
+              ) ||
+              name ===
+                'role' ||
+              name ===
+                'tabindex'
+            ) {
+              el.removeAttribute(
+                attr.name
+              );
+            }
+          });
+      });
+
+    return clone
+      .innerHTML
+      .trim();
+  }
+
+  /* =========================================================
+     EXPLANATION HTML
+     ========================================================= */
+
+  function getExplanationHTML() {
+    const section =
+      getFeedbackSection();
+
+    if (!section) {
+      return '';
+    }
+
+    const clone =
+      section.cloneNode(
+        true
+      );
+
+    /*
+      Remove original Feedback heading.
+    */
+
+    Array
+      .from(
+        clone.querySelectorAll(
+          'p'
+        )
+      )
+      .filter(
+        p =>
+          p.textContent
+            ?.trim()
+            .toLowerCase() ===
+          'feedback'
+      )
+      .forEach(
+        p =>
+          p.remove()
+      );
+
+    clone
+      .querySelectorAll('*')
+      .forEach(el => {
+        el.removeAttribute(
+          'class'
+        );
+
+        Array
+          .from(
+            el.attributes
+          )
+          .forEach(attr => {
+            const name =
+              attr.name
+                .toLowerCase();
+
+            if (
+              name.startsWith(
+                'data-'
+              ) ||
+              name.startsWith(
+                'aria-'
+              ) ||
+              name ===
+                'role' ||
+              name ===
+                'tabindex'
+            ) {
+              el.removeAttribute(
+                attr.name
+              );
+            }
+          });
+      });
+
+    return clone
+      .innerHTML
+      .trim();
+  }
+
+  /* =========================================================
+     EXTRACT VALIDATED REVIEW QUESTION
+     ========================================================= */
+
+  function extractReviewQuestion(
+    questionNumber
+  ) {
+    const questionElement =
+      getQuestionElement();
+
+    if (!questionElement) {
+      throw new Error(
+        `Question ${questionNumber}: question text could not be detected.`
+      );
+    }
+
+    const questionHTML =
+      cleanHTMLFromElement(
+        questionElement
+      );
+
+    const choices =
+      getChoiceLabels()
+        .map(
+          label =>
+            cleanHTMLFromElement(
+              label
+            )
+        );
+
+    const correctIndex =
+      getCorrectIndex();
+
+    const explanationHTML =
+      getExplanationHTML();
+
+    const explanationText =
+      getExplanationText();
+
+    if (!questionHTML) {
+      throw new Error(
+        `Question ${questionNumber}: empty question text.`
+      );
+    }
+
+    if (
+      choices.length < 2
+    ) {
+      throw new Error(
+        `Question ${questionNumber}: incomplete choices.`
+      );
+    }
+
+    if (
+      correctIndex < 0 ||
+      correctIndex >=
+        choices.length
+    ) {
+      throw new Error(
+        `Question ${questionNumber}: correct answer could not be verified.`
+      );
+    }
+
+    if (
+      !explanationHTML ||
+      !explanationText
+    ) {
+      throw new Error(
+        `Question ${questionNumber}: explanation could not be verified.`
+      );
+    }
+
+    return {
+      siteQuestionNumber:
+        questionNumber,
+
+      internalId:
+        getQuestionInternalId(),
+
+      questionHTML,
+
+      choices,
+
+      correctIndex,
+
+      explanationHTML
+    };
+  }
+
+  /* =========================================================
+     TITLE
+     ========================================================= */
+
+  function shortenQuizTitle(
+    title
+  ) {
+    if (!title) {
+      return 'Quiz';
+    }
+
+    const parts =
+      title
+        .split(
+          /\s+-\s+/
+        )
+        .map(
+          part =>
+            part.trim()
+        )
+        .filter(Boolean);
+
+    if (
+      parts.length > 1
+    ) {
+      return parts[
+        parts.length - 1
+      ];
+    }
+
+    return title.trim();
+  }
+
+  function getQuizTitle() {
+    const breadcrumb =
+      document.querySelector(
+        '[aria-label="breadcrumb"]'
+      );
+
+    if (breadcrumb) {
+      const items =
+        Array.from(
+          breadcrumb.querySelectorAll(
+            'li'
+          )
+        );
+
+      for (
+        let i =
+          items.length - 1;
+        i >= 0;
+        i--
+      ) {
+        const text =
+          items[i]
+            .innerText
+            ?.trim();
+
+        if (text) {
+          /*
+            Mock:
+            Part 1 Mock Exam
+
+            Quiz:
+            long title ending in A.1 ...
+          */
+
+          if (
+            autoDetectMode() ===
+            'mock'
+          ) {
+            return text;
+          }
+
+          return shortenQuizTitle(
+            text
+          );
+        }
+      }
+    }
+
+    return shortenQuizTitle(
+      document.title
+        ?.trim() ||
+      'Quiz'
+    );
+  }
+
+  /* =========================================================
+     QUIZ MODE
+     ========================================================= */
+
+  async function runQuizMode(
+    total
+  ) {
+    setDetected(
+      'Quiz'
+    );
+
+    if (
+      firstInput.checked
+    ) {
+      setStatus(
+        'Returning to Question 1…'
+      );
+
+      await goQuizToFirst();
+    }
+
+    let current =
+      getQuizCurrentNumber();
+
+    if (
+      !Number.isInteger(
+        current
+      )
+    ) {
+      throw new Error(
+        'Quiz question number could not be detected.'
+      );
+    }
+
+    if (
+      current > total
+    ) {
+      throw new Error(
+        `Current Question is ${current}, but Total Questions is ${total}.`
+      );
+    }
+
+    state.startQuestion =
+      current;
+
+    while (
+      !state.stopRequested
+    ) {
+      current =
+        getQuizCurrentNumber();
+
+      if (
+        !Number.isInteger(
+          current
+        )
+      ) {
+        throw new Error(
+          'Current Quiz question number could not be detected.'
+        );
+      }
+
+      if (
+        state.questionMap.has(
+          current
+        )
+      ) {
+        throw new Error(
+          `Question ${current} was encountered twice.`
+        );
+      }
+
+      setStatus(
+        `Question ${current} of ${total}: checking…`
+      );
+
+      const stable =
+        await waitForQuestionStable();
+
+      if (!stable) {
+        throw new Error(
+          `Question ${current}: page did not become stable.`
+        );
+      }
+
+      /*
+        If Feedback is not ready, answer if possible.
+      */
+
+      if (
+        !getExplanationText() ||
+        getCorrectIndex() < 0
+      ) {
+        await chooseRandomAnswer();
+
+        setStatus(
+          `Question ${current}: waiting for feedback…`
+        );
+      }
+
+      const feedbackReady =
+        await waitForReviewDetails();
+
+      if (!feedbackReady) {
+        throw new Error(
+          `Question ${current}: correct answer or explanation did not load.`
+        );
+      }
+
+      const data =
+        extractReviewQuestion(
+          current
+        );
+
+      state.questionMap.set(
+        current,
+        data
+      );
+
+      const processed =
+        current -
+        state.startQuestion +
+        1;
+
+      const expected =
+        total -
+        state.startQuestion +
+        1;
+
+      updateSequentialProgress(
+        processed,
+        expected,
+        'saved'
+      );
+
+      /*
+        Final Quiz question.
+      */
+
+      if (
+        current === total
+      ) {
+        break;
+      }
+
+      const {
+        next
+      } =
+        getNavigationButtons();
+
+      if (
+        !next ||
+        buttonLooksInactive(
+          next
+        )
+      ) {
+        throw new Error(
+          `Question ${current}: Next is unavailable before Question ${total}.`
+        );
+      }
+
+      const oldId =
+        getQuestionInternalId();
+
+      const expectedNext =
+        current + 1;
+
+      setStatus(
+        `Question ${current} saved. Moving to Question ${expectedNext}…`
+      );
+
+      next.click();
+
+      const moved =
+        await waitForQuizQuestionNumber(
+          expectedNext,
+          oldId
+        );
+
+      if (!moved) {
+        throw new Error(
+          `Could not move from Question ${current} to Question ${expectedNext}.`
+        );
+      }
+    }
+  }
+
+  /* =========================================================
+     MOCK EXAM TAKING PHASE
+     ========================================================= */
+
+  async function runMockTakingMode(
+    total
+  ) {
+    state.mockPhase =
+      'taking';
+
+    setDetected(
+      'Mock Exam — Taking'
+    );
+
+    /*
+      Mock navigator does not expose current question number.
+
+      Therefore always establish Question 1 first.
+    */
+
+    setStatus(
+      'Mock Exam: locating Question 1…'
+    );
+
+    await goMockToFirst();
+
+    /*
+      Re-detect phase after returning to first.
+      Could have been run from Review.
+    */
+
+    const phaseAfterFirst =
+      detectMockPhase();
+
+    if (
+      phaseAfterFirst ===
+      'review'
+    ) {
+      return runMockReviewMode(
+        total,
+        true
+      );
+    }
+
+    for (
+      let index = 1;
+      index <= total;
+      index++
+    ) {
+      if (
+        state.stopRequested
+      ) {
+        return;
+      }
+
+      setStatus(
+        `Mock Exam: answering Question ${index} of ${total}…`
+      );
+
+      const stable =
+        await waitForQuestionStable();
+
+      if (!stable) {
+        throw new Error(
+          `Mock Question ${index}: page did not become stable.`
+        );
+      }
+
+      /*
+        IMPORTANT:
+        We DO NOT save content here.
+      */
+
+      await chooseRandomAnswer();
+
+      updateSequentialProgress(
+        index,
+        total,
+        'answered'
+      );
+
+      /*
+        Final Mock question:
+        do NOT click Next.
+      */
+
+      if (
+        index === total
+      ) {
+        setProgress(
+          100
+        );
+
+        setStatus(
+          `Mock Exam answering complete — ${total} questions answered. Submit the exam and open Review, then click Start again.`
+        );
+
+        setCounter(
+          `${total} of ${total} answered · nothing saved yet`
+        );
+
+        return;
+      }
+
+      const {
+        next
+      } =
+        getNavigationButtons();
+
+      if (
+        !next ||
+        buttonLooksInactive(
+          next
+        )
+      ) {
+        throw new Error(
+          `Mock Question ${index}: Next is unavailable before Question ${total}.`
+        );
+      }
+
+      const oldId =
+        getQuestionInternalId();
+
+      next.click();
+
+      const moved =
+        await waitForQuestionIdentityChange(
+          oldId
+        );
+
+      if (!moved) {
+        throw new Error(
+          `Mock Exam did not advance after Question ${index}.`
+        );
+      }
+    }
+  }
+
+  /* =========================================================
+     MOCK EXAM REVIEW PHASE
+     ========================================================= */
+
+  async function runMockReviewMode(
+    total,
+    alreadyAtFirst = false
+  ) {
+    state.mockPhase =
+      'review';
+
+    setDetected(
+      'Mock Exam — Review'
+    );
+
+    if (
+      !alreadyAtFirst
+    ) {
+      setStatus(
+        'Mock Review: locating Question 1…'
+      );
+
+      await goMockToFirst();
+    }
+
+    /*
+      Confirm that this really is Review.
+    */
+
+    const firstReady =
+      await waitForReviewDetails(
+        5000
+      );
+
+    if (!firstReady) {
+      throw new Error(
+        'Mock Exam Review was detected, but correct answer/explanation is not available on Question 1.'
+      );
+    }
+
+    for (
+      let index = 1;
+      index <= total;
+      index++
+    ) {
+      if (
+        state.stopRequested
+      ) {
+        return;
+      }
+
+      if (
+        state.questionMap.has(
+          index
+        )
+      ) {
+        throw new Error(
+          `Mock Review Question ${index} was encountered twice.`
+        );
+      }
+
+      setStatus(
+        `Mock Review: extracting Question ${index} of ${total}…`
+      );
+
+      const stable =
+        await waitForQuestionStable();
+
+      if (!stable) {
+        throw new Error(
+          `Mock Review Question ${index}: page did not become stable.`
+        );
+      }
+
+      const reviewReady =
+        await waitForReviewDetails();
+
+      if (!reviewReady) {
+        throw new Error(
+          `Mock Review Question ${index}: correct answer or explanation did not finish loading.`
+        );
+      }
+
+      const data =
+        extractReviewQuestion(
+          index
+        );
+
+      state.questionMap.set(
+        index,
+        data
+      );
+
+      updateSequentialProgress(
+        index,
+        total,
+        'saved'
+      );
+
+      /*
+        Final review question.
+      */
+
+      if (
+        index === total
+      ) {
+        break;
+      }
+
+      const {
+        next
+      } =
+        getNavigationButtons();
+
+      if (
+        !next ||
+        buttonLooksInactive(
+          next
+        )
+      ) {
+        throw new Error(
+          `Mock Review Question ${index}: Next is unavailable before Question ${total}.`
+        );
+      }
+
+      const oldId =
+        getQuestionInternalId();
+
+      next.click();
+
+      const moved =
+        await waitForQuestionIdentityChange(
+          oldId
+        );
+
+      if (!moved) {
+        throw new Error(
+          `Mock Review did not advance after Question ${index}.`
+        );
+      }
+    }
+  }
+
+  /* =========================================================
+     MOCK MODE CONTROLLER
+     ========================================================= */
+
+  async function runMockMode(
+    total
+  ) {
+    /*
+      Mock must always start from first because its navigator
+      says "1 ~ 125" rather than current question number.
+    */
+
+    if (
+      !firstInput.checked
+    ) {
+      throw new Error(
+        'Mock Exam requires "Start from Question 1" because the Mock Exam navigator does not expose the current question number.'
+      );
+    }
+
+    const stable =
+      await waitForQuestionStable();
+
+    if (!stable) {
+      throw new Error(
+        'Mock Exam question did not finish loading.'
+      );
+    }
+
+    const phase =
+      detectMockPhase();
+
+    if (
+      phase ===
+      'review'
+    ) {
+      return runMockReviewMode(
+        total
+      );
+    }
+
+    return runMockTakingMode(
+      total
+    );
+  }
+
+  /* =========================================================
+     OUTPUT SORT
+     ========================================================= */
+
+  function getSortedQuestions() {
+    return Array
+      .from(
+        state.questionMap.values()
+      )
+      .sort(
+        (
+          a,
+          b
+        ) =>
+          a.siteQuestionNumber -
+          b.siteQuestionNumber
+      );
+  }
+
+  /* =========================================================
+     ESCAPE HTML
+     ========================================================= */
+
+  function escapeHTML(
+    text
+  ) {
+    return String(
+      text ?? ''
+    )
+      .replace(
+        /&/g,
+        '&amp;'
+      )
+      .replace(
+        /</g,
+        '&lt;'
+      )
+      .replace(
+        />/g,
+        '&gt;'
+      )
+      .replace(
+        /"/g,
+        '&quot;'
+      )
+      .replace(
+        /'/g,
+        '&#039;'
+      );
+  }
+
+  /* =========================================================
+     OUTPUT HTML
+     ========================================================= */
+
+  function buildOutputHTML(
+    questions,
+    withAnswers
+  ) {
+    const total =
+      state.totalQuestions ||
+      questions.length;
+
+    const title =
+      state.quizTitle ||
+      'Quiz';
+
+    const fontSize =
+      getOutputFontSize();
+
+    const baseURL =
+      document.baseURI;
+
+    const blocks =
+      questions
+        .map(q => {
+          const choices =
+            q.choices
+              .map(
+                (
+                  choice,
+                  choiceIndex
+                ) => {
+                  const letter =
+                    String.fromCharCode(
+                      65 +
+                      choiceIndex
+                    );
+
+                  const correct =
+                    withAnswers &&
+                    choiceIndex ===
+                      q.correctIndex;
+
+                  return `
+                    <div class="choice ${correct ? 'correct' : ''}">
+
+                      <div class="choice-letter">
+                        ${letter}.
+                      </div>
+
+                      <div class="choice-content">
+                        ${choice}
+                      </div>
+
+                      <div class="choice-mark">
+                        ${correct ? '&#10003;' : ''}
+                      </div>
+
+                    </div>
+                  `;
+                }
+              )
+              .join('');
+
+          const explanation =
+            withAnswers
+              ? `
+                <div class="explanation">
+
+                  <div class="explanation-title">
+                    Explanation
+                  </div>
+
+                  <div class="explanation-content">
+                    ${q.explanationHTML}
+                  </div>
+
+                </div>
+              `
+              : '';
+
+          return `
+            <section class="question-block">
+
+              <div class="question-header">
+                Question ${q.siteQuestionNumber} of ${total}
+              </div>
+
+              <div class="question-rule"></div>
+
+              <div class="question-text">
+                ${q.questionHTML}
+              </div>
+
+              <div class="choices">
+                ${choices}
+              </div>
+
+              ${explanation}
+
+            </section>
+          `;
+        })
+        .join('\n');
+
+    return `<!doctype html>
+
+<html lang="en">
+
+<head>
+
+<meta charset="utf-8">
+
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1"
+>
+
+<base href="${escapeHTML(baseURL)}">
+
+<title>${escapeHTML(title)}${withAnswers ? ' - Answers' : ' - Questions'}</title>
+
+<style>
+
+  :root {
+    color-scheme:
+      light;
+
+    --document-font-size:
+      ${fontSize}pt;
+  }
+
+  * {
+    box-sizing:
+      border-box;
+  }
+
+  html,
+  body {
+    background:
+      #ffffff;
+  }
+
+  body {
+    margin:
+      0;
+
+    color:
+      #111827;
+
+    font-family:
+      Arial,
+      Helvetica,
+      sans-serif;
+
+    font-size:
+      var(--document-font-size);
+
+    line-height:
+      1.42;
+  }
+
+  .document {
+    width:
+      min(
+        900px,
+        calc(100% - 48px)
+      );
+
+    margin:
+      34px auto 60px;
+  }
+
+  /* =====================================================
+     TITLE
+     ===================================================== */
+
+  .document-title {
+    margin-bottom:
+      26px;
+
+    padding-bottom:
+      11px;
+
+    border-bottom:
+      1px solid #cfd4da;
+  }
+
+  .document-title h1 {
+    margin:
+      0;
+
+    color:
+      #111827;
+
+    font-size:
+      1.42em;
+
+    font-weight:
+      700;
+
+    line-height:
+      1.3;
+  }
+
+  /* =====================================================
+     QUESTION
+     ===================================================== */
+
+  .question-block {
+    margin:
+      0 0 31px;
+
+    break-inside:
+      avoid;
+
+    page-break-inside:
+      avoid;
+  }
+
+  .question-header {
+    font-size:
+      1em;
+
+    font-weight:
+      700;
+
+    line-height:
+      1.4;
+
+    color:
+      #111827;
+  }
+
+  .question-rule {
+    height:
+      1px;
+
+    margin:
+      6px 0 11px;
+
+    background:
+      #111827;
+  }
+
+  .question-text {
+    margin-bottom:
+      10px;
+  }
+
+  p {
+    margin-top:
+      0;
+
+    margin-bottom:
+      7px;
+  }
+
+  .question-text > :first-child,
+  .choice-content > :first-child,
+  .explanation-content > :first-child {
+    margin-top:
+      0 !important;
+  }
+
+  .question-text > :last-child,
+  .choice-content > :last-child,
+  .explanation-content > :last-child {
+    margin-bottom:
+      0 !important;
+  }
+
+  /* =====================================================
+     QUESTION LISTS
+     ===================================================== */
+
+  .question-text ol,
+  .question-text ul {
+    margin-top:
+      7px;
+
+    margin-bottom:
+      8px;
+
+    padding-left:
+      28px;
+  }
+
+  .question-text li {
+    margin:
+      2px 0;
+  }
+
+  /* =====================================================
+     CHOICES
+     ===================================================== */
+
+  .choices {
+    margin-top:
+      4px;
+  }
+
+  .choice {
+    display:
+      grid;
+
+    grid-template-columns:
+      25px
+      minmax(0, 1fr)
+      22px;
+
+    column-gap:
+      4px;
+
+    align-items:
+      start;
+
+    padding:
+      1px 4px;
+
+    margin:
+      0;
+
+    line-height:
+      1.30;
+
+    break-inside:
+      avoid;
+
+    page-break-inside:
+      avoid;
+  }
+
+  .choice-letter {
+    font-weight:
+      400;
+  }
+
+  .choice-content {
+    min-width:
+      0;
+  }
+
+  .choice-content p {
+    margin:
+      0;
+
+    line-height:
+      inherit;
+  }
+
+  .choice-mark {
+    text-align:
+      center;
+
+    font-size:
+      1.08em;
+
+    font-weight:
+      800;
+
+    line-height:
+      1.25;
+  }
+
+  .choice.correct,
+  .choice.correct .choice-letter,
+  .choice.correct .choice-content {
+    font-weight:
+      700;
+  }
+
+  /* =====================================================
+     EXPLANATION
+     ===================================================== */
+
+  .explanation {
+    margin-top:
+      13px;
+
+    padding:
+      10px 12px;
+
+    background:
+      #f0f1f2;
+
+    border:
+      1px solid #d3d7dc;
+
+    border-radius:
+      6px;
+
+    break-inside:
+      avoid;
+
+    page-break-inside:
+      avoid;
+  }
+
+  .explanation-title {
+    margin-bottom:
+      5px;
+
+    font-size:
+      1em;
+
+    font-weight:
+      700;
+
+    line-height:
+      1.4;
+
+    color:
+      #111827;
+  }
+
+  .explanation-content {
+    font-size:
+      1em;
+
+    line-height:
+      1.4;
+  }
+
+  .explanation-content p {
+    margin-top:
+      0;
+
+    margin-bottom:
+      7px;
+  }
+
+  /* =====================================================
+     TABLES
+     ===================================================== */
+
+  table {
+    width:
+      auto;
+
+    max-width:
+      100%;
+
+    border-collapse:
+      collapse;
+
+    break-inside:
+      avoid;
+
+    page-break-inside:
+      avoid;
+  }
+
+  th,
+  td {
+    padding:
+      3px 6px;
+
+    vertical-align:
+      top;
+  }
+
+  table p {
+    margin:
+      0;
+  }
+
+  tr,
+  td,
+  th {
+    break-inside:
+      avoid;
+
+    page-break-inside:
+      avoid;
+  }
+
+  /* =====================================================
+     IMAGES
+     ===================================================== */
+
+  img,
+  svg {
+    max-width:
+      100%;
+
+    height:
+      auto;
+
+    object-fit:
+      contain;
+  }
+
+  figure,
+  blockquote {
+    break-inside:
+      avoid;
+
+    page-break-inside:
+      avoid;
+  }
+
+  /* =====================================================
+     PRINT
+     ===================================================== */
+
+  @media print {
+
+    @page {
+      size:
+        auto;
+
+      margin:
+        15mm 16mm;
+    }
+
+    html,
+    body {
+      width:
+        auto;
+
+      margin:
+        0;
+
+      padding:
+        0;
+    }
+
+    body {
+      font-size:
+        var(--document-font-size);
+
+      line-height:
+        1.42;
+
+      color:
+        #000000;
+
+      -webkit-print-color-adjust:
+        exact;
+
+      print-color-adjust:
+        exact;
+    }
+
+    .document {
+      width:
+        auto;
+
+      margin:
+        0;
+    }
+
+    .document-title {
+      margin-bottom:
+        20px;
+    }
+
+    .question-block {
+      break-inside:
+        avoid-page !important;
+
+      page-break-inside:
+        avoid !important;
+    }
+
+    .choice {
+      break-inside:
+        avoid !important;
+
+      page-break-inside:
+        avoid !important;
+    }
+
+    .explanation {
+      background:
+        #eeeeee !important;
+
+      break-inside:
+        avoid !important;
+
+      page-break-inside:
+        avoid !important;
+    }
+  }
+
+</style>
+
+</head>
+
+<body>
+
+<main class="document">
+
+  <header class="document-title">
+
+    <h1>
+      ${escapeHTML(title)}
+    </h1>
+
+  </header>
+
+  ${blocks}
+
+</main>
+
+</body>
+
+</html>`;
+  }
+
+  /* =========================================================
+     REBUILD OUTPUT
+     ========================================================= */
+
+  function rebuildOutputs() {
+    const questions =
+      getSortedQuestions();
+
+    if (!questions.length) {
+      return;
+    }
+
+    state.questionHTML =
+      buildOutputHTML(
+        questions,
+        false
+      );
+
+    state.answerHTML =
+      buildOutputHTML(
+        questions,
+        true
+      );
+  }
+
+  fontInput.addEventListener(
+    'input',
+    () => {
+      if (
+        state.questionMap.size
+      ) {
+        rebuildOutputs();
+      }
+    }
+  );
+
+  /* =========================================================
+     OPEN HTML
+     ========================================================= */
+
+  function openHTML(
+    html
+  ) {
+    const blob =
+      new Blob(
+        [html],
+        {
+          type:
+            'text/html;charset=utf-8'
+        }
+      );
+
+    const url =
+      URL.createObjectURL(
+        blob
+      );
+
+    const win =
+      window.open(
+        url,
+        '_blank'
+      );
+
+    if (!win) {
+      alert(
+        'The browser blocked the new tab. Allow pop-ups or use Download.'
+      );
+    }
+
+    setTimeout(
+      () =>
+        URL.revokeObjectURL(
+          url
+        ),
+      60000
+    );
+  }
+
+  /* =========================================================
+     DOWNLOAD
+     ========================================================= */
+
+  function sanitizeFilename(
+    text
+  ) {
+    return String(
+      text ||
+      'Quiz'
+    )
+      .replace(
+        /[<>:"/\\\\|?*]+/g,
+        ' '
+      )
+      .replace(
+        /\s+/g,
+        ' '
+      )
+      .trim()
+      .slice(
+        0,
+        120
+      );
+  }
+
+  function downloadHTML(
+    html,
+    filename
+  ) {
+    const blob =
+      new Blob(
+        [html],
+        {
+          type:
+            'text/html;charset=utf-8'
+        }
+      );
+
+    const url =
+      URL.createObjectURL(
+        blob
+      );
+
+    const a =
+      document.createElement(
+        'a'
+      );
+
+    a.href =
+      url;
+
+    a.download =
+      filename;
+
+    document.body.appendChild(
+      a
+    );
+
+    a.click();
+
+    a.remove();
+
+    setTimeout(
+      () =>
+        URL.revokeObjectURL(
+          url
+        ),
+      5000
+    );
+  }
+
+  /* =========================================================
+     MAIN
+     ========================================================= */
+
+  async function run() {
+    if (
+      state.running
+    ) {
+      return;
+    }
+
+    const total =
+      validateTotalQuestions();
+
+    if (!total) {
+      return;
+    }
+
+    state.running =
+      true;
+
+    state.stopRequested =
+      false;
+
+    state.totalQuestions =
+      total;
+
+    state.questionMap =
+      new Map();
+
+    state.questionHTML =
+      '';
+
+    state.answerHTML =
+      '';
+
+    state.quizTitle =
+      getQuizTitle();
+
+    state.mode =
+      resolveMode();
+
+    state.mockPhase =
+      null;
+
+    resultsEl.style.display =
+      'none';
+
+    startBtn.disabled =
+      true;
+
+    stopBtn.disabled =
+      false;
+
+    setProgress(
+      0
+    );
+
+    setCounter(
+      `0 of ${total} processed`
+    );
+
+    try {
+      const stable =
+        await waitForQuestionStable();
+
+      if (!stable) {
+        throw new Error(
+          'Current question did not finish loading.'
+        );
+      }
+
+      /* =====================================================
+         QUIZ
+         ===================================================== */
+
+      if (
+        state.mode ===
+        'quiz'
+      ) {
+        setDetected(
+          'Quiz'
+        );
+
+        await runQuizMode(
+          total
+        );
+
+        if (
+          state.stopRequested
+        ) {
+          throw new Error(
+            'Stopped by user.'
+          );
+        }
+
+        rebuildOutputs();
+
+        resultsEl.style.display =
+          'block';
+
+        setProgress(
+          100
+        );
+
+        setStatus(
+          `Completed — ${state.questionMap.size} Quiz questions extracted.`
+        );
+
+        return;
+      }
+
+      /* =====================================================
+         MOCK
+         ===================================================== */
+
+      setDetected(
+        'Mock Exam — detecting phase…'
+      );
+
+      const initialPhase =
+        detectMockPhase();
+
+      /*
+        runMockMode itself rechecks after returning to first.
+      */
+
+      await runMockMode(
+        total
+      );
+
+      if (
+        state.stopRequested
+      ) {
+        throw new Error(
+          'Stopped by user.'
+        );
+      }
+
+      /*
+        Taking phase deliberately has no output.
+      */
+
+      if (
+        state.mockPhase ===
+        'taking'
+      ) {
+        resultsEl.style.display =
+          'none';
+
+        return;
+      }
+
+      /*
+        Review phase.
+      */
+
+      if (
+        state.mockPhase ===
+        'review'
+      ) {
+        if (
+          state.questionMap.size !==
+          total
+        ) {
+          throw new Error(
+            `Mock Review extracted ${state.questionMap.size} questions, but Total Questions is ${total}.`
+          );
+        }
+
+        rebuildOutputs();
+
+        resultsEl.style.display =
+          'block';
+
+        setProgress(
+          100
+        );
+
+        setCounter(
+          `${total} of ${total} saved`
+        );
+
+        setStatus(
+          `Completed — ${total} Mock Exam Review questions extracted.`
+        );
+      }
+
+    } catch (error) {
+      console.error(
+        '[Quiz Extractor v7]',
+        error
+      );
+
+      setStatus(
+        `Error: ${error.message}`
+      );
+
+      /*
+        Only reviewed/extracted questions are retained.
+
+        Mock Taking phase never saves questions.
+      */
+
+      if (
+        state.questionMap.size
+      ) {
+        rebuildOutputs();
+
+        resultsEl.style.display =
+          'block';
+
+        setCounter(
+          `${state.questionMap.size} verified questions saved before error`
+        );
+      }
+
+    } finally {
+      state.running =
+        false;
+
+      startBtn.disabled =
+        false;
+
+      stopBtn.disabled =
+        true;
+    }
+  }
+
+  /* =========================================================
+     EVENTS
+     ========================================================= */
+
+  startBtn.addEventListener(
+    'click',
+    run
+  );
+
+  stopBtn.addEventListener(
+    'click',
+    () => {
+      state.stopRequested =
+        true;
+
+      setStatus(
+        'Stopping after current safe operation…'
+      );
+
+      stopBtn.disabled =
+        true;
+    }
+  );
+
+  $('#qe-close')
+    .addEventListener(
+      'click',
+      () => {
+        if (
+          state.running
+        ) {
+          const confirmed =
+            confirm(
+              'Quiz Extractor is still running. Stop and close it?'
+            );
+
+          if (!confirmed) {
+            return;
+          }
+
+          state.stopRequested =
+            true;
+        }
+
+        panel.remove();
+        uiStyle.remove();
+      }
+    );
+
+  $('#qe-open-q')
+    .addEventListener(
+      'click',
+      () => {
+        rebuildOutputs();
+
+        if (
+          state.questionHTML
+        ) {
+          openHTML(
+            state.questionHTML
+          );
+        }
+      }
+    );
+
+  $('#qe-open-a')
+    .addEventListener(
+      'click',
+      () => {
+        rebuildOutputs();
+
+        if (
+          state.answerHTML
+        ) {
+          openHTML(
+            state.answerHTML
+          );
+        }
+      }
+    );
+
+  $('#qe-download-q')
+    .addEventListener(
+      'click',
+      () => {
+        rebuildOutputs();
+
+        if (
+          !state.questionHTML
+        ) {
+          return;
+        }
+
+        downloadHTML(
+          state.questionHTML,
+          `${sanitizeFilename(
+            state.quizTitle
+          )} - Questions.html`
+        );
+      }
+    );
+
+  $('#qe-download-a')
+    .addEventListener(
+      'click',
+      () => {
+        rebuildOutputs();
+
+        if (
+          !state.answerHTML
+        ) {
+          return;
+        }
+
+        downloadHTML(
+          state.answerHTML,
+          `${sanitizeFilename(
+            state.quizTitle
+          )} - Answers.html`
+        );
+      }
+    );
+
+  /* =========================================================
+     INITIAL AUTO DETECTION DISPLAY
+     ========================================================= */
+
+  try {
+    const detected =
+      autoDetectMode();
+
+    if (
+      detected ===
+      'mock'
+    ) {
+      setDetected(
+        'Mock Exam'
+      );
+
+      /*
+        Mock navigator itself provides a useful passive hint:
+        "1 ~ 125"
+
+        We deliberately do NOT change the Total Questions field.
+        User still enters/verifies it manually.
+      */
+
+      const combo =
+        getNavigatorCombobox();
+
+      const text =
+        combo
+          ?.textContent
+          ?.trim();
+
+      const match =
+        text
+          ?.match(
+            /^\d+\s*~\s*(\d+)$/
+          );
+
+      if (match) {
+        totalInput.placeholder =
+          `e.g. ${match[1]}`;
+      }
+
+    } else {
+      setDetected(
+        'Quiz'
+      );
+    }
+  } catch {}
+
+  console.log(
+    '%cQuiz Extractor v7 loaded.',
+    'font-weight:bold;color:#2563eb'
+  );
+
+  console.log(
+    'Supports Quiz, Mock Exam Taking, and Mock Exam Review.'
+  );
+
 })();
