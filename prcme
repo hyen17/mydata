@@ -1,201 +1,3831 @@
-javascript:(async () => {
-    const sleep = ms => new Promise(r => setTimeout(r, ms));
-    // Mengubah selektor untuk menemukan elemen select yang benar berdasarkan atribut 'name'
-    const questionSelect = document.querySelector('select[name="qId"]');
+(() => {
+  'use strict';
 
-    // Tambahkan pemeriksaan jika questionSelect tidak ditemukan
-    if (!questionSelect) {
-        alert('Tidak dapat menemukan elemen pemilihan pertanyaan (select). Pastikan elemen tersebut ada di halaman.');
-        return;
+  /* =========================================================
+     MOCK EXAM EXTRACTOR v1.0.0
+     =========================================================
+
+     PURPOSE
+     ---------------------------------------------------------
+     Paste:
+       - Complete Mock Exam JSON
+       OR
+       - questionIds array
+       OR
+       - one question ID per line
+       OR
+       - comma/space separated question IDs
+
+     Then:
+       1. Keep original question order
+       2. Fetch every question directly from API
+       3. Extract:
+          - question
+          - choices
+          - correct answer
+          - explanation / feedback
+       4. Generate:
+          - Questions.html
+          - Answers.html
+
+     NO MOCK EXAM NAVIGATION REQUIRED.
+     NO RANDOM ANSWERING REQUIRED.
+     NO REVIEW PAGE REQUIRED.
+     ========================================================= */
+
+  const SCRIPT_ID =
+    'mock-exam-extractor-v1';
+
+  const STYLE_ID =
+    `${SCRIPT_ID}-style`;
+
+  const DEFAULT_API_BASE =
+    'https://vault99-fortress-g19m20.cognithub.com/student/v1/lms/questions/';
+
+  /* =========================================================
+     REMOVE OLD INSTANCE
+     ========================================================= */
+
+  document
+    .querySelectorAll(
+      '[id^="mock-exam-extractor-v"]'
+    )
+    .forEach(el => el.remove());
+
+  document
+    .querySelectorAll(
+      'style[id^="mock-exam-extractor-v"]'
+    )
+    .forEach(el => el.remove());
+
+  if (
+    window.__MOCK_EXAM_EXTRACTOR__
+  ) {
+    window
+      .__MOCK_EXAM_EXTRACTOR__
+      .stopRequested = true;
+  }
+
+  /* =========================================================
+     STATE
+     ========================================================= */
+
+  const state = {
+    running: false,
+    stopRequested: false,
+
+    questionIds: [],
+    questions: [],
+
+    title:
+      'Mock Exam',
+
+    apiBase:
+      DEFAULT_API_BASE,
+
+    authorization:
+      '',
+
+    organizationId:
+      '',
+
+    questionHTML:
+      '',
+
+    answerHTML:
+      '',
+
+    failures: []
+  };
+
+  window.__MOCK_EXAM_EXTRACTOR__ =
+    state;
+
+  /* =========================================================
+     CONFIG
+     ========================================================= */
+
+  const CONFIG = {
+    concurrency: 3,
+
+    requestTimeout:
+      20000,
+
+    retryCount:
+      2,
+
+    retryDelay:
+      700
+  };
+
+  const sleep =
+    ms =>
+      new Promise(
+        resolve =>
+          setTimeout(
+            resolve,
+            ms
+          )
+      );
+
+  /* =========================================================
+     UI
+     ========================================================= */
+
+  const panel =
+    document.createElement(
+      'div'
+    );
+
+  panel.id =
+    SCRIPT_ID;
+
+  panel.innerHTML = `
+    <div class="me-head">
+
+      <div>
+
+        <div class="me-title">
+          Mock Exam Extractor
+        </div>
+
+        <div class="me-subtitle">
+          Question IDs → Questions + Answers
+        </div>
+
+      </div>
+
+      <button
+        type="button"
+        id="me-close"
+        title="Close"
+      >
+        ×
+      </button>
+
+    </div>
+
+    <div class="me-body">
+
+      <div class="me-status-box">
+
+        <div class="me-status-label">
+          STATUS
+        </div>
+
+        <div id="me-status">
+          Paste Mock Exam JSON or Question IDs.
+        </div>
+
+      </div>
+
+      <div class="me-progress">
+
+        <div id="me-progress-bar">
+        </div>
+
+      </div>
+
+      <div id="me-counter">
+        0 questions
+      </div>
+
+      <label class="me-block-field">
+
+        <span>
+          Mock Exam JSON / Question IDs
+        </span>
+
+        <textarea
+          id="me-input"
+          placeholder='Paste complete Mock Exam JSON, questionIds array, or one question ID per line...'
+        ></textarea>
+
+      </label>
+
+      <div
+        id="me-detected"
+        class="me-detected"
+      >
+        No IDs detected yet.
+      </div>
+
+      <label class="me-field">
+
+        <span>
+          Title
+        </span>
+
+        <input
+          type="text"
+          id="me-title-input"
+          placeholder="Part 1 Mock Exam"
+        >
+
+      </label>
+
+      <label class="me-field">
+
+        <span>
+          Output font size
+        </span>
+
+        <div class="me-inline">
+
+          <input
+            type="number"
+            id="me-font-size"
+            value="12"
+            min="9"
+            max="18"
+            step="1"
+          >
+
+          <span>
+            pt
+          </span>
+
+        </div>
+
+      </label>
+
+      <details class="me-advanced">
+
+        <summary>
+          Advanced / Authentication
+        </summary>
+
+        <div class="me-advanced-body">
+
+          <label class="me-block-field">
+
+            <span>
+              API Base
+            </span>
+
+            <input
+              type="text"
+              id="me-api-base"
+              value="${DEFAULT_API_BASE}"
+            >
+
+          </label>
+
+          <label class="me-block-field">
+
+            <span>
+              Bearer Token
+              <em>optional — auto detect first</em>
+            </span>
+
+            <input
+              type="password"
+              id="me-token"
+              autocomplete="off"
+              placeholder="Leave blank for automatic detection"
+            >
+
+          </label>
+
+          <label class="me-block-field">
+
+            <span>
+              Organization ID
+              <em>optional — auto detect first</em>
+            </span>
+
+            <input
+              type="text"
+              id="me-org"
+              autocomplete="off"
+              placeholder="Leave blank for automatic detection"
+            >
+
+          </label>
+
+        </div>
+
+      </details>
+
+      <div class="me-actions">
+
+        <button
+          type="button"
+          id="me-start"
+          class="me-primary"
+        >
+          Start
+        </button>
+
+        <button
+          type="button"
+          id="me-stop"
+          class="me-danger"
+          disabled
+        >
+          Stop
+        </button>
+
+      </div>
+
+      <div
+        id="me-results"
+        class="me-results"
+        style="display:none"
+      >
+
+        <div class="me-result-title">
+          Result
+        </div>
+
+        <button
+          type="button"
+          id="me-open-q"
+        >
+          Open Questions
+        </button>
+
+        <button
+          type="button"
+          id="me-open-a"
+        >
+          Open Answers
+        </button>
+
+        <button
+          type="button"
+          id="me-download-q"
+        >
+          Download Questions.html
+        </button>
+
+        <button
+          type="button"
+          id="me-download-a"
+        >
+          Download Answers.html
+        </button>
+
+      </div>
+
+      <div
+        id="me-errors"
+        class="me-errors"
+        style="display:none"
+      >
+      </div>
+
+      <div class="me-note">
+        Question order follows the pasted questionIds order.
+        Authentication is taken from the current logged-in session
+        when possible.
+      </div>
+
+    </div>
+  `;
+
+  /* =========================================================
+     UI CSS
+     ========================================================= */
+
+  const style =
+    document.createElement(
+      'style'
+    );
+
+  style.id =
+    STYLE_ID;
+
+  style.textContent = `
+    #${SCRIPT_ID} {
+      position: fixed;
+
+      top: 18px;
+      right: 18px;
+
+      width: 390px;
+      max-height: calc(100vh - 36px);
+
+      z-index: 2147483647;
+
+      display: flex;
+      flex-direction: column;
+
+      background: #fff;
+      color: #111827;
+
+      border:
+        1px solid #dbe2ea;
+
+      border-radius:
+        14px;
+
+      box-shadow:
+        0 20px 50px rgba(0,0,0,.20),
+        0 5px 15px rgba(0,0,0,.08);
+
+      font-family:
+        Inter,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        Arial,
+        sans-serif;
+
+      overflow: hidden;
     }
 
-    const totalQuestions = questionSelect.querySelectorAll('option').length;
-    // const delayBeforeClickAnswer = 2000; // Tidak lagi digunakan
-    // const delayAfterClick = 3000;      // Tidak lagi digunakan
-    // const delayAfterChange = 3000;       // Delay setelah mengganti pertanyaan, sebelum delay 5 detik untuk memastikan semua termuat (Digabung)
-    // const delayBeforeSave = 5000;        // Delay 5 detik untuk memastikan semua konten termuat sebelum ekstraksi (Digabung)
-    const delayAfterContentLoad = 4000;  // Penundaan total 4 detik untuk memastikan semua konten termuat setelah pergantian pertanyaan
-    const questions = [];
-
-    // Fungsi clickFirstChoice tidak lagi diperlukan karena tidak ada klik jawaban
-    // const clickFirstChoice = () => {
-    //     const firstRadio = document.querySelector('#answerBody input[type=radio]');
-    //     if (firstRadio) firstRadio.click();
-    // };
-
-    // Fungsi waitForFeedback tidak lagi diperlukan karena diasumsikan penjelasan sudah ada dan ada delayBeforeSave yang lebih lama
-    // const waitForFeedback = async () => {
-    //     for (let i = 0; i < 10; i++) {
-    //         const feedback = document.querySelector('.feedback-container');
-    //         if (feedback && feedback.innerText.trim()) break;
-    //         await sleep(300);
-    //     }
-    // };
-
-    const parseRange = (input, max) => {
-        if (input.toLowerCase() === 'all') return Array.from({ length: max }, (_, i) => i);
-        const parts = input.split(',').flatMap(part => {
-            if (part.includes('-')) {
-                const [start, end] = part.split('-').map(n => parseInt(n.trim(), 10) - 1);
-                return Array.from({ length: end - start + 1 }, (_, i) => start + i);
-            } else {
-                const idx = parseInt(part.trim(), 10) - 1;
-                return isNaN(idx) ? [] : [idx];
-            }
-        });
-        return parts.filter(i => i >= 0 && i < max);
-    };
-
-    const userInput = prompt(`Nomor pertanyaan mana yang akan disimpan? Contoh:\nall\n1-10\n1,3,5-7`);
-    if (!userInput) {
-        alert('Pembatalan: Tidak ada pertanyaan yang akan disimpan.');
-        return; // Hentikan eksekusi jika pengguna membatalkan prompt
-    }
-    const selectedIndexes = parseRange(userInput, totalQuestions);
-
-    // Tambahkan pemeriksaan ini untuk memastikan ada pertanyaan yang dipilih
-    if (selectedIndexes.length === 0) {
-        alert('Tidak ada pertanyaan yang valid dipilih. Pastikan input Anda benar. Contoh: all, 1-10, 1,3,5-7');
-        return; // Hentikan eksekusi jika tidak ada pertanyaan yang valid dipilih
+    #${SCRIPT_ID} * {
+      box-sizing: border-box;
     }
 
-    const extractQuestionData = () => {
-        const questionText = document.querySelector('#description')?.innerHTML.trim() || '';
-        const answerBody = document.querySelector('#answerBody');
-        const labels = Array.from(answerBody?.querySelectorAll('label') || []);
-        const choices = [];
-        const letters = ['A', 'B', 'C', 'D', 'E', 'F'];
+    #${SCRIPT_ID} .me-head {
+      flex: 0 0 auto;
 
-        labels.forEach((label, idx) => {
-            const isTable = label.querySelector('table');
-            const pTag = label.querySelector('p');
-            const hasBr = pTag && pTag.querySelector('br');
-            let wrapped;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
 
-            if (isTable) {
-                wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content">${label.innerHTML.trim()}</div></div>`;
-            } else if (pTag && hasBr) {
-                const htmlWithBr = pTag.innerHTML.trim();
-                wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content"><p>${htmlWithBr}</p></div></div>`;
-            } else if (pTag) {
-                const plainText = pTag.innerText.trim();
-                wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content"><p>${plainText}</p></div></div>`;
-            } else {
-                const rawText = label.innerText.trim();
-                wrapped = `<div class="choice"><div class="choice-letter">${letters[idx]}.</div><div class="choice-content"><p>${rawText}</p></div></div>`;
-            }
+      padding:
+        14px 16px;
 
-            choices.push(wrapped);
-        });
+      background:
+        #111827;
 
-        const correctIndex = [...document.querySelectorAll('.choice-order')].findIndex(span =>
-            span.classList.contains('correct')
+      color:
+        #fff;
+    }
+
+    #${SCRIPT_ID} .me-title {
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    #${SCRIPT_ID} .me-subtitle {
+      margin-top: 2px;
+
+      font-size: 11px;
+
+      opacity: .7;
+    }
+
+    #${SCRIPT_ID} #me-close {
+      width: 30px;
+      height: 30px;
+
+      padding: 0;
+
+      border: 0;
+      border-radius: 8px;
+
+      background:
+        rgba(255,255,255,.10);
+
+      color: #fff;
+
+      font-size: 22px;
+      line-height: 27px;
+
+      cursor: pointer;
+    }
+
+    #${SCRIPT_ID} #me-close:hover {
+      background:
+        rgba(255,255,255,.18);
+    }
+
+    #${SCRIPT_ID} .me-body {
+      overflow-y: auto;
+
+      padding: 15px;
+    }
+
+    #${SCRIPT_ID} .me-status-box {
+      padding:
+        10px 12px;
+
+      background:
+        #f4f6f8;
+
+      border:
+        1px solid #e5e7eb;
+
+      border-radius:
+        9px;
+    }
+
+    #${SCRIPT_ID} .me-status-label {
+      margin-bottom: 4px;
+
+      color:
+        #6b7280;
+
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: .8px;
+    }
+
+    #${SCRIPT_ID} #me-status {
+      min-height: 18px;
+
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    #${SCRIPT_ID} .me-progress {
+      height: 6px;
+
+      margin-top: 12px;
+
+      overflow: hidden;
+
+      background:
+        #e5e7eb;
+
+      border-radius:
+        999px;
+    }
+
+    #${SCRIPT_ID} #me-progress-bar {
+      width: 0%;
+      height: 100%;
+
+      background:
+        #2563eb;
+
+      border-radius:
+        inherit;
+
+      transition:
+        width .2s ease;
+    }
+
+    #${SCRIPT_ID} #me-counter {
+      margin-top: 7px;
+
+      color:
+        #6b7280;
+
+      font-size: 11px;
+    }
+
+    #${SCRIPT_ID} .me-block-field,
+    #${SCRIPT_ID} .me-field {
+      display: block;
+
+      margin-top: 13px;
+
+      color:
+        #374151;
+
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    #${SCRIPT_ID} .me-field {
+      display: flex;
+
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    #${SCRIPT_ID} .me-block-field > span,
+    #${SCRIPT_ID} .me-field > span {
+      display: block;
+    }
+
+    #${SCRIPT_ID} .me-block-field em {
+      display: block;
+
+      margin-top: 2px;
+
+      color:
+        #9ca3af;
+
+      font-size: 10px;
+      font-weight: 400;
+      font-style: normal;
+    }
+
+    #${SCRIPT_ID} textarea,
+    #${SCRIPT_ID} input,
+    #${SCRIPT_ID} select {
+      font-family: inherit;
+    }
+
+    #${SCRIPT_ID} #me-input {
+      width: 100%;
+      height: 150px;
+
+      resize: vertical;
+
+      margin-top: 6px;
+      padding: 9px 10px;
+
+      border:
+        1px solid #cfd5dd;
+
+      border-radius:
+        8px;
+
+      background: #fff;
+      color: #111827;
+
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    #${SCRIPT_ID} #me-title-input {
+      width: 210px;
+      height: 32px;
+
+      padding:
+        4px 8px;
+
+      border:
+        1px solid #cfd5dd;
+
+      border-radius:
+        7px;
+
+      font-size: 12px;
+    }
+
+    #${SCRIPT_ID} .me-inline {
+      display: flex;
+      align-items: center;
+
+      gap: 5px;
+    }
+
+    #${SCRIPT_ID} #me-font-size {
+      width: 62px;
+      height: 31px;
+
+      padding:
+        4px 7px;
+
+      border:
+        1px solid #cfd5dd;
+
+      border-radius:
+        7px;
+
+      font-size: 12px;
+
+      text-align: center;
+    }
+
+    #${SCRIPT_ID} .me-detected {
+      margin-top: 8px;
+      padding:
+        7px 9px;
+
+      background:
+        #f8fafc;
+
+      border:
+        1px solid #e5e7eb;
+
+      border-radius:
+        7px;
+
+      color:
+        #64748b;
+
+      font-size: 11px;
+    }
+
+    #${SCRIPT_ID} .me-advanced {
+      margin-top: 14px;
+
+      border:
+        1px solid #e5e7eb;
+
+      border-radius:
+        8px;
+
+      background:
+        #fafafa;
+    }
+
+    #${SCRIPT_ID} .me-advanced summary {
+      padding:
+        9px 10px;
+
+      font-size: 11px;
+      font-weight: 600;
+
+      cursor: pointer;
+    }
+
+    #${SCRIPT_ID} .me-advanced-body {
+      padding:
+        0 10px 10px;
+    }
+
+    #${SCRIPT_ID} .me-advanced-body input {
+      width: 100%;
+      height: 32px;
+
+      margin-top: 5px;
+      padding:
+        5px 8px;
+
+      border:
+        1px solid #cfd5dd;
+
+      border-radius:
+        7px;
+
+      font-size: 11px;
+    }
+
+    #${SCRIPT_ID} .me-actions {
+      display: grid;
+
+      grid-template-columns:
+        1fr 1fr;
+
+      gap: 8px;
+
+      margin-top: 14px;
+    }
+
+    #${SCRIPT_ID} button {
+      font-family: inherit;
+    }
+
+    #${SCRIPT_ID} .me-actions button,
+    #${SCRIPT_ID} .me-results button {
+      min-height: 36px;
+
+      padding:
+        8px 10px;
+
+      border:
+        1px solid #d1d5db;
+
+      border-radius:
+        8px;
+
+      background:
+        #fff;
+
+      color:
+        #111827;
+
+      font-size: 12px;
+      font-weight: 600;
+
+      cursor: pointer;
+    }
+
+    #${SCRIPT_ID} .me-actions button:disabled {
+      opacity: .45;
+
+      cursor: not-allowed;
+    }
+
+    #${SCRIPT_ID} .me-primary {
+      background:
+        #2563eb !important;
+
+      border-color:
+        #2563eb !important;
+
+      color:
+        #fff !important;
+    }
+
+    #${SCRIPT_ID} .me-danger {
+      border-color:
+        #fecaca !important;
+
+      color:
+        #b91c1c !important;
+    }
+
+    #${SCRIPT_ID} .me-results {
+      margin-top: 14px;
+      padding-top: 13px;
+
+      border-top:
+        1px solid #e5e7eb;
+    }
+
+    #${SCRIPT_ID} .me-result-title {
+      margin-bottom: 7px;
+
+      color:
+        #166534;
+
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    #${SCRIPT_ID} .me-results button {
+      display: block;
+
+      width: 100%;
+
+      margin-top: 6px;
+
+      text-align: left;
+    }
+
+    #${SCRIPT_ID} .me-errors {
+      margin-top: 12px;
+      padding:
+        9px 10px;
+
+      max-height: 120px;
+
+      overflow-y: auto;
+
+      background:
+        #fff7ed;
+
+      border:
+        1px solid #fed7aa;
+
+      border-radius:
+        7px;
+
+      color:
+        #9a3412;
+
+      font-size: 10px;
+      line-height: 1.45;
+    }
+
+    #${SCRIPT_ID} .me-note {
+      margin-top: 13px;
+      padding-top: 10px;
+
+      border-top:
+        1px solid #e5e7eb;
+
+      color:
+        #6b7280;
+
+      font-size: 10px;
+      line-height: 1.45;
+    }
+
+    #${SCRIPT_ID} .me-error-input {
+      border-color:
+        #dc2626 !important;
+
+      box-shadow:
+        0 0 0 2px rgba(220,38,38,.08);
+    }
+  `;
+
+  document.head.appendChild(
+    style
+  );
+
+  document.body.appendChild(
+    panel
+  );
+
+  /* =========================================================
+     UI REFERENCES
+     ========================================================= */
+
+  const $ =
+    selector =>
+      panel.querySelector(
+        selector
+      );
+
+  const statusEl =
+    $('#me-status');
+
+  const progressEl =
+    $('#me-progress-bar');
+
+  const counterEl =
+    $('#me-counter');
+
+  const inputEl =
+    $('#me-input');
+
+  const detectedEl =
+    $('#me-detected');
+
+  const titleEl =
+    $('#me-title-input');
+
+  const fontEl =
+    $('#me-font-size');
+
+  const apiBaseEl =
+    $('#me-api-base');
+
+  const tokenEl =
+    $('#me-token');
+
+  const orgEl =
+    $('#me-org');
+
+  const startBtn =
+    $('#me-start');
+
+  const stopBtn =
+    $('#me-stop');
+
+  const resultsEl =
+    $('#me-results');
+
+  const errorsEl =
+    $('#me-errors');
+
+  /* =========================================================
+     UI HELPERS
+     ========================================================= */
+
+  function setStatus(
+    text
+  ) {
+    statusEl.textContent =
+      text;
+  }
+
+  function setCounter(
+    text
+  ) {
+    counterEl.textContent =
+      text;
+  }
+
+  function setProgress(
+    value
+  ) {
+    progressEl.style.width =
+      `${Math.max(
+        0,
+        Math.min(
+          100,
+          value
+        )
+      )}%`;
+  }
+
+  function getFontSize() {
+    let value =
+      Number(
+        fontEl.value
+      );
+
+    if (
+      !Number.isFinite(
+        value
+      )
+    ) {
+      value = 12;
+    }
+
+    return Math.max(
+      9,
+      Math.min(
+        18,
+        value
+      )
+    );
+  }
+
+  /* =========================================================
+     GENERIC OBJECT HELPERS
+     ========================================================= */
+
+  function isObject(
+    value
+  ) {
+    return (
+      value !== null &&
+      typeof value ===
+        'object' &&
+      !Array.isArray(
+        value
+      )
+    );
+  }
+
+  function walkObject(
+    value,
+    visitor,
+    seen =
+      new WeakSet()
+  ) {
+    if (
+      value === null ||
+      typeof value !==
+        'object'
+    ) {
+      return;
+    }
+
+    if (
+      seen.has(
+        value
+      )
+    ) {
+      return;
+    }
+
+    seen.add(
+      value
+    );
+
+    visitor(
+      value
+    );
+
+    if (
+      Array.isArray(
+        value
+      )
+    ) {
+      for (
+        const item of value
+      ) {
+        walkObject(
+          item,
+          visitor,
+          seen
+        );
+      }
+
+      return;
+    }
+
+    for (
+      const child
+      of Object.values(
+        value
+      )
+    ) {
+      walkObject(
+        child,
+        visitor,
+        seen
+      );
+    }
+  }
+
+  /* =========================================================
+     PARSE INPUT
+     ========================================================= */
+
+  function findQuestionIdsInObject(
+    root
+  ) {
+    let result =
+      null;
+
+    walkObject(
+      root,
+      obj => {
+        if (
+          result
+        ) {
+          return;
+        }
+
+        if (
+          Array.isArray(
+            obj.questionIds
+          )
+        ) {
+          const ids =
+            obj.questionIds
+              .map(
+                value =>
+                  String(
+                    value
+                  ).trim()
+              )
+              .filter(
+                value =>
+                  /^[a-f0-9]{24}$/i.test(
+                    value
+                  )
+              );
+
+          if (
+            ids.length
+          ) {
+            result =
+              ids;
+          }
+        }
+      }
+    );
+
+    return result || [];
+  }
+
+  function findMockTitleInObject(
+    root
+  ) {
+    let found =
+      '';
+
+    walkObject(
+      root,
+      obj => {
+        if (
+          found
+        ) {
+          return;
+        }
+
+        if (
+          obj.mockExam &&
+          isObject(
+            obj.mockExam
+          )
+        ) {
+          const title =
+            obj.mockExam
+              ?.title
+              ?.en;
+
+          if (
+            typeof title ===
+              'string' &&
+            title.trim()
+          ) {
+            found =
+              title.trim();
+          }
+        }
+      }
+    );
+
+    return found;
+  }
+
+  function uniquePreserveOrder(
+    values
+  ) {
+    const seen =
+      new Set();
+
+    const result =
+      [];
+
+    for (
+      const value of values
+    ) {
+      if (
+        seen.has(
+          value
+        )
+      ) {
+        continue;
+      }
+
+      seen.add(
+        value
+      );
+
+      result.push(
+        value
+      );
+    }
+
+    return result;
+  }
+
+  function parseQuestionInput(
+    raw
+  ) {
+    raw =
+      String(
+        raw || ''
+      ).trim();
+
+    if (
+      !raw
+    ) {
+      return {
+        ids: [],
+        title: ''
+      };
+    }
+
+    /*
+      Try JSON first.
+    */
+
+    try {
+      const parsed =
+        JSON.parse(
+          raw
         );
 
-        const feedbackDivs = Array.from(document.querySelectorAll('.feedback-element, .last-feedback-element'));
-        const explanationHTML = feedbackDivs.map(div => div.outerHTML).join('<br>');
+      let ids =
+        [];
 
+      let title =
+        '';
+
+      /*
+        Direct array of IDs.
+      */
+
+      if (
+        Array.isArray(
+          parsed
+        )
+      ) {
+        ids =
+          parsed
+            .map(
+              value =>
+                String(
+                  value
+                ).trim()
+            )
+            .filter(
+              value =>
+                /^[a-f0-9]{24}$/i.test(
+                  value
+                )
+            );
+
+      } else {
+        ids =
+          findQuestionIdsInObject(
+            parsed
+          );
+
+        title =
+          findMockTitleInObject(
+            parsed
+          );
+      }
+
+      if (
+        ids.length
+      ) {
         return {
-            questionText,
-            choices,
-            correctIndex,
-            explanation: explanationHTML
+          ids:
+            uniquePreserveOrder(
+              ids
+            ),
+
+          title
         };
+      }
+
+    } catch {
+      /*
+        Continue to text parsing.
+      */
+    }
+
+    /*
+      Plain text fallback.
+
+      Accept:
+        ID
+        ID
+        ID
+
+      or:
+        ID, ID, ID
+    */
+
+    const matches =
+      raw.match(
+        /\b[a-f0-9]{24}\b/gi
+      ) || [];
+
+    return {
+      ids:
+        uniquePreserveOrder(
+          matches
+        ),
+
+      title: ''
+    };
+  }
+
+  /* =========================================================
+     INPUT PREVIEW
+     ========================================================= */
+
+  function updateInputPreview() {
+    const parsed =
+      parseQuestionInput(
+        inputEl.value
+      );
+
+    if (
+      !parsed.ids.length
+    ) {
+      detectedEl.textContent =
+        'No valid question IDs detected.';
+
+      return;
+    }
+
+    detectedEl.textContent =
+      `${parsed.ids.length} unique question IDs detected.`;
+
+    if (
+      parsed.title &&
+      !titleEl.value.trim()
+    ) {
+      titleEl.value =
+        parsed.title;
+    }
+  }
+
+  inputEl.addEventListener(
+    'input',
+    () => {
+      inputEl.classList.remove(
+        'me-error-input'
+      );
+
+      updateInputPreview();
+    }
+  );
+
+  /* =========================================================
+     PAGE TITLE FALLBACK
+     ========================================================= */
+
+  function detectPageTitle() {
+    const breadcrumb =
+      document.querySelector(
+        '[aria-label="breadcrumb"]'
+      );
+
+    if (
+      breadcrumb
+    ) {
+      const items =
+        Array.from(
+          breadcrumb.querySelectorAll(
+            'li'
+          )
+        );
+
+      for (
+        let i =
+          items.length - 1;
+        i >= 0;
+        i--
+      ) {
+        const text =
+          items[i]
+            .innerText
+            ?.trim();
+
+        if (
+          text
+        ) {
+          return text;
+        }
+      }
+    }
+
+    return 'Mock Exam';
+  }
+
+  titleEl.value =
+    detectPageTitle();
+
+  /* =========================================================
+     JWT DETECTION
+     ========================================================= */
+
+  function looksLikeJWT(
+    value
+  ) {
+    return (
+      typeof value ===
+        'string' &&
+      /^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/
+        .test(
+          value.trim()
+        )
+    );
+  }
+
+  function normalizeBearer(
+    value
+  ) {
+    value =
+      String(
+        value || ''
+      ).trim();
+
+    if (
+      !value
+    ) {
+      return '';
+    }
+
+    value =
+      value.replace(
+        /^Bearer\s+/i,
+        ''
+      );
+
+    return value;
+  }
+
+  function searchJWTInValue(
+    value,
+    depth = 0
+  ) {
+    if (
+      depth > 8 ||
+      value === null ||
+      value === undefined
+    ) {
+      return '';
+    }
+
+    if (
+      typeof value ===
+        'string'
+    ) {
+      const clean =
+        normalizeBearer(
+          value
+        );
+
+      if (
+        looksLikeJWT(
+          clean
+        )
+      ) {
+        return clean;
+      }
+
+      /*
+        JWT may be embedded inside another string.
+      */
+
+      const match =
+        value.match(
+          /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/
+        );
+
+      if (
+        match &&
+        looksLikeJWT(
+          match[0]
+        )
+      ) {
+        return match[0];
+      }
+
+      /*
+        JSON encoded string.
+      */
+
+      try {
+        const parsed =
+          JSON.parse(
+            value
+          );
+
+        return searchJWTInValue(
+          parsed,
+          depth + 1
+        );
+
+      } catch {
+        return '';
+      }
+    }
+
+    if (
+      Array.isArray(
+        value
+      )
+    ) {
+      for (
+        const item of value
+      ) {
+        const result =
+          searchJWTInValue(
+            item,
+            depth + 1
+          );
+
+        if (
+          result
+        ) {
+          return result;
+        }
+      }
+
+      return '';
+    }
+
+    if (
+      isObject(
+        value
+      )
+    ) {
+      /*
+        Prefer token-like keys.
+      */
+
+      const priorityKeys =
+        [
+          'accessToken',
+          'access_token',
+          'token',
+          'jwt',
+          'authorization',
+          'authToken',
+          'bearerToken'
+        ];
+
+      for (
+        const key
+        of priorityKeys
+      ) {
+        if (
+          key in value
+        ) {
+          const result =
+            searchJWTInValue(
+              value[key],
+              depth + 1
+            );
+
+          if (
+            result
+          ) {
+            return result;
+          }
+        }
+      }
+
+      for (
+        const child
+        of Object.values(
+          value
+        )
+      ) {
+        const result =
+          searchJWTInValue(
+            child,
+            depth + 1
+          );
+
+        if (
+          result
+        ) {
+          return result;
+        }
+      }
+    }
+
+    return '';
+  }
+
+  function findJWTInStorage() {
+    const storages =
+      [
+        window.localStorage,
+        window.sessionStorage
+      ];
+
+    for (
+      const storage of storages
+    ) {
+      try {
+        /*
+          First examine likely key names.
+        */
+
+        for (
+          let i = 0;
+          i <
+          storage.length;
+          i++
+        ) {
+          const key =
+            storage.key(i);
+
+          if (
+            !key
+          ) {
+            continue;
+          }
+
+          if (
+            /token|auth|session|user/i
+              .test(
+                key
+              )
+          ) {
+            const found =
+              searchJWTInValue(
+                storage.getItem(
+                  key
+                )
+              );
+
+            if (
+              found
+            ) {
+              return found;
+            }
+          }
+        }
+
+        /*
+          Then examine all values.
+        */
+
+        for (
+          let i = 0;
+          i <
+          storage.length;
+          i++
+        ) {
+          const key =
+            storage.key(i);
+
+          const found =
+            searchJWTInValue(
+              storage.getItem(
+                key
+              )
+            );
+
+          if (
+            found
+          ) {
+            return found;
+          }
+        }
+
+      } catch {}
+    }
+
+    /*
+      Non-HttpOnly cookie fallback.
+    */
+
+    try {
+      const match =
+        document.cookie.match(
+          /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/
+        );
+
+      if (
+        match
+      ) {
+        return match[0];
+      }
+    } catch {}
+
+    return '';
+  }
+
+  /* =========================================================
+     ORGANIZATION ID DETECTION
+     ========================================================= */
+
+  function searchOrganizationId(
+    value,
+    depth = 0
+  ) {
+    if (
+      depth > 8 ||
+      value === null ||
+      value === undefined
+    ) {
+      return '';
+    }
+
+    if (
+      typeof value ===
+        'string'
+    ) {
+      try {
+        const parsed =
+          JSON.parse(
+            value
+          );
+
+        return searchOrganizationId(
+          parsed,
+          depth + 1
+        );
+
+      } catch {
+        return '';
+      }
+    }
+
+    if (
+      Array.isArray(
+        value
+      )
+    ) {
+      for (
+        const item of value
+      ) {
+        const result =
+          searchOrganizationId(
+            item,
+            depth + 1
+          );
+
+        if (
+          result
+        ) {
+          return result;
+        }
+      }
+
+      return '';
+    }
+
+    if (
+      isObject(
+        value
+      )
+    ) {
+      for (
+        const [
+          key,
+          child
+        ]
+        of Object.entries(
+          value
+        )
+      ) {
+        if (
+          /organization.?id/i
+            .test(
+              key
+            )
+        ) {
+          const candidate =
+            String(
+              child || ''
+            ).trim();
+
+          if (
+            /^[a-f0-9]{24}$/i
+              .test(
+                candidate
+              )
+          ) {
+            return candidate;
+          }
+        }
+      }
+
+      for (
+        const child
+        of Object.values(
+          value
+        )
+      ) {
+        const result =
+          searchOrganizationId(
+            child,
+            depth + 1
+          );
+
+        if (
+          result
+        ) {
+          return result;
+        }
+      }
+    }
+
+    return '';
+  }
+
+  function findOrganizationIdInStorage() {
+    const storages =
+      [
+        window.localStorage,
+        window.sessionStorage
+      ];
+
+    for (
+      const storage
+      of storages
+    ) {
+      try {
+        for (
+          let i = 0;
+          i <
+          storage.length;
+          i++
+        ) {
+          const key =
+            storage.key(i);
+
+          const raw =
+            storage.getItem(
+              key
+            );
+
+          /*
+            Direct organization key.
+          */
+
+          if (
+            /organization.?id/i
+              .test(
+                key || ''
+              )
+          ) {
+            const direct =
+              String(
+                raw || ''
+              )
+              .replace(
+                /^["']|["']$/g,
+                ''
+              )
+              .trim();
+
+            if (
+              /^[a-f0-9]{24}$/i
+                .test(
+                  direct
+                )
+            ) {
+              return direct;
+            }
+          }
+
+          const found =
+            searchOrganizationId(
+              raw
+            );
+
+          if (
+            found
+          ) {
+            return found;
+          }
+        }
+
+      } catch {}
+    }
+
+    return '';
+  }
+
+  /* =========================================================
+     HTTP HELPERS
+     ========================================================= */
+
+  function createAbortTimeout(
+    milliseconds
+  ) {
+    const controller =
+      new AbortController();
+
+    const timer =
+      setTimeout(
+        () =>
+          controller.abort(),
+        milliseconds
+      );
+
+    return {
+      controller,
+      clear:
+        () =>
+          clearTimeout(
+            timer
+          )
+    };
+  }
+
+  function buildHeaders() {
+    const headers = {
+      accept:
+        'application/json, text/plain, */*',
+
+      'cognit-app':
+        'lms'
     };
 
-    const generateHTML = (withAnswers = false) => {
-        const doc = document.implementation.createHTMLDocument();
-        const style = document.createElement('style');
-        style.textContent = `
-            body { font-family: Arial, sans-serif; font-size: 17px; margin: 40px; }
-            .question-block { page-break-inside: avoid; margin-bottom: 50px; }
-            .question-title { font-weight: bold; margin-bottom: 10px; }
-            .question-text { margin-bottom: 10px; }
-            .choice { display: flex; margin: 4px 0; }
-            .choice-letter { width: 30px; flex-shrink: 0; }
-            .choice-content p { margin: 0; }
-            .choice.correct { font-weight: bold; }
-            .explanation { margin-top: 15px; }
-            .explanation .feedback-element,
-            .explanation .last-feedback-element {
-                margin: 4px 0 !important;
+    if (
+      state.authorization
+    ) {
+      headers.authorization =
+        `Bearer ${state.authorization}`;
+    }
+
+    if (
+      state.organizationId
+    ) {
+      headers['organization-id'] =
+        state.organizationId;
+    }
+
+    return headers;
+  }
+
+  /* =========================================================
+     FETCH SINGLE QUESTION
+     ========================================================= */
+
+  async function fetchQuestionOnce(
+    id
+  ) {
+    const timeout =
+      createAbortTimeout(
+        CONFIG.requestTimeout
+      );
+
+    try {
+      const response =
+        await fetch(
+          state.apiBase +
+          encodeURIComponent(
+            id
+          ),
+          {
+            method:
+              'GET',
+
+            headers:
+              buildHeaders(),
+
+            credentials:
+              'include',
+
+            mode:
+              'cors',
+
+            cache:
+              'no-store',
+
+            signal:
+              timeout
+                .controller
+                .signal
+          }
+        );
+
+      let body =
+        null;
+
+      const text =
+        await response.text();
+
+      try {
+        body =
+          JSON.parse(
+            text
+          );
+      } catch {
+        body =
+          text;
+      }
+
+      if (
+        !response.ok
+      ) {
+        const error =
+          new Error(
+            `HTTP ${response.status} ${response.statusText}`
+          );
+
+        error.status =
+          response.status;
+
+        error.body =
+          body;
+
+        throw error;
+      }
+
+      /*
+        Support APIs wrapping response in:
+          { data: {...} }
+      */
+
+      if (
+        body &&
+        isObject(
+          body
+        ) &&
+        body.data &&
+        isObject(
+          body.data
+        ) &&
+        (
+          body.data.answers ||
+          body.data.text
+        )
+      ) {
+        return body.data;
+      }
+
+      return body;
+
+    } finally {
+      timeout.clear();
+    }
+  }
+
+  async function fetchQuestion(
+    id
+  ) {
+    let lastError =
+      null;
+
+    for (
+      let attempt = 0;
+      attempt <=
+        CONFIG.retryCount;
+      attempt++
+    ) {
+      if (
+        state.stopRequested
+      ) {
+        throw new Error(
+          'Stopped'
+        );
+      }
+
+      try {
+        return await fetchQuestionOnce(
+          id
+        );
+
+      } catch (
+        error
+      ) {
+        lastError =
+          error;
+
+        /*
+          Authentication errors should not be retried
+          repeatedly.
+        */
+
+        if (
+          error.status === 401 ||
+          error.status === 403
+        ) {
+          throw error;
+        }
+
+        if (
+          attempt <
+          CONFIG.retryCount
+        ) {
+          await sleep(
+            CONFIG.retryDelay *
+            (
+              attempt + 1
+            )
+          );
+        }
+      }
+    }
+
+    throw lastError;
+  }
+
+  /* =========================================================
+     LANGUAGE HELPERS
+     ========================================================= */
+
+  function getEnglishHTML(
+    value
+  ) {
+    if (
+      value === null ||
+      value === undefined
+    ) {
+      return '';
+    }
+
+    if (
+      typeof value ===
+        'string'
+    ) {
+      return value;
+    }
+
+    if (
+      isObject(
+        value
+      )
+    ) {
+      if (
+        typeof value.en ===
+          'string'
+      ) {
+        return value.en;
+      }
+
+      /*
+        Fallback to first string language.
+      */
+
+      const candidate =
+        Object.values(
+          value
+        )
+        .find(
+          item =>
+            typeof item ===
+              'string'
+        );
+
+      return candidate || '';
+    }
+
+    return '';
+  }
+
+  /* =========================================================
+     FACT PATTERN SUPPORT
+     ========================================================= */
+
+  function extractFactPatternHTML(
+    question
+  ) {
+    const fp =
+      question?.factPattern;
+
+    if (
+      !fp
+    ) {
+      return '';
+    }
+
+    if (
+      typeof fp ===
+        'string'
+    ) {
+      return fp;
+    }
+
+    /*
+      Common possibilities.
+    */
+
+    const candidates =
+      [
+        fp.text,
+        fp.body,
+        fp.description,
+        fp.content,
+        fp
+      ];
+
+    for (
+      const candidate
+      of candidates
+    ) {
+      const html =
+        getEnglishHTML(
+          candidate
+        );
+
+      if (
+        html
+      ) {
+        return html;
+      }
+    }
+
+    return '';
+  }
+
+  /* =========================================================
+     NORMALIZE API QUESTION
+     ========================================================= */
+
+  function normalizeQuestion(
+    rawQuestion,
+    questionId,
+    position
+  ) {
+    if (
+      !rawQuestion ||
+      typeof rawQuestion !==
+        'object'
+    ) {
+      throw new Error(
+        'Invalid question response.'
+      );
+    }
+
+    const questionHTML =
+      getEnglishHTML(
+        rawQuestion.text
+      );
+
+    if (
+      !questionHTML
+    ) {
+      throw new Error(
+        'Question text is missing.'
+      );
+    }
+
+    const sourceAnswers =
+      Array.isArray(
+        rawQuestion.answers
+      )
+        ? [
+            ...rawQuestion.answers
+          ]
+        : [];
+
+    if (
+      sourceAnswers.length < 2
+    ) {
+      throw new Error(
+        'Question has fewer than two answers.'
+      );
+    }
+
+    /*
+      Respect API sorting.
+      Stable fallback to original array order.
+    */
+
+    const answers =
+      sourceAnswers
+        .map(
+          (
+            answer,
+            originalIndex
+          ) => ({
+            answer,
+            originalIndex
+          })
+        )
+        .sort(
+          (
+            a,
+            b
+          ) => {
+            const sortingA =
+              Number(
+                a.answer
+                  ?.sorting
+              );
+
+            const sortingB =
+              Number(
+                b.answer
+                  ?.sorting
+              );
+
+            const validA =
+              Number.isFinite(
+                sortingA
+              );
+
+            const validB =
+              Number.isFinite(
+                sortingB
+              );
+
+            if (
+              validA &&
+              validB &&
+              sortingA !==
+                sortingB
+            ) {
+              return (
+                sortingA -
+                sortingB
+              );
             }
-            .explanation p {
-                margin: 0 !important;
+
+            return (
+              a.originalIndex -
+              b.originalIndex
+            );
+          }
+        )
+        .map(
+          item =>
+            item.answer
+        );
+
+    const choices =
+      answers.map(
+        answer =>
+          getEnglishHTML(
+            answer.text
+          )
+      );
+
+    const correctIndexes =
+      [];
+
+    answers.forEach(
+      (
+        answer,
+        index
+      ) => {
+        if (
+          answer?.isCorrect ===
+          true
+        ) {
+          correctIndexes.push(
+            index
+          );
+        }
+      }
+    );
+
+    if (
+      !correctIndexes.length
+    ) {
+      throw new Error(
+        'No correct answer marked by API.'
+      );
+    }
+
+    /*
+      Current Mock Exam is multi-choice with one correct answer.
+      Keep array support internally in case API expands later.
+    */
+
+    const correctIndex =
+      correctIndexes[0];
+
+    /*
+      Build explanation from EVERY answer feedback
+      in answer order.
+
+      This recreates:
+        Not (a) ...
+        Not (b) ...
+        Answer (c) is correct ...
+        Not (d) ...
+    */
+
+    const feedbackParts =
+      answers
+        .map(
+          answer =>
+            getEnglishHTML(
+              answer.feedback
+            )
+        )
+        .filter(
+          html =>
+            String(
+              html || ''
+            ).trim()
+        );
+
+    const explanationHTML =
+      feedbackParts.join(
+        '\n'
+      );
+
+    return {
+      position,
+
+      questionId,
+
+      apiId:
+        rawQuestion.id ||
+        rawQuestion._id ||
+        questionId,
+
+      externalId:
+        rawQuestion.externalId ||
+        '',
+
+      reference:
+        rawQuestion.reference ??
+        '',
+
+      type:
+        rawQuestion.type ||
+        '',
+
+      factPatternHTML:
+        extractFactPatternHTML(
+          rawQuestion
+        ),
+
+      questionHTML,
+
+      choices,
+
+      correctIndex,
+
+      correctIndexes,
+
+      explanationHTML
+    };
+  }
+
+  /* =========================================================
+     AUTH ERROR MESSAGE
+     ========================================================= */
+
+  function describeFetchError(
+    error
+  ) {
+    if (
+      error?.status === 401
+    ) {
+      return (
+        'Authorization failed (HTTP 401). ' +
+        'Automatic Bearer token detection did not work or the session expired. ' +
+        'Open Advanced / Authentication and paste the current Bearer token.'
+      );
+    }
+
+    if (
+      error?.status === 403
+    ) {
+      return (
+        'Access was rejected (HTTP 403). ' +
+        'Check the Bearer token and Organization ID under Advanced / Authentication.'
+      );
+    }
+
+    if (
+      error?.name ===
+        'AbortError'
+    ) {
+      return (
+        'Request timed out.'
+      );
+    }
+
+    return (
+      error?.message ||
+      String(
+        error
+      )
+    );
+  }
+
+  /* =========================================================
+     FETCH ALL — SMALL WORKER POOL
+     ========================================================= */
+
+  async function fetchAllQuestions(
+    ids
+  ) {
+    const total =
+      ids.length;
+
+    const results =
+      new Array(
+        total
+      );
+
+    let nextIndex =
+      0;
+
+    let completed =
+      0;
+
+    const worker =
+      async () => {
+        while (
+          !state.stopRequested
+        ) {
+          const index =
+            nextIndex++;
+
+          if (
+            index >= total
+          ) {
+            return;
+          }
+
+          const id =
+            ids[index];
+
+          setStatus(
+            `Fetching Question ${index + 1} of ${total}…`
+          );
+
+          try {
+            const raw =
+              await fetchQuestion(
+                id
+              );
+
+            const normalized =
+              normalizeQuestion(
+                raw,
+                id,
+                index + 1
+              );
+
+            results[index] =
+              normalized;
+
+          } catch (
+            error
+          ) {
+            /*
+              Auth failure:
+              stop immediately because all subsequent requests
+              would fail as well.
+            */
+
+            if (
+              error?.status === 401 ||
+              error?.status === 403
+            ) {
+              state.stopRequested =
+                true;
+
+              throw error;
             }
-            .explanation br { display: block; margin-top: 5px; }
-            td, tr { height: auto !important; }
-            table p { margin: 0 !important; }
-            .hr-line { border: 0; border-top: 2px solid #000; margin-top: 5px; margin-bottom: 15px; }
-        `;
-        doc.head.appendChild(style);
 
-        questions.forEach((q, index) => {
-            const block = doc.createElement('div');
-            block.className = 'question-block';
+            state.failures.push({
+              index:
+                index + 1,
 
-            const title = document.createElement('div');
-            title.className = 'question-title';
-            title.textContent = `Question ${selectedIndexes[index] + 1} of ${totalQuestions}`;
-            block.appendChild(title);
+              id,
 
-            const line = document.createElement('hr');
-            line.className = 'hr-line';
-            block.appendChild(line);
-
-            const qtext = document.createElement('div');
-            qtext.className = 'question-text';
-            qtext.innerHTML = q.questionText;
-            block.appendChild(qtext);
-
-            q.choices.forEach((choiceHTML, idx) => {
-                const wrapper = document.createElement('div');
-                wrapper.innerHTML = choiceHTML.trim();
-                const choiceDiv = wrapper.firstChild;
-                if (withAnswers && idx === q.correctIndex) {
-                    choiceDiv.classList.add('correct');
-                }
-                block.appendChild(choiceDiv);
+              error:
+                describeFetchError(
+                  error
+                )
             });
+          }
 
-            if (withAnswers && q.explanation) {
-                const exp = document.createElement('div');
-                exp.className = 'explanation';
-                exp.innerHTML = `<b><i>Explanation:</i></b><br>${q.explanation}`;
-                block.appendChild(exp);
-            }
+          completed++;
 
-            doc.body.appendChild(block);
-        });
+          setProgress(
+            (
+              completed /
+              total
+            ) * 100
+          );
 
-        return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
-    };
+          setCounter(
+            `${completed} of ${total} processed`
+          );
+        }
+      };
 
-    const saveHTMLAsTab = (html, name) => {
-        const win = window.open();
-        win.document.open();
-        win.document.write(html);
-        win.document.close();
-        win.document.title = name;
-    };
+    const workerCount =
+      Math.min(
+        CONFIG.concurrency,
+        total
+      );
 
-    for (let i = 0; i < totalQuestions; i++) {
-        if (!selectedIndexes.includes(i)) continue;
+    await Promise.all(
+      Array.from(
+        {
+          length:
+            workerCount
+        },
+        () =>
+          worker()
+      )
+    );
 
-        questionSelect.selectedIndex = i;
-        questionSelect.dispatchEvent(new Event('change', { bubbles: true }));
-        // Hanya satu penundaan 4 detik untuk memastikan konten dimuat sepenuhnya
-        await sleep(delayAfterContentLoad);
-
-        const data = extractQuestionData();
-        questions.push(data);
+    if (
+      state.stopRequested &&
+      state.failures.length === 0 &&
+      completed <
+        total
+    ) {
+      throw new Error(
+        'Stopped by user.'
+      );
     }
 
-    // Hanya panggil saveHTMLAsTab jika ada pertanyaan yang diekstraksi
-    if (questions.length > 0) {
-        saveHTMLAsTab(generateHTML(false), 'Questions');
-        saveHTMLAsTab(generateHTML(true), 'Answers');
-    } else {
-        alert('Tidak ada pertanyaan yang diekstraksi. Pastikan ada konten di halaman dan input Anda valid.');
+    return results.filter(
+      Boolean
+    );
+  }
+
+  /* =========================================================
+     HTML ESCAPE
+     ========================================================= */
+
+  function escapeHTML(
+    text
+  ) {
+    return String(
+      text ?? ''
+    )
+      .replace(
+        /&/g,
+        '&amp;'
+      )
+      .replace(
+        /</g,
+        '&lt;'
+      )
+      .replace(
+        />/g,
+        '&gt;'
+      )
+      .replace(
+        /"/g,
+        '&quot;'
+      )
+      .replace(
+        /'/g,
+        '&#039;'
+      );
+  }
+
+  /* =========================================================
+     OUTPUT HTML
+     ========================================================= */
+
+  function buildOutputHTML(
+    questions,
+    withAnswers
+  ) {
+    const total =
+      state.questionIds.length;
+
+    const title =
+      state.title ||
+      'Mock Exam';
+
+    const fontSize =
+      getFontSize();
+
+    const baseURL =
+      document.baseURI;
+
+    const blocks =
+      questions
+        .map(
+          q => {
+            const choicesHTML =
+              q.choices
+                .map(
+                  (
+                    choice,
+                    choiceIndex
+                  ) => {
+                    const letter =
+                      String.fromCharCode(
+                        65 +
+                        choiceIndex
+                      );
+
+                    const correct =
+                      withAnswers &&
+                      q.correctIndexes
+                        .includes(
+                          choiceIndex
+                        );
+
+                    return `
+                      <div
+                        class="choice ${correct ? 'correct' : ''}"
+                      >
+
+                        <div class="choice-letter">
+                          ${letter}.
+                        </div>
+
+                        <div class="choice-content">
+                          ${choice}
+                        </div>
+
+                        <div class="choice-mark">
+                          ${correct ? '&#10003;' : ''}
+                        </div>
+
+                      </div>
+                    `;
+                  }
+                )
+                .join('');
+
+            const factPattern =
+              q.factPatternHTML
+                ? `
+                  <div class="fact-pattern">
+                    ${q.factPatternHTML}
+                  </div>
+                `
+                : '';
+
+            const explanation =
+              withAnswers
+                ? `
+                  <div class="explanation">
+
+                    <div class="explanation-title">
+                      Explanation
+                    </div>
+
+                    <div class="explanation-content">
+                      ${
+                        q.explanationHTML ||
+                        '<p>No explanation was provided by the API.</p>'
+                      }
+                    </div>
+
+                  </div>
+                `
+                : '';
+
+            return `
+              <section class="question-block">
+
+                <div class="question-header">
+                  Question ${q.position} of ${total}
+                </div>
+
+                <div class="question-rule"></div>
+
+                ${factPattern}
+
+                <div class="question-text">
+                  ${q.questionHTML}
+                </div>
+
+                <div class="choices">
+                  ${choicesHTML}
+                </div>
+
+                ${explanation}
+
+              </section>
+            `;
+          }
+        )
+        .join('\n');
+
+    return `<!doctype html>
+
+<html lang="en">
+
+<head>
+
+<meta charset="utf-8">
+
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1"
+>
+
+<base href="${escapeHTML(baseURL)}">
+
+<title>${escapeHTML(title)}${withAnswers ? ' - Answers' : ' - Questions'}</title>
+
+<style>
+
+  :root {
+    color-scheme: light;
+
+    --document-font-size:
+      ${fontSize}pt;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    background: #ffffff;
+  }
+
+  body {
+    margin: 0;
+
+    color: #111827;
+
+    font-family:
+      Arial,
+      Helvetica,
+      sans-serif;
+
+    font-size:
+      var(--document-font-size);
+
+    line-height:
+      1.42;
+  }
+
+  .document {
+    width:
+      min(
+        900px,
+        calc(100% - 48px)
+      );
+
+    margin:
+      34px auto 60px;
+  }
+
+  /* =====================================================
+     TITLE
+     ===================================================== */
+
+  .document-title {
+    margin-bottom: 26px;
+    padding-bottom: 11px;
+
+    border-bottom:
+      1px solid #cfd4da;
+  }
+
+  .document-title h1 {
+    margin: 0;
+
+    color: #111827;
+
+    font-size: 1.42em;
+    font-weight: 700;
+
+    line-height: 1.3;
+  }
+
+  /* =====================================================
+     QUESTION
+     ===================================================== */
+
+  .question-block {
+    margin:
+      0 0 31px;
+
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .question-header {
+    color: #111827;
+
+    font-size: 1em;
+    font-weight: 700;
+
+    line-height: 1.4;
+  }
+
+  .question-rule {
+    height: 1px;
+
+    margin:
+      6px 0 11px;
+
+    background: #111827;
+  }
+
+  .question-text {
+    margin-bottom: 10px;
+  }
+
+  p {
+    margin-top: 0;
+    margin-bottom: 7px;
+  }
+
+  .question-text > :first-child,
+  .choice-content > :first-child,
+  .explanation-content > :first-child,
+  .fact-pattern > :first-child {
+    margin-top:
+      0 !important;
+  }
+
+  .question-text > :last-child,
+  .choice-content > :last-child,
+  .explanation-content > :last-child,
+  .fact-pattern > :last-child {
+    margin-bottom:
+      0 !important;
+  }
+
+  /* =====================================================
+     FACT PATTERN
+     ===================================================== */
+
+  .fact-pattern {
+    margin-bottom: 12px;
+
+    padding:
+      10px 12px;
+
+    background:
+      #f8fafc;
+
+    border-left:
+      3px solid #9ca3af;
+
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* =====================================================
+     LISTS
+     ===================================================== */
+
+  .question-text ol,
+  .question-text ul,
+  .fact-pattern ol,
+  .fact-pattern ul {
+    margin-top: 7px;
+    margin-bottom: 8px;
+
+    padding-left: 28px;
+  }
+
+  .question-text li,
+  .fact-pattern li {
+    margin:
+      2px 0;
+  }
+
+  /* =====================================================
+     CHOICES
+     ===================================================== */
+
+  .choices {
+    margin-top: 4px;
+  }
+
+  .choice {
+    display: grid;
+
+    grid-template-columns:
+      25px
+      minmax(0, 1fr)
+      22px;
+
+    column-gap: 4px;
+
+    align-items: start;
+
+    padding:
+      1px 4px;
+
+    margin: 0;
+
+    line-height: 1.30;
+
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .choice-letter {
+    font-weight: 400;
+  }
+
+  .choice-content {
+    min-width: 0;
+  }
+
+  .choice-content p {
+    margin: 0;
+
+    line-height: inherit;
+  }
+
+  .choice-mark {
+    text-align: center;
+
+    font-size: 1.08em;
+    font-weight: 800;
+
+    line-height: 1.25;
+  }
+
+  .choice.correct,
+  .choice.correct .choice-letter,
+  .choice.correct .choice-content {
+    font-weight: 700;
+  }
+
+  /* =====================================================
+     EXPLANATION
+     ===================================================== */
+
+  .explanation {
+    margin-top: 13px;
+
+    padding:
+      10px 12px;
+
+    background:
+      #f0f1f2;
+
+    border:
+      1px solid #d3d7dc;
+
+    border-radius:
+      6px;
+
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .explanation-title {
+    margin-bottom: 5px;
+
+    color: #111827;
+
+    font-size: 1em;
+    font-weight: 700;
+
+    line-height: 1.4;
+  }
+
+  .explanation-content {
+    font-size: 1em;
+
+    line-height: 1.4;
+  }
+
+  .explanation-content p {
+    margin-top: 0;
+    margin-bottom: 7px;
+  }
+
+  /* =====================================================
+     TABLE
+     ===================================================== */
+
+  table {
+    width: auto;
+    max-width: 100%;
+
+    border-collapse: collapse;
+
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  th,
+  td {
+    padding:
+      3px 6px;
+
+    vertical-align: top;
+  }
+
+  table p {
+    margin: 0;
+  }
+
+  tr,
+  td,
+  th {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* =====================================================
+     IMAGES
+     ===================================================== */
+
+  img,
+  svg {
+    max-width: 100%;
+
+    height: auto;
+
+    object-fit: contain;
+  }
+
+  figure,
+  blockquote {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* =====================================================
+     PRINT
+     ===================================================== */
+
+  @media print {
+
+    @page {
+      size: auto;
+
+      margin:
+        15mm 16mm;
     }
+
+    html,
+    body {
+      width: auto;
+
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      color: #000;
+
+      font-size:
+        var(--document-font-size);
+
+      line-height: 1.42;
+
+      -webkit-print-color-adjust:
+        exact;
+
+      print-color-adjust:
+        exact;
+    }
+
+    .document {
+      width: auto;
+
+      margin: 0;
+    }
+
+    .document-title {
+      margin-bottom: 20px;
+    }
+
+    /*
+      A complete question should move to the next page when
+      there is insufficient room on the current page.
+    */
+
+    .question-block {
+      break-inside:
+        avoid-page !important;
+
+      page-break-inside:
+        avoid !important;
+    }
+
+    .choice,
+    .fact-pattern {
+      break-inside:
+        avoid !important;
+
+      page-break-inside:
+        avoid !important;
+    }
+
+    .explanation {
+      background:
+        #eeeeee !important;
+
+      break-inside:
+        avoid !important;
+
+      page-break-inside:
+        avoid !important;
+    }
+  }
+
+</style>
+
+</head>
+
+<body>
+
+<main class="document">
+
+  <header class="document-title">
+
+    <h1>
+      ${escapeHTML(title)}
+    </h1>
+
+  </header>
+
+  ${blocks}
+
+</main>
+
+</body>
+
+</html>`;
+  }
+
+  /* =========================================================
+     REBUILD OUTPUT
+     ========================================================= */
+
+  function rebuildOutputs() {
+    if (
+      !state.questions.length
+    ) {
+      return;
+    }
+
+    state.questionHTML =
+      buildOutputHTML(
+        state.questions,
+        false
+      );
+
+    state.answerHTML =
+      buildOutputHTML(
+        state.questions,
+        true
+      );
+  }
+
+  fontEl.addEventListener(
+    'input',
+    () => {
+      if (
+        state.questions.length
+      ) {
+        rebuildOutputs();
+      }
+    }
+  );
+
+  /* =========================================================
+     OPEN HTML
+     ========================================================= */
+
+  function openHTML(
+    html
+  ) {
+    const blob =
+      new Blob(
+        [html],
+        {
+          type:
+            'text/html;charset=utf-8'
+        }
+      );
+
+    const url =
+      URL.createObjectURL(
+        blob
+      );
+
+    const win =
+      window.open(
+        url,
+        '_blank'
+      );
+
+    if (!win) {
+      alert(
+        'The browser blocked the new tab. Allow pop-ups or use Download.'
+      );
+    }
+
+    setTimeout(
+      () =>
+        URL.revokeObjectURL(
+          url
+        ),
+      60000
+    );
+  }
+
+  /* =========================================================
+     DOWNLOAD
+     ========================================================= */
+
+  function sanitizeFilename(
+    value
+  ) {
+    return String(
+      value ||
+      'Mock Exam'
+    )
+      .replace(
+        /[<>:"/\\\\|?*]+/g,
+        ' '
+      )
+      .replace(
+        /\s+/g,
+        ' '
+      )
+      .trim()
+      .slice(
+        0,
+        120
+      );
+  }
+
+  function downloadHTML(
+    html,
+    filename
+  ) {
+    const blob =
+      new Blob(
+        [html],
+        {
+          type:
+            'text/html;charset=utf-8'
+        }
+      );
+
+    const url =
+      URL.createObjectURL(
+        blob
+      );
+
+    const link =
+      document.createElement(
+        'a'
+      );
+
+    link.href =
+      url;
+
+    link.download =
+      filename;
+
+    document.body.appendChild(
+      link
+    );
+
+    link.click();
+
+    link.remove();
+
+    setTimeout(
+      () =>
+        URL.revokeObjectURL(
+          url
+        ),
+      5000
+    );
+  }
+
+  /* =========================================================
+     FAILURE DISPLAY
+     ========================================================= */
+
+  function showFailures() {
+    if (
+      !state.failures.length
+    ) {
+      errorsEl.style.display =
+        'none';
+
+      errorsEl.innerHTML =
+        '';
+
+      return;
+    }
+
+    errorsEl.style.display =
+      'block';
+
+    const rows =
+      state.failures
+        .map(
+          failure =>
+            `
+              <div>
+                <b>#${failure.index}</b>
+                ${escapeHTML(failure.id)}
+                —
+                ${escapeHTML(failure.error)}
+              </div>
+            `
+        )
+        .join('');
+
+    errorsEl.innerHTML =
+      `
+        <b>
+          ${state.failures.length}
+          question(s) failed:
+        </b>
+
+        <div style="margin-top:5px">
+          ${rows}
+        </div>
+      `;
+  }
+
+  /* =========================================================
+     RUN
+     ========================================================= */
+
+  async function run() {
+    if (
+      state.running
+    ) {
+      return;
+    }
+
+    const parsed =
+      parseQuestionInput(
+        inputEl.value
+      );
+
+    if (
+      !parsed.ids.length
+    ) {
+      inputEl.classList.add(
+        'me-error-input'
+      );
+
+      inputEl.focus();
+
+      setStatus(
+        'Please paste valid question IDs or the complete Mock Exam JSON.'
+      );
+
+      return;
+    }
+
+    /* ---------------------------------------------------------
+       INITIALIZE
+       --------------------------------------------------------- */
+
+    state.running =
+      true;
+
+    state.stopRequested =
+      false;
+
+    state.questionIds =
+      parsed.ids;
+
+    state.questions =
+      [];
+
+    state.failures =
+      [];
+
+    state.questionHTML =
+      '';
+
+    state.answerHTML =
+      '';
+
+    state.title =
+      titleEl.value
+        .trim() ||
+      parsed.title ||
+      'Mock Exam';
+
+    state.apiBase =
+      apiBaseEl.value
+        .trim() ||
+      DEFAULT_API_BASE;
+
+    if (
+      !state.apiBase.endsWith(
+        '/'
+      )
+    ) {
+      state.apiBase +=
+        '/';
+    }
+
+    /* ---------------------------------------------------------
+       AUTH
+       --------------------------------------------------------- */
+
+    const manualToken =
+      normalizeBearer(
+        tokenEl.value
+      );
+
+    const autoToken =
+      findJWTInStorage();
+
+    state.authorization =
+      manualToken ||
+      autoToken ||
+      '';
+
+    const manualOrg =
+      orgEl.value
+        .trim();
+
+    const autoOrg =
+      findOrganizationIdInStorage();
+
+    state.organizationId =
+      manualOrg ||
+      autoOrg ||
+      '';
+
+    /* ---------------------------------------------------------
+       UI
+       --------------------------------------------------------- */
+
+    startBtn.disabled =
+      true;
+
+    stopBtn.disabled =
+      false;
+
+    resultsEl.style.display =
+      'none';
+
+    errorsEl.style.display =
+      'none';
+
+    setProgress(
+      0
+    );
+
+    setCounter(
+      `0 of ${state.questionIds.length} processed`
+    );
+
+    const authParts =
+      [];
+
+    if (
+      state.authorization
+    ) {
+      authParts.push(
+        'token detected'
+      );
+    }
+
+    if (
+      state.organizationId
+    ) {
+      authParts.push(
+        'organization detected'
+      );
+    }
+
+    setStatus(
+      authParts.length
+        ? `Starting — ${authParts.join(', ')}.`
+        : 'Starting with current browser session…'
+    );
+
+    try {
+      /* -------------------------------------------------------
+         FETCH
+         ------------------------------------------------------- */
+
+      const questions =
+        await fetchAllQuestions(
+          state.questionIds
+        );
+
+      /*
+        Auth failure sets stopRequested but throws from worker.
+      */
+
+      state.questions =
+        questions.sort(
+          (
+            a,
+            b
+          ) =>
+            a.position -
+            b.position
+        );
+
+      showFailures();
+
+      if (
+        !state.questions.length
+      ) {
+        throw new Error(
+          'No questions were successfully fetched.'
+        );
+      }
+
+      /* -------------------------------------------------------
+         BUILD OUTPUT
+         ------------------------------------------------------- */
+
+      rebuildOutputs();
+
+      resultsEl.style.display =
+        'block';
+
+      const success =
+        state.questions.length;
+
+      const total =
+        state.questionIds.length;
+
+      if (
+        state.failures.length
+      ) {
+        setStatus(
+          `Finished with warnings — ${success} of ${total} questions fetched successfully.`
+        );
+
+      } else {
+        setProgress(
+          100
+        );
+
+        setStatus(
+          `Completed — ${success} questions fetched and converted.`
+        );
+      }
+
+      setCounter(
+        `${success} of ${total} questions ready`
+      );
+
+    } catch (
+      error
+    ) {
+      console.error(
+        '[Mock Exam Extractor]',
+        error
+      );
+
+      /*
+        Keep partial successful questions.
+      */
+
+      if (
+        state.questions.length
+      ) {
+        rebuildOutputs();
+
+        resultsEl.style.display =
+          'block';
+      }
+
+      const message =
+        describeFetchError(
+          error
+        );
+
+      setStatus(
+        `Error: ${message}`
+      );
+
+      showFailures();
+
+    } finally {
+      state.running =
+        false;
+
+      startBtn.disabled =
+        false;
+
+      stopBtn.disabled =
+        true;
+    }
+  }
+
+  /* =========================================================
+     EVENTS
+     ========================================================= */
+
+  startBtn.addEventListener(
+    'click',
+    run
+  );
+
+  stopBtn.addEventListener(
+    'click',
+    () => {
+      state.stopRequested =
+        true;
+
+      stopBtn.disabled =
+        true;
+
+      setStatus(
+        'Stopping…'
+      );
+    }
+  );
+
+  $('#me-close')
+    .addEventListener(
+      'click',
+      () => {
+        if (
+          state.running
+        ) {
+          const confirmClose =
+            confirm(
+              'Mock Exam Extractor is still running. Stop and close it?'
+            );
+
+          if (
+            !confirmClose
+          ) {
+            return;
+          }
+
+          state.stopRequested =
+            true;
+        }
+
+        panel.remove();
+        style.remove();
+      }
+    );
+
+  $('#me-open-q')
+    .addEventListener(
+      'click',
+      () => {
+        rebuildOutputs();
+
+        if (
+          state.questionHTML
+        ) {
+          openHTML(
+            state.questionHTML
+          );
+        }
+      }
+    );
+
+  $('#me-open-a')
+    .addEventListener(
+      'click',
+      () => {
+        rebuildOutputs();
+
+        if (
+          state.answerHTML
+        ) {
+          openHTML(
+            state.answerHTML
+          );
+        }
+      }
+    );
+
+  $('#me-download-q')
+    .addEventListener(
+      'click',
+      () => {
+        rebuildOutputs();
+
+        if (
+          !state.questionHTML
+        ) {
+          return;
+        }
+
+        downloadHTML(
+          state.questionHTML,
+          `${sanitizeFilename(
+            state.title
+          )} - Questions.html`
+        );
+      }
+    );
+
+  $('#me-download-a')
+    .addEventListener(
+      'click',
+      () => {
+        rebuildOutputs();
+
+        if (
+          !state.answerHTML
+        ) {
+          return;
+        }
+
+        downloadHTML(
+          state.answerHTML,
+          `${sanitizeFilename(
+            state.title
+          )} - Answers.html`
+        );
+      }
+    );
+
+  /* =========================================================
+     READY
+     ========================================================= */
+
+  console.log(
+    '%cMock Exam Extractor v1.0.0 loaded.',
+    'font-weight:bold;color:#2563eb'
+  );
+
+  console.log(
+    'Paste the complete Mock Exam JSON or question IDs into the floating UI.'
+  );
+
 })();
