@@ -1,0 +1,139 @@
+(() => {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.har';
+
+  input.onchange = e => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const har = JSON.parse(reader.result);
+        
+        // Cari semua entri PDF yang memiliki konten biner tersimpan
+        const pdfEntries = har.log.entries.filter(entry => {
+          const isPdfMime = entry.response.content?.mimeType?.toLowerCase().includes('pdf');
+          const isPdfUrl = entry.request.url?.toLowerCase().includes('.pdf');
+          const hasContent = Boolean(entry.response.content?.text);
+          return (isPdfMime || isPdfUrl) && hasContent;
+        });
+
+        if (pdfEntries.length === 0) {
+          alert("Tidak ditemukan data biner PDF di dalam file HAR ini.");
+          return;
+        }
+
+        // Fungsi bantu: Format ukuran file
+        const formatSize = bytes => {
+          if (!bytes || bytes === 0) return 'Ukuran tidak diketahui';
+          if (bytes < 1024) return bytes + ' B';
+          if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+          return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+        };
+
+        // Fungsi bantu: Ambil nama file dari URL
+        const extractFilename = (url, index) => {
+          try {
+            const cleanUrl = url.split('?')[0].split('#')[0];
+            const name = cleanUrl.substring(cleanUrl.lastIndexOf('/') + 1);
+            return name.toLowerCase().endsWith('.pdf') ? decodeURIComponent(name) : `dokumen_${index + 1}.pdf`;
+          } catch {
+            return `dokumen_${index + 1}.pdf`;
+          }
+        };
+
+        // Fungsi bantu: Download dari Base64
+        const triggerDownload = (base64, filename) => {
+          const byteCharacters = atob(base64);
+          const byteNumbers = new Uint8Array(byteCharacters.length);
+          for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
+          }
+          const blob = new Blob([byteNumbers], { type: 'application/pdf' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        };
+
+        // Buat UI Panel Popup di Halaman Web
+        const existingPanel = document.getElementById('har-pdf-modal');
+        if (existingPanel) existingPanel.remove();
+
+        const panel = document.createElement('div');
+        panel.id = 'har-pdf-modal';
+        panel.style.cssText = `
+          position: fixed; top: 30px; right: 30px; z-index: 999999;
+          background: #1e1e24; color: #fff; padding: 20px;
+          border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+          font-family: system-ui, sans-serif; max-width: 520px; width: 90vw;
+          max-height: 80vh; display: flex; flex-direction: column; gap: 12px;
+        `;
+
+        let listHtml = `
+          <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #333; padding-bottom:10px;">
+            <strong style="font-size:16px;">Ditemukan ${pdfEntries.length} File PDF</strong>
+            <button id="close-har-modal" style="background:none; border:none; color:#aaa; font-size:20px; cursor:pointer;">&times;</button>
+          </div>
+          <button id="download-all-btn" style="background:#2563eb; color:white; border:none; padding:8px 12px; border-radius:6px; font-weight:bold; cursor:pointer;">
+            Unduh Semua PDF Sekaligus
+          </button>
+          <div style="overflow-y:auto; display:flex; flex-direction:column; gap:8px; padding-right:4px;">
+        `;
+
+        pdfEntries.forEach((entry, idx) => {
+          const rawSize = entry.response.content.size || entry.response.bodySize;
+          const sizeText = formatSize(rawSize);
+          const filename = extractFilename(entry.request.url, idx);
+
+          listHtml += `
+            <div style="background:#2a2b36; padding:10px; border-radius:6px; display:flex; justify-content:space-between; align-items:center; gap:10px;">
+              <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:320px;">
+                <div style="font-size:13px; font-weight:600; color:#f3f4f6;" title="${filename}">${filename}</div>
+                <div style="font-size:11px; color:#9ca3af;">${sizeText}</div>
+              </div>
+              <button class="download-single-btn" data-index="${idx}" style="background:#059669; color:white; border:none; padding:6px 12px; border-radius:4px; font-size:12px; cursor:pointer; flex-shrink:0;">
+                Unduh
+              </button>
+            </div>
+          `;
+        });
+
+        listHtml += `</div>`;
+        panel.innerHTML = listHtml;
+        document.body.appendChild(panel);
+
+        // Event: Tombol Tutup
+        document.getElementById('close-har-modal').onclick = () => panel.remove();
+
+        // Event: Download Per File
+        panel.querySelectorAll('.download-single-btn').forEach(btn => {
+          btn.onclick = () => {
+            const index = btn.getAttribute('data-index');
+            const entry = pdfEntries[index];
+            const filename = extractFilename(entry.request.url, index);
+            triggerDownload(entry.response.content.text, filename);
+          };
+        });
+
+        // Event: Download Semua (Jeda 500ms agar browser tidak memblokir multi-download)
+        document.getElementById('download-all-btn').onclick = () => {
+          pdfEntries.forEach((entry, idx) => {
+            setTimeout(() => {
+              const filename = extractFilename(entry.request.url, idx);
+              triggerDownload(entry.response.content.text, filename);
+            }, idx * 500);
+          });
+        };
+
+      } catch (err) {
+        console.error("Gagal membaca file HAR:", err);
+        alert("File HAR rusak atau tidak valid.");
+      }
+    };
+    reader.readAsText(e.target.files[0]);
+  };
+
+  input.click();
+})();
