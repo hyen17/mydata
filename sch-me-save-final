@@ -332,6 +332,8 @@
                     .qc-choice { margin:6px 0; display:flex; gap:8px; line-height:1.45; }
                     .qc-letter { font-weight:700; min-width:22px; }
                     .qc-correct .qc-text { font-weight:700; }
+                    .qc-text { flex:1; min-width:0; }
+                    .qc-text p { margin:0 !important; padding:0 !important; }
                     .qc-tick { font-weight:700; margin-left:6px; color: green; }
                     .qc-answer-block { border-top:1px dashed #e5e7eb; margin-top:10px; padding:10px; background: var(--qc-gray); border-radius:8px; }
                     .qc-choice mjx-container[display="true"] { display:block; }
@@ -362,7 +364,8 @@
                         firstBlock = false;
                     }
 
-                    const idxText = rec.indexText || ('Question ' + (i + 1));
+                    const qNum = parseQNumFromIndexText(rec.indexText) || (i + 1);
+                    const idxText = 'Question ' + qNum + ' of ' + records.length;
                     const choiceLis = rec.choices.map(ch => {
                         const core = (ch.html && ch.html.length) ? ch.html : esc(ch.text);
                         const tick = (mode === 'A' && ch.isCorrect) ? '<span class="qc-tick">✓</span>' : '';
