@@ -334,6 +334,7 @@
                     .qc-correct .qc-text { font-weight:700; }
                     .qc-text { flex:1; min-width:0; }
                     .qc-text p { margin:0 !important; padding:0 !important; }
+                    .qc-text p:has(+ .qc-tick) { display:inline !important; }
                     .qc-tick { font-weight:700; margin-left:6px; color: green; }
                     .qc-answer-block { border-top:1px dashed #e5e7eb; margin-top:10px; padding:10px; background: var(--qc-gray); border-radius:8px; }
                     .qc-choice mjx-container[display="true"] { display:block; }
