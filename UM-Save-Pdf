@@ -1,0 +1,269 @@
+(() => {
+  if (window.__pdfGrabberInstalled) {
+    console.warn("PDF Grabber sudah terpasang. Muat ulang halaman untuk memasang ulang.");
+    return;
+  }
+  window.__pdfGrabberInstalled = true;
+
+  /* ================= UI ================= */
+  const css = (el, s) => (el.style.cssText = s, el);
+  const mk = (tag, style, text) => {
+    const el = document.createElement(tag);
+    if (style) css(el, style);
+    if (text != null) el.textContent = text;
+    return el;
+  };
+
+  const panel = mk("div",
+    "position:fixed;right:16px;bottom:16px;width:320px;z-index:2147483647;" +
+    "background:#1e1e2e;color:#cdd6f4;font:13px/1.4 system-ui,sans-serif;" +
+    "border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,.45);overflow:hidden;");
+
+  const header = mk("div",
+    "display:flex;align-items:center;justify-content:space-between;" +
+    "padding:8px 12px;background:#313244;cursor:move;user-select:none;");
+  header.appendChild(mk("strong", "font-size:13px;", "📄 PDF Grabber"));
+  const btnMin = mk("button",
+    "background:none;border:none;color:#cdd6f4;font-size:16px;cursor:pointer;", "–");
+  header.appendChild(btnMin);
+
+  const body = mk("div", "padding:12px;");
+
+  const status = mk("div",
+    "padding:8px;border-radius:6px;background:#45475a;margin-bottom:8px;font-weight:600;",
+    "⏳ Hook terpasang, menunggu PDF…");
+
+  const info = mk("div", "margin-bottom:8px;font-size:12px;color:#a6adc8;white-space:pre-line;",
+    "Ukuran : -\nSumber : -\nLengkap: -");
+
+  const hint = mk("div", "margin-bottom:8px;font-size:12px;color:#f9e2af;",
+    "Langkah: tutup lalu buka ulang dokumen di viewer agar PDF terdeteksi.");
+
+  const btnRow = mk("div", "display:flex;gap:6px;margin-bottom:8px;");
+  const btnStyle = "flex:1;padding:7px;border:none;border-radius:6px;cursor:pointer;font-weight:600;";
+  const btnDl = mk("button", btnStyle + "background:#a6e3a1;color:#1e1e2e;", "⬇ Unduh PDF");
+  const btnForce = mk("button", btnStyle + "background:#f9e2af;color:#1e1e2e;", "Unduh paksa");
+  const btnReset = mk("button", btnStyle + "background:#f38ba8;color:#1e1e2e;", "Reset");
+  btnRow.append(btnDl, btnForce, btnReset);
+
+  const logBox = mk("div",
+    "max-height:110px;overflow:auto;background:#11111b;border-radius:6px;" +
+    "padding:6px;font:11px/1.4 monospace;color:#a6adc8;");
+
+  body.append(status, info, hint, btnRow, logBox);
+  panel.append(header, body);
+  document.body.appendChild(panel);
+
+  const log = (msg) => {
+    const t = new Date().toLocaleTimeString();
+    const line = mk("div", null, `[${t}] ${msg}`);
+    logBox.appendChild(line);
+    logBox.scrollTop = logBox.scrollHeight;
+    console.log("[PDF Grabber]", msg);
+  };
+
+  const fmt = (n) =>
+    n > 1048576 ? (n / 1048576).toFixed(2) + " MB" :
+    n > 1024 ? (n / 1024).toFixed(1) + " KB" : n + " B";
+
+  let lastSource = "-";
+  function refreshUI() {
+    const has = !!window.__pdfBytes;
+    const ok = !!window.__pdfComplete;
+    if (!has) {
+      status.textContent = "⏳ Hook terpasang, menunggu PDF…";
+      status.style.background = "#45475a";
+      status.style.color = "#cdd6f4";
+    } else if (ok) {
+      status.textContent = "✅ PDF utuh ditemukan, siap diunduh";
+      status.style.background = "#a6e3a1";
+      status.style.color = "#1e1e2e";
+    } else {
+      status.textContent = "⚠️ PDF ditemukan tapi belum lengkap";
+      status.style.background = "#f9e2af";
+      status.style.color = "#1e1e2e";
+    }
+    info.textContent =
+      `Ukuran : ${has ? fmt(window.__pdfBytes.length) : "-"}\n` +
+      `Sumber : ${lastSource}\n` +
+      `Lengkap: ${has ? (ok ? "ya" : "tidak") : "-"}`;
+    btnDl.disabled = !ok;
+    btnDl.style.opacity = ok ? "1" : ".4";
+    btnForce.disabled = !has;
+    btnForce.style.opacity = has ? "1" : ".4";
+  }
+
+  /* ============== Logika deteksi PDF ============== */
+  function saveBytes(b, source) {
+    let start = -1;
+
+    // Cari header PDF: %PDF-
+    for (let i = b.indexOf(37); i >= 0; i = b.indexOf(37, i + 1)) {
+      if (b[i + 1] === 80 && b[i + 2] === 68 &&
+          b[i + 3] === 70 && b[i + 4] === 45) {
+        start = i;
+        break;
+      }
+    }
+    if (start < 0) return;
+
+    // Cari penanda akhir: %%EOF
+    let eof = -1;
+    for (let i = b.lastIndexOf(37); i >= start; i = b.lastIndexOf(37, i - 1)) {
+      if (b[i + 1] === 37 && b[i + 2] === 69 &&
+          b[i + 3] === 79 && b[i + 4] === 70) {
+        eof = i + 5;
+        break;
+      }
+    }
+
+    const complete = eof >= 0;
+    const bytes = b.slice(start, complete ? eof : b.length);
+
+    // Jangan timpa kandidat utuh dengan potongan yang tidak lengkap.
+    if (window.__pdfComplete && !complete) return;
+
+    window.__pdfBytes = bytes;
+    window.__pdfBlob = new Blob([bytes], { type: "application/pdf" });
+    window.__pdfComplete = complete;
+    lastSource = source;
+
+    log(`Kandidat PDF dari ${source}: ${bytes.length} byte; lengkap=${complete}`);
+    refreshUI();
+  }
+
+  function walk(x, source, depth, seen) {
+    if (x == null || depth > 6) return;
+
+    if (typeof x === "string") {
+      const m = x.match(/JVBERi0[A-Za-z0-9+\/=_-]{100,}/);
+      if (m) {
+        try {
+          let s = m[0].replace(/-/g, "+").replace(/_/g, "/");
+          s += "=".repeat((4 - s.length % 4) % 4);
+          const raw = atob(s);
+          const bytes = Uint8Array.from(raw, c => c.charCodeAt(0));
+          saveBytes(bytes, source + " (base64)");
+        } catch {}
+      }
+      if (x.includes("%PDF-")) {
+        saveBytes(new TextEncoder().encode(x), source + " (teks)");
+      }
+      return;
+    }
+
+    if (x instanceof Blob) {
+      x.arrayBuffer().then(ab => saveBytes(new Uint8Array(ab), source));
+      return;
+    }
+    if (x instanceof ArrayBuffer) {
+      saveBytes(new Uint8Array(x), source);
+      return;
+    }
+    if (ArrayBuffer.isView(x)) {
+      saveBytes(new Uint8Array(x.buffer, x.byteOffset, x.byteLength), source);
+      return;
+    }
+
+    if (typeof x !== "object" || seen.has(x)) return;
+    seen.add(x);
+
+    if (Array.isArray(x)) {
+      if (x.length > 5 && typeof x[0] === "number") {
+        saveBytes(Uint8Array.from(x), source);
+      } else {
+        for (let i = 0; i < Math.min(x.length, 100); i++) {
+          walk(x[i], source, depth + 1, seen);
+        }
+      }
+      return;
+    }
+
+    try {
+      for (const key of Object.keys(x).slice(0, 100)) {
+        walk(x[key], source, depth + 1, seen);
+      }
+    } catch {}
+  }
+
+  function scan(x, source) {
+    walk(x, source, 0, new WeakSet());
+  }
+
+  function hook(proto, name) {
+    if (!proto || typeof proto.postMessage !== "function") return;
+    const original = proto.postMessage;
+    proto.postMessage = function (...args) {
+      try {
+        scan(args[0], name + ".postMessage");
+        if (args[1]) scan(args[1], name + ".transfer");
+      } catch {}
+      return original.apply(this, args);
+    };
+  }
+
+  hook(Worker.prototype, "Worker");
+  if (typeof MessagePort !== "undefined") {
+    hook(MessagePort.prototype, "MessagePort");
+  }
+
+  const originalCreateObjectURL = URL.createObjectURL.bind(URL);
+  URL.createObjectURL = function (obj) {
+    try { scan(obj, "URL.createObjectURL"); } catch {}
+    return originalCreateObjectURL(obj);
+  };
+
+  /* ============== Aksi tombol ============== */
+  function download(force) {
+    if (!window.__pdfBlob) return log("Belum ada PDF yang terdeteksi.");
+    if (!window.__pdfComplete && !force) return log("Belum ditemukan PDF utuh.");
+    if (!window.__pdfComplete &&
+        !confirm("PDF belum lengkap (tidak ada %%EOF) dan mungkin rusak. Tetap unduh?")) return;
+
+    const url = originalCreateObjectURL(window.__pdfBlob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = force && !window.__pdfComplete ? "document-partial.pdf" : "document.pdf";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    log("Unduhan dimulai: " + a.download);
+  }
+
+  btnDl.onclick = () => download(false);
+  btnForce.onclick = () => download(true);
+  btnReset.onclick = () => {
+    window.__pdfBytes = window.__pdfBlob = null;
+    window.__pdfComplete = false;
+    lastSource = "-";
+    log("Kandidat direset. Buka ulang dokumen di viewer.");
+    refreshUI();
+  };
+
+  let minimized = false;
+  btnMin.onclick = () => {
+    minimized = !minimized;
+    body.style.display = minimized ? "none" : "block";
+    btnMin.textContent = minimized ? "+" : "–";
+  };
+
+  // Drag panel
+  let drag = null;
+  header.addEventListener("mousedown", (e) => {
+    const r = panel.getBoundingClientRect();
+    drag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+    e.preventDefault();
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (!drag) return;
+    panel.style.left = (e.clientX - drag.dx) + "px";
+    panel.style.top = (e.clientY - drag.dy) + "px";
+    panel.style.right = "auto";
+    panel.style.bottom = "auto";
+  });
+  document.addEventListener("mouseup", () => { drag = null; });
+
+  refreshUI();
+  log("Hook terpasang. Sekarang tutup dan buka ulang dokumen di viewer.");
+})();
