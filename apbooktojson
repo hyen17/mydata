@@ -1,0 +1,521 @@
+(() => {
+  const UI_ID = "__analystPrepFetcherUI";
+  document.getElementById(UI_ID)?.remove();
+
+  // ============================================================
+  // Utilities
+  // ============================================================
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  const escapeHtml = (s) =>
+    String(s ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+
+  const cleanFilename = (name) =>
+    String(name || "export")
+      .trim()
+      .replace(/[\\/:*?"<>|]+/g, "")
+      .replace(/\s+/g, " ")
+      .slice(0, 150) || "export";
+
+  const absolutize = (maybeUrl, base = "https://app.analystprep.com/") => {
+    try {
+      return new URL(maybeUrl, base).href;
+    } catch {
+      return maybeUrl;
+    }
+  };
+
+  const extractImagesFromHtml = (html) => {
+    const imgs = [];
+    const re = /<img\s[^>]*src=["']([^"']+)["'][^>]*>/gi;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      const src = m[1];
+      if (src && !src.startsWith("data:")) imgs.push(src);
+    }
+    return imgs;
+  };
+
+  const rewriteImageUrls = (html, imageMap) => {
+    let result = html;
+    for (const [originalUrl, localName] of imageMap.entries()) {
+      const escaped = originalUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      result = result.replace(new RegExp(escaped, "g"), localName);
+    }
+    return result;
+  };
+
+  const downloadBlob = (blob, filename) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  };
+
+  // ============================================================
+  // API Fetchers
+  // ============================================================
+  const fetchReadingList = async (chapterId, auth) => {
+    const url = `https://api.app.analystprep.com/api/exams/cfa/notes/reading?chapterId=${chapterId}`;
+    
+    // Hapus kata "Bearer " jika user tidak sengaja memasukkannya
+    const cleanAuth = auth.trim().replace(/^Bearer\s+/i, "");
+
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        "accept": "*/*",
+        "authorization": cleanAuth,
+      },
+      mode: "cors",
+      credentials: "include"
+    });
+
+    if (!res.ok) throw new Error(`Gagal fetch daftar reading. HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.success || !data.readings) throw new Error("Respons API tidak valid (tidak ada field readings).");
+    return data.readings;
+  };
+
+  const fetchNotesForReading = async (chapterId, readingId, auth) => {
+    const url = `https://api.app.analystprep.com/api/exams/cfa/notes/all-notes?readingId=${readingId}&chapterId=${chapterId}`;
+    
+    const cleanAuth = auth.trim().replace(/^Bearer\s+/i, "");
+
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        "accept": "*/*",
+        "authorization": cleanAuth,
+      },
+      mode: "cors",
+      credentials: "include"
+    });
+
+    if (!res.ok) throw new Error(`Gagal fetch notes reading ${readingId}. HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(`Respons API error untuk reading ${readingId}`);
+    return data;
+  };
+
+  // ============================================================
+  // UI
+  // ============================================================
+  const ui = document.createElement("div");
+  ui.id = UI_ID;
+
+  Object.assign(ui.style, {
+    position: "fixed",
+    top: "20px",
+    right: "20px",
+    zIndex: "2147483647",
+    width: "600px",
+    maxWidth: "calc(100vw - 40px)",
+    maxHeight: "calc(100vh - 40px)",
+    display: "flex",
+    flexDirection: "column",
+    background: "#fff",
+    color: "#222",
+    border: "1px solid #cfcfcf",
+    borderRadius: "12px",
+    boxShadow: "0 10px 35px rgba(0,0,0,.25)",
+    fontFamily: "system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif",
+    fontSize: "13px",
+    lineHeight: "1.4",
+    overflow: "hidden",
+  });
+
+  ui.innerHTML = `
+    <!-- HEADER -->
+    <div style="flex:0 0 auto;border-bottom:1px solid #ddd;">
+      <div style="padding:10px 14px;display:flex;gap:10px;align-items:center;background:#0f172a;color:#fff;">
+        <div style="font-weight:700;font-size:14px;flex:1;">📥 AnalystPrep Notes Fetcher</div>
+        <button data-act="close" title="Close" style="border:0;background:transparent;color:#fff;font-size:20px;line-height:1;cursor:pointer;">✕</button>
+      </div>
+      <div style="padding:7px 14px;background:#f8fafc;">
+        <div data-role="status" style="font-weight:600;font-size:12px;color:#334155;">Ready. Masukkan Auth (tanpa Bearer) & Chapter ID, klik Get Readings.</div>
+      </div>
+    </div>
+
+    <!-- SCROLLABLE AREA -->
+    <div style="flex:1 1 auto;overflow-y:auto;min-height:0;padding:12px 14px;">
+
+      <!-- STEP 1: Credentials -->
+      <div style="margin-bottom:14px;padding:10px;border:2px solid #3b82f6;border-radius:8px;background:#eff6ff;">
+        <div style="font-weight:800;font-size:13px;margin-bottom:7px;color:#1d4ed8;">🔑 STEP 1: Credentials & Chapter</div>
+
+        <label style="display:block;margin-bottom:7px;">
+          <span style="display:block;font-weight:700;margin-bottom:3px;font-size:12px;">Authorization Token (Raw Token, TANPA Bearer)</span>
+          <input data-role="authToken" type="text" placeholder="eyJhbGciOi..." style="box-sizing:border-box;width:100%;padding:6px 9px;border:1px solid #ccc;border-radius:7px;font:inherit;font-size:11px;font-family:monospace;">
+        </label>
+
+        <div style="display:flex;gap:8px;align-items:flex-end;">
+          <label style="flex:1;">
+            <span style="display:block;font-weight:700;margin-bottom:3px;font-size:12px;">Chapter ID</span>
+            <input data-role="chapterId" type="text" placeholder="Misal: 1" value="1" style="box-sizing:border-box;width:100%;padding:6px 9px;border:1px solid #ccc;border-radius:7px;font:inherit;font-size:12px;">
+          </label>
+          <button data-act="getReadings" style="padding:6px 14px;background:#3b82f6;color:#fff;border:none;border-radius:7px;cursor:pointer;font:inherit;font-weight:700;font-size:12px;height:30px;">🔍 Get Readings</button>
+        </div>
+      </div>
+
+      <!-- STEP 2: Page selection -->
+      <div data-role="pageSection" style="display:none;margin-bottom:14px;padding:10px;border:2px solid #f59e0b;border-radius:8px;background:#fff8ec;">
+        <div style="font-weight:800;font-size:13px;margin-bottom:7px;color:#b45309;">✅ STEP 2: Pilih Reading</div>
+
+        <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:7px;">
+          <button data-act="selectAll" style="padding:4px 9px;background:#fff;border:1px solid #bbb;border-radius:5px;cursor:pointer;font:inherit;font-size:11px;">Select all</button>
+          <button data-act="clearSel" style="padding:4px 9px;background:#fff;border:1px solid #bbb;border-radius:5px;cursor:pointer;font:inherit;font-size:11px;">Clear</button>
+        </div>
+
+        <div data-role="pageList" style="max-height:220px;overflow-y:auto;border:1px solid #ddd;border-radius:6px;background:#fff;padding:5px;"></div>
+        <div data-role="pageSummary" style="margin-top:5px;color:#666;font-size:11px;">—</div>
+      </div>
+
+      <!-- STEP 3: Options -->
+      <div data-role="optionsSection" style="display:none;margin-bottom:14px;padding:10px;border:2px solid #8b5cf6;border-radius:8px;background:#f5f3ff;">
+        <div style="font-weight:800;font-size:13px;margin-bottom:7px;color:#6d28d9;">⚙ STEP 3: Options</div>
+
+        <label style="display:block;margin-bottom:7px;cursor:pointer;">
+          <div style="display:flex;align-items:center;">
+            <input type="checkbox" data-role="splitReading" checked style="margin:0 7px 0 0;cursor:pointer;">
+            <span style="font-weight:700;font-size:12px;">Split JSON per Reading (Default)</span>
+          </div>
+          <span style="display:block;margin-top:2px;color:#777;font-size:11px;margin-left:20px;">Menyimpan JSON terpisah dengan nama file = judul reading.</span>
+        </label>
+        
+        <hr style="border:0;border-top:1px solid #ddd;margin:10px 0;">
+
+        <label style="display:block;margin-bottom:7px;">
+          <span style="display:block;font-weight:700;margin-bottom:3px;font-size:12px;">Image Mode</span>
+          <select data-role="imageMode" style="box-sizing:border-box;width:100%;padding:6px 9px;border:1px solid #ccc;border-radius:7px;font:inherit;background:#fff;">
+            <option value="json-only">JSON Only (keep original URLs)</option>
+            <option value="json-images" selected>JSON + Image Links TXT (rewrite lokal, tanpa download gambar)</option>
+          </select>
+        </label>
+
+        <label style="display:block;margin-bottom:7px;">
+          <span style="display:block;font-weight:700;margin-bottom:3px;font-size:12px;">Image Prefix (opsional)</span>
+          <input data-role="imagePrefix" type="text" placeholder="CFAL127" style="box-sizing:border-box;width:100%;padding:6px 9px;border:1px solid #ccc;border-radius:7px;font:inherit;font-size:12px;">
+        </label>
+
+        <label style="display:block;margin-bottom:4px;">
+          <span style="display:block;font-weight:700;margin-bottom:3px;font-size:12px;">Delay antar fetch (ms)</span>
+          <input data-role="fetchDelay" type="number" min="100" max="5000" step="100" value="500" style="box-sizing:border-box;width:100%;padding:6px 9px;border:1px solid #ccc;border-radius:7px;font:inherit;font-size:12px;">
+        </label>
+      </div>
+
+    </div>
+
+    <!-- FOOTER -->
+    <div style="flex:0 0 auto;padding:10px 14px;border-top:2px solid #ccc;background:#f8fafc;">
+      <div style="display:flex;gap:6px;align-items:center;">
+        <button data-act="fetchSave" style="display:none;flex:1;font-weight:700;padding:10px 10px;background:#f59e0b;color:#fff;border:none;border-radius:8px;cursor:pointer;font:inherit;font-size:13px;">📥 Fetch & Save Notes</button>
+        <button data-act="cancel" style="display:none;flex:1;padding:10px 10px;background:#ef4444;color:#fff;border:none;border-radius:8px;cursor:pointer;font:inherit;font-weight:700;font-size:13px;">Cancel</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(ui);
+
+  const $ = (sel) => ui.querySelector(sel);
+  const statusEl = $('[data-role="status"]');
+  const cancelBtn = $('[data-act="cancel"]');
+  const fetchSaveBtn = $('[data-act="fetchSave"]');
+
+  let parsedReadings = [];
+  let selectedReadingIds = new Set();
+  let busy = false;
+  let cancelled = false;
+
+  const setStatus = (text, isError = false) => {
+    statusEl.textContent = text;
+    statusEl.style.color = isError ? "#ef4444" : "#059669";
+    console.log(`[AnalystPrep Fetcher] ${text}`);
+  };
+
+  const setBusy = (val) => {
+    busy = val;
+    ui.querySelectorAll("button,input,select").forEach((el) => {
+      if (el === cancelBtn) return;
+      el.disabled = val;
+    });
+    cancelBtn.style.display = val ? "inline-block" : "none";
+    if (parsedReadings.length > 0) {
+      fetchSaveBtn.style.display = val ? "none" : "inline-block";
+    }
+  };
+
+  const renderReadingList = () => {
+    const container = $('[data-role="pageList"]');
+    const bits = [];
+
+    parsedReadings.forEach((r) => {
+      const isChecked = selectedReadingIds.has(r.id);
+      bits.push(`
+        <label style="display:flex;gap:8px;padding:6px 8px;align-items:flex-start;cursor:pointer;font-size:12px;border-bottom:1px solid #f1f5f9;">
+          <input type="checkbox" data-reading-id="${r.id}" ${isChecked ? "checked" : ""} style="margin-top:2px;">
+          <div style="flex:1;">
+            <div style="font-weight:700;color:#334155;">${escapeHtml(r.reading)}</div>
+            <div style="font-size:10px;color:#64748b;">ID: ${r.id} | Notes: ${r.totalNotes}</div>
+          </div>
+        </label>
+      `);
+    });
+
+    container.innerHTML = bits.join("") || '<div style="padding:12px;color:#666;">Tidak ada data.</div>';
+    $('[data-role="pageSummary"]').textContent = `Total: ${parsedReadings.length} Readings · ${selectedReadingIds.size} Selected`;
+  };
+
+  // ============================================================
+  // Event Listeners
+  // ============================================================
+  $('[data-act="getReadings"]').onclick = async () => {
+    const auth = $('[data-role="authToken"]').value.trim();
+    const chapterId = $('[data-role="chapterId"]').value.trim();
+
+    if (!auth) return alert("Authorization Token wajib diisi!");
+    if (!chapterId) return alert("Chapter ID wajib diisi!");
+
+    setBusy(true);
+    setStatus("Fetching reading list...");
+
+    try {
+      const readings = await fetchReadingList(chapterId, auth);
+      parsedReadings = readings;
+      selectedReadingIds = new Set(readings.map(r => r.id));
+      
+      $('[data-role="pageSection"]').style.display = "block";
+      $('[data-role="optionsSection"]').style.display = "block";
+      fetchSaveBtn.style.display = "inline-block";
+      
+      renderReadingList();
+      setStatus(`✅ Ditemukan ${readings.length} readings.`);
+    } catch (e) {
+      console.error(e);
+      setStatus(`❌ Error: ${e.message}`, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  $('[data-role="pageList"]').addEventListener("change", (e) => {
+    const t = e.target;
+    if (t.matches("input[data-reading-id]")) {
+      const id = Number(t.dataset.readingId);
+      if (t.checked) selectedReadingIds.add(id);
+      else selectedReadingIds.delete(id);
+      renderReadingList();
+    }
+  });
+
+  $('[data-act="selectAll"]').onclick = () => {
+    selectedReadingIds = new Set(parsedReadings.map(r => r.id));
+    renderReadingList();
+  };
+  
+  $('[data-act="clearSel"]').onclick = () => {
+    selectedReadingIds.clear();
+    renderReadingList();
+  };
+
+  $('[data-act="close"]').onclick = () => {
+    if (busy) return alert("Proses masih berjalan. Cancel terlebih dahulu.");
+    ui.remove();
+  };
+
+  cancelBtn.onclick = () => {
+    cancelled = true;
+    setStatus("Cancelling...");
+  };
+
+  // ============================================================
+  // MAIN: Fetch & Save Notes
+  // ============================================================
+  fetchSaveBtn.onclick = async () => {
+    if (busy) return;
+
+    const auth = $('[data-role="authToken"]').value.trim();
+    const chapterId = $('[data-role="chapterId"]').value.trim();
+    const isSplitMode = $('[data-role="splitReading"]').checked;
+    const withImages = $('[data-role="imageMode"]').value === "json-images";
+    const imagePrefix = $('[data-role="imagePrefix"]').value.trim();
+    const fetchDelay = Math.max(100, Number($('[data-role="fetchDelay"]').value) || 500);
+
+    const targetReadings = parsedReadings.filter(r => selectedReadingIds.has(r.id));
+    if (!targetReadings.length) return alert("Pilih minimal 1 reading!");
+
+    cancelled = false;
+    setBusy(true);
+
+    try {
+      const allDownloadedJson = []; 
+      const usedImageNames = new Set();
+      const imageSummaryReport = []; 
+      const uniqueOriginalUrls = new Set(); // Mencegah duplikat di file link txt
+
+      for (let i = 0; i < targetReadings.length; i++) {
+        if (cancelled) throw new Error("Dibatalkan oleh user.");
+
+        const readingData = targetReadings[i];
+        setStatus(`🌐 Fetching Reading ${i + 1}/${targetReadings.length}: ${readingData.reading}`);
+
+        const resData = await fetchNotesForReading(chapterId, readingData.id, auth);
+        const rawNotes = resData.notes || [];
+        const finalNotes = [];
+        const currentReadingTitle = resData.reading?.readingName || readingData.reading;
+
+        // Proses gambar di tiap note
+        for (let j = 0; j < rawNotes.length; j++) {
+          let note = rawNotes[j];
+          let contentHtml = note.description || "";
+          const pageImageMap = new Map();
+
+          if (withImages && contentHtml) {
+            for (const imgUrl of extractImagesFromHtml(contentHtml)) {
+              const absUrl = absolutize(imgUrl);
+              
+              if (uniqueOriginalUrls.has(absUrl)) {
+                // Gambar sudah diproses di note/reading sebelumnya, lewati pembuatan nama baru
+                // Kita harus mencari nama file yang pernah dibuat untuk URL ini
+                const existingImg = imageSummaryReport.find(img => img.originalUrl === absUrl);
+                if (existingImg) {
+                    pageImageMap.set(imgUrl, existingImg.localFile);
+                }
+                continue;
+              }
+
+              uniqueOriginalUrls.add(absUrl);
+
+              let originalName = "";
+              try {
+                originalName = decodeURIComponent(new URL(absUrl).pathname.split("/").pop());
+              } catch {
+                originalName = imgUrl.split("/").pop().split("?")[0] || `img_${uniqueOriginalUrls.size}.png`;
+              }
+              originalName = originalName.trim().replace(/[\\/:*?"<>|]+/g, "_");
+              if (!originalName || !originalName.includes(".")) originalName = `img_${uniqueOriginalUrls.size}.png`;
+
+              const parts = [];
+              if (imagePrefix) parts.push(imagePrefix);
+              parts.push(originalName);
+              let localName = parts.join("-");
+
+              // Handle duplikat nama file lokal
+              let uniqueName = localName, counter = 1;
+              const extIdx = localName.lastIndexOf(".");
+              const nameBase = extIdx !== -1 ? localName.slice(0, extIdx) : localName;
+              const nameExt = extIdx !== -1 ? localName.slice(extIdx) : ".png";
+              while (usedImageNames.has(uniqueName.toLowerCase())) {
+                uniqueName = `${nameBase}_${counter}${nameExt}`;
+                counter++;
+              }
+              usedImageNames.add(uniqueName.toLowerCase());
+              localName = uniqueName;
+
+              pageImageMap.set(imgUrl, localName);
+              
+              // Tambahkan ke laporan ringkasan
+              imageSummaryReport.push({
+                reading: currentReadingTitle,
+                originalUrl: absUrl,
+                localFile: localName
+              });
+            }
+            contentHtml = rewriteImageUrls(contentHtml, pageImageMap);
+            note.description = contentHtml; // Update content dengan URL lokal
+          }
+          finalNotes.push(note);
+        }
+
+        const readingOutput = {
+          reading: { readingName: currentReadingTitle },
+          notes: finalNotes
+        };
+
+        if (isSplitMode) {
+          const jsonFileName = cleanFilename(currentReadingTitle) || `Reading_${readingData.id}`;
+          setStatus(`💾 Saving JSON file: ${jsonFileName}...`);
+          downloadBlob(
+            new Blob([JSON.stringify(readingOutput, null, 2)], { type: "application/json;charset=utf-8" }),
+            `${jsonFileName}.json`
+          );
+          await sleep(600);
+        } else {
+          allDownloadedJson.push(readingOutput);
+        }
+
+        await sleep(fetchDelay);
+      }
+
+      if (!isSplitMode && allDownloadedJson.length > 0) {
+        setStatus(`💾 Saving combined JSON file...`);
+        downloadBlob(
+          new Blob([JSON.stringify(allDownloadedJson, null, 2)], { type: "application/json;charset=utf-8" }),
+          `AnalystPrep_Combined_${targetReadings.length}_Readings.json`
+        );
+        await sleep(500);
+      }
+
+      // 3. Generate & Download Summary & Link Files (Tanpa Download Image Asli)
+      if (withImages && imageSummaryReport.length > 0) {
+        setStatus("📝 Membuat file TXT ringkasan & link gambar...");
+        
+        let summaryText = `====================================================\n`;
+        summaryText += `RINGKASAN GAMBAR (ANALYSTPREP NOTES)\n`;
+        summaryText += `Total Gambar Unik: ${imageSummaryReport.length}\n`;
+        summaryText += `====================================================\n\n`;
+
+        let rawLinksText = "";
+
+        imageSummaryReport.forEach((img, idx) => {
+          // Format Summary
+          summaryText += `[${idx + 1}] Reading: ${img.reading}\n`;
+          summaryText += `    Lokal File: ${img.localFile}\n`;
+          summaryText += `    URL Asli  : ${img.originalUrl}\n\n`;
+          
+          // Format Links Only
+          rawLinksText += `${img.originalUrl}\n`;
+        });
+
+        // Unduh file Summary
+        downloadBlob(
+          new Blob([summaryText], { type: "text/plain;charset=utf-8" }),
+          `Image_Summary_AnalystPrep.txt`
+        );
+        await sleep(400);
+
+        // Unduh file Raw Links
+        downloadBlob(
+          new Blob([rawLinksText], { type: "text/plain;charset=utf-8" }),
+          `Image_Links_AnalystPrep.txt`
+        );
+        await sleep(400);
+      }
+
+      setStatus(`✅ Selesai! Berhasil memproses notes dari ${targetReadings.length} reading.`);
+      if (isSplitMode && targetReadings.length > 1) {
+        console.log("INFO: Jika browser meminta izin 'Download multiple files', pastikan Anda menekan 'Allow'.");
+      }
+      
+    } catch (e) {
+      console.error(e);
+      if (cancelled || /dibatalkan/i.test(e.message)) {
+        setStatus("❌ Proses dibatalkan.", true);
+      } else {
+        setStatus(`❌ Error: ${e.message}`, true);
+        alert(`Terjadi Kesalahan:\n${e.message}`);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+})();
