@@ -1,0 +1,1041 @@
+(() => {
+  const UI_ID = "__kaplanGqlFetcherUI";
+  document.getElementById(UI_ID)?.remove();
+
+  // ============================================================
+  // Utilities
+  // ============================================================
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  const escapeHtml = (s) =>
+    String(s ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+
+  const cleanFilename = (name) =>
+    String(name || "export")
+      .trim()
+      .replace(/[\\/:*?"<>|]+/g, "")
+      .replace(/\s+/g, " ")
+      .slice(0, 150) || "export";
+
+  const extractModuleNumber = (name) => {
+    const m = String(name || "").match(/(?:Module\s+|Reading\s+)?(\d+(?:\.\d+)?)/i);
+    return m ? m[1] : null;
+  };
+
+  const absolutize = (maybeUrl, base = "https://www.kaplanlearn.com/") => {
+    try {
+      return new URL(maybeUrl, base).href;
+    } catch {
+      return maybeUrl;
+    }
+  };
+
+  const extractImagesFromHtml = (html) => {
+    const imgs = [];
+    const re = /<img\s[^>]*src=["']([^"']+)["'][^>]*>/gi;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      const src = m[1];
+      if (src && !src.startsWith("data:")) imgs.push(src);
+    }
+    return imgs;
+  };
+
+  const rewriteImageUrls = (html, imageMap) => {
+    let result = html;
+    for (const [originalUrl, localName] of imageMap.entries()) {
+      const escaped = originalUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      result = result.replace(new RegExp(escaped, "g"), localName);
+    }
+    return result;
+  };
+
+  const fetchAsBlob = async (url) => {
+    const res = await fetch(url, { credentials: "omit", mode: "cors" }).catch(() => null);
+    if (!res || !res.ok) throw new Error(`Fetch failed: ${url}`);
+    return res.blob();
+  };
+
+  const downloadBlob = (blob, filename) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  };
+
+  // ============================================================
+  // Parse Table of Contents JSON
+  // ============================================================
+  const parseTocJson = (text) => {
+    const json = JSON.parse(text);
+    const items = Array.isArray(json) ? json : [json];
+    let allNodes = [];
+
+    for (const item of items) {
+      const nodes = item?.data?.person?.learner?.course?.nodes;
+      if (Array.isArray(nodes)) allNodes = allNodes.concat(nodes);
+    }
+
+    if (!allNodes.length) throw new Error("Tidak menemukan field data.person.learner.course.nodes di JSON TOC.");
+
+    // Build hierarchy map
+    const nodeMap = new Map();
+    allNodes.forEach((n) => {
+      nodeMap.set(n.nodeId, {
+        nodeId: n.nodeId,
+        parentNodeId: n.parentNodeId,
+        title: n.title,
+        children: [],
+      });
+    });
+
+    // Link parent-child
+    nodeMap.forEach((n) => {
+      if (n.parentNodeId && nodeMap.has(n.parentNodeId)) {
+        nodeMap.get(n.parentNodeId).children.push(n);
+      }
+    });
+
+    // Identify: Topics (no parent in map), Readings (children of topics), Modules (children of readings)
+    const topics = [];
+    nodeMap.forEach((n) => {
+      if (!n.parentNodeId || !nodeMap.has(n.parentNodeId)) {
+        topics.push(n);
+      }
+    });
+
+    // Flatten into pages list (modules + readings key concepts), preserving hierarchy context
+    const pages = [];
+    const walk = (node, topicTitle, readingTitle) => {
+      if (node.children.length === 0) {
+        pages.push({
+          nodeId: node.nodeId,
+          title: node.title,
+          topic: topicTitle || "Unknown Topic",
+          reading: readingTitle || null,
+          parentNodeId: node.parentNodeId,
+        });
+      } else {
+        if (!topicTitle) {
+          node.children.forEach((c) => walk(c, node.title, null));
+        } else {
+          node.children.forEach((c) => walk(c, topicTitle, node.title));
+        }
+      }
+    };
+
+    topics.forEach((t) => walk(t, null, null));
+
+    return { pages, topics, nodeMap };
+  };
+
+  // ============================================================
+  // Fetch node content from GraphQL (FULL QUERY - BYPASS 500 ERROR)
+  // ============================================================
+  const fetchNodeContent = async (nodeId, authorization, programId, enrollmentDetailId) => {
+    const query = `query CourseNode($programId: String!, $enrollmentDetailId: Int!, $nodeId: Int!, $courseNode: Boolean = false) {
+  person {
+    personID
+    learner {
+      isInstructor
+      programs(programId: $programId) {
+        liveSeminarDisplayAddToCalendar
+        regulatoryDashboardVersion
+        liveSeminarExperience
+        liveSeminarInstructions {
+          content
+          __typename
+        }
+        __typename
+      }
+      course(enrollmentDetailId: $enrollmentDetailId) {
+        ...CourseHeader
+        ...CourseGlossaryRules
+        nodes(nodeId: $nodeId) {
+          nodeId
+          activity {
+            ...CourseNextActivity
+            __typename
+          }
+          quizRules {
+            attemptsAllowed
+            __typename
+          }
+          lineage {
+            nodeId
+            __typename
+          }
+          ...CourseNodeHeader
+          ...CourseNodeContent
+          rules {
+            inactivityLockoutMinutes
+            ...CourseNodeTimeTracker
+            ...CourseFooterRules
+            __typename
+          }
+          userStats @include(if: $courseNode) {
+            ...CourseFooterStats
+            __typename
+          }
+          ...CourseNodeControls
+          __typename
+        }
+        userStats {
+          courseCompletionDisplaysNotification
+          enrollmentRequirementsMet
+          productId
+          lastViewedNode {
+            nodeId
+            userStats {
+              isAccessible
+              __typename
+            }
+            __typename
+          }
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}
+
+fragment CourseHeader on Course {
+  title
+  rules {
+    allowBookmarks
+    allowHighlights
+    showGlossaryNavIcon
+    __typename
+  }
+  __typename
+}
+
+fragment CourseNodeHeader on Node {
+  nodeId
+  title
+  userStats {
+    isBookmarked
+    bookmarkNote
+    __typename
+  }
+  __typename
+}
+
+fragment CourseGlossaryRules on Course {
+  rules {
+    showGlossaryToolTip
+    allowHighlights
+    __typename
+  }
+  __typename
+}
+
+fragment CourseNodeContent on Node {
+  nodeId
+  title
+  classificationDisplayName
+  rules {
+    hideVideos
+    canShowMarkComplete
+    __typename
+  }
+  content {
+    contentText
+    __typename
+  }
+  video {
+    ...CourseNodeContentVideo
+    __typename
+  }
+  userStats {
+    highlights {
+      highlightId
+      colour
+      highlightedText
+      startPosition
+      endPosition
+      highlightNotes {
+        highlightNote
+        highlightNoteId
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+  __typename
+}
+
+fragment CourseNodeContentVideo on Video {
+  title
+  ucmsId
+  videoId
+  enrollmentDetail {
+    enrollmentDetailId
+    __typename
+  }
+  channel {
+    channelId
+    __typename
+  }
+  playerInstance
+  accountId
+  maxPosition
+  playerId
+  currentPosition
+  mediaForceProgression
+  hostType
+  roomType
+  accountSubType
+  mediaForceProgressionPercentage
+  playerKey
+  playerScripts
+  cuepoints
+  type
+  thumbnailUrl
+  isPending
+  isLive
+  startDate
+  duration
+  presenter
+  details
+  sources {
+    url
+    label
+    rate
+    __typename
+  }
+  tracks {
+    default
+    url
+    label
+    kind
+    __typename
+  }
+  playerSkinData {
+    fullscreenButton
+    skin
+    __typename
+  }
+  __typename
+}
+
+fragment CourseNextActivity on Activity {
+  activityId
+  name
+  isComplete
+  nextActivity {
+    activityId
+    name
+    durationMinutes
+    markedForReview
+    isAccessible
+    expectedDate
+    __typename
+  }
+  __typename
+}
+
+fragment CourseFooterRules on NodeRules {
+  canShowMarkComplete
+  __typename
+}
+
+fragment CourseFooterStats on NodeUserStats {
+  isComplete
+  __typename
+}
+
+fragment CourseNodeControls on Node {
+  nodeId
+  parentNodeId
+  nextNodeWithContent {
+    title
+    nodeId
+    parentNodeId
+    userStats {
+      isAccessible
+      __typename
+    }
+    __typename
+  }
+  previousNodeWithContent {
+    title
+    nodeId
+    userStats {
+      isAccessible
+      __typename
+    }
+    __typename
+  }
+  __typename
+}
+
+fragment CourseNodeTimeTracker on NodeRules {
+  timeAccruedUponCompletion
+  __typename
+}`;
+
+    const body = [{
+      operationName: "CourseNode",
+      variables: {
+        courseNode: true,
+        programId: programId,
+        enrollmentDetailId: parseInt(enrollmentDetailId, 10),
+        nodeId: parseInt(nodeId, 10)
+      },
+      query: query,
+    }];
+
+    const headers = {
+      "accept": "*/*",
+      "content-type": "application/json",
+      "x-graviton-caller": "12d02a27",
+      "authorization": authorization.trim().startsWith("Bearer ")
+        ? authorization.trim()
+        : `Bearer ${authorization.trim()}`,
+    };
+
+    const res = await fetch("https://gql.kaplanlearn.com/graphql", {
+      method: "POST",
+      headers: headers,
+      body: JSON.stringify(body),
+      credentials: "include",
+      mode: "cors",
+    });
+
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} — ${res.statusText}. Cek apakah authorization token masih valid.`);
+    }
+
+    const json = await res.json();
+    
+    if (json[0]?.errors && json[0]?.errors.length > 0) {
+      const errMsg = json[0].errors[0].message;
+      const subErr = json[0].errors[0].subsystem?.message || "";
+      throw new Error(`GraphQL Error: ${errMsg} ${subErr}`);
+    }
+
+    const items = Array.isArray(json) ? json : [json];
+
+    for (const item of items) {
+      const nodes = item?.data?.person?.learner?.course?.nodes;
+      if (Array.isArray(nodes)) {
+        for (const node of nodes) {
+          if (String(node?.nodeId) === String(nodeId)) {
+            return {
+              nodeId: node.nodeId,
+              title: node.title || "",
+              activityName: node.activity?.name || node.title || "",
+              activityId: node.activity?.activityId || null,
+              contentText: node?.content?.contentText || "",
+              parentNodeId: node.parentNodeId,
+            };
+          }
+        }
+      }
+    }
+
+    throw new Error(`Response berhasil tapi tidak berisi data content untuk node ${nodeId}`);
+  };
+
+  // ============================================================
+  // UI
+  // ============================================================
+  const ui = document.createElement("div");
+  ui.id = UI_ID;
+
+  Object.assign(ui.style, {
+    position: "fixed",
+    top: "20px",
+    right: "20px",
+    zIndex: "2147483647",
+    width: "600px",
+    maxWidth: "calc(100vw - 40px)",
+    maxHeight: "calc(100vh - 40px)",
+    display: "flex",
+    flexDirection: "column",
+    background: "#fff",
+    color: "#222",
+    border: "1px solid #cfcfcf",
+    borderRadius: "12px",
+    boxShadow: "0 10px 35px rgba(0,0,0,.25)",
+    fontFamily: "system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif",
+    fontSize: "13px",
+    lineHeight: "1.4",
+    overflow: "hidden",
+  });
+
+  ui.innerHTML = `
+    <!-- HEADER -->
+    <div style="flex:0 0 auto;border-bottom:1px solid #ddd;">
+      <div style="padding:10px 14px;display:flex;gap:10px;align-items:center;background:#1a73e8;color:#fff;">
+        <div style="font-weight:700;font-size:14px;flex:1;">📥 Kaplan GraphQL Direct Fetcher v1.3 (Auto-Split Fixed)</div>
+        <button data-act="close" title="Close" style="border:0;background:transparent;color:#fff;font-size:20px;line-height:1;cursor:pointer;">✕</button>
+      </div>
+      <div style="padding:7px 14px;background:#f7f7f7;">
+        <div data-role="status" style="font-weight:600;font-size:12px;">Ready. Paste TOC JSON & Authorization below, then click "Parse TOC".</div>
+      </div>
+    </div>
+
+    <!-- SCROLLABLE AREA -->
+    <div style="flex:1 1 auto;overflow-y:auto;min-height:0;padding:12px 14px;">
+
+      <!-- STEP 1: Authorization + Course Info -->
+      <div style="margin-bottom:14px;padding:10px;border:2px solid #1a73e8;border-radius:8px;background:#eef4ff;">
+        <div style="font-weight:800;font-size:13px;margin-bottom:7px;color:#1a73e8;">🔑 STEP 1: Credentials</div>
+
+        <label style="display:block;margin-bottom:7px;">
+          <span style="display:block;font-weight:700;margin-bottom:3px;font-size:12px;">Authorization Token</span>
+          <input data-role="authToken" type="text" placeholder="eyJhbGciOi... (Bearer boleh / tanpa Bearer juga boleh)" style="box-sizing:border-box;width:100%;padding:6px 9px;border:1px solid #ccc;border-radius:7px;font:inherit;font-size:11px;font-family:monospace;">
+          <span style="display:block;margin-top:2px;color:#777;font-size:10px;">Ambil dari DevTools → Network → request graphql → Request Headers → authorization</span>
+        </label>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:7px;">
+          <label>
+            <span style="display:block;font-weight:700;margin-bottom:3px;font-size:12px;">Program ID</span>
+            <input data-role="programId" type="text" placeholder="d6aa4f03cdfa2865..." style="box-sizing:border-box;width:100%;padding:6px 9px;border:1px solid #ccc;border-radius:7px;font:inherit;font-size:11px;font-family:monospace;">
+          </label>
+          <label>
+            <span style="display:block;font-weight:700;margin-bottom:3px;font-size:12px;">Enrollment Detail ID</span>
+            <input data-role="enrollmentId" type="text" placeholder="135485598" style="box-sizing:border-box;width:100%;padding:6px 9px;border:1px solid #ccc;border-radius:7px;font-inherit;font-size:11px;font-family:monospace;">
+          </label>
+        </div>
+
+        <label style="display:block;">
+          <span style="display:block;font-weight:700;margin-bottom:3px;font-size:12px;">Course Name</span>
+          <input data-role="courseName" type="text" placeholder="SchweserNotes - Book 1" value="Course Export" style="box-sizing:border-box;width:100%;padding:6px 9px;border:1px solid #ccc;border-radius:7px;font:inherit;font-size:12px;">
+        </label>
+
+        <div style="margin-top:7px;padding:6px 8px;background:#fff;border-radius:5px;border:1px solid #ccddff;">
+          <div style="font-size:11px;color:#555;line-height:1.4;">
+            <b>💡 Cara ambil Program ID & Enrollment ID:</b><br>
+            Dari URL browser: <code style="background:#eee;padding:1px 4px;border-radius:3px;">kaplanlearn.com/.../index/<b style="color:#1a73e8;">[PROGRAM_ID]</b>/course/<b style="color:#1a73e8;">[ENROLLMENT_ID]</b>/node/...</code>
+          </div>
+          <button data-act="autoFill" style="margin-top:5px;padding:4px 10px;background:#1a73e8;color:#fff;border:none;border-radius:5px;cursor:pointer;font:inherit;font-size:11px;font-weight:700;">Auto-fill dari URL halaman ini</button>
+        </div>
+      </div>
+
+      <!-- STEP 2: Paste TOC JSON -->
+      <div style="margin-bottom:14px;padding:10px;border:2px solid #34a853;border-radius:8px;background:#eefef0;">
+        <div style="font-weight:800;font-size:13px;margin-bottom:7px;color:#1e8e3e;">📋 STEP 2: Paste Table of Contents JSON</div>
+        <textarea data-role="tocJson" placeholder='[{"data":{"person":{"learner":{"course":{"nodes":[...]}}}}}]' style="box-sizing:border-box;width:100%;height:120px;padding:7px 9px;border:1px solid #ccc;border-radius:7px;font-inherit;font-size:11px;font-family:monospace;resize:vertical;"></textarea>
+        <div style="display:flex;gap:6px;margin-top:6px;">
+          <button data-act="parseToc" style="flex:1;padding:7px 10px;background:#34a853;color:#fff;border:none;border-radius:7px;cursor:pointer;font:inherit;font-size:12px;font-weight:700;">🔍 Parse TOC</button>
+          <button data-act="clearToc" style="padding:7px 10px;background:#eee;color:#333;border:1px solid #ccc;border-radius:7px;cursor:pointer;font:inherit;font-size:12px;">Clear</button>
+        </div>
+      </div>
+
+      <!-- STEP 3: Page selection -->
+      <div data-role="pageSection" style="display:none;margin-bottom:14px;padding:10px;border:2px solid #f59e0b;border-radius:8px;background:#fff8ec;">
+        <div style="font-weight:800;font-size:13px;margin-bottom:7px;color:#b45309;">✅ STEP 3: Pilih halaman untuk difetch</div>
+
+        <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:7px;">
+          <button data-act="selectAll" style="padding:4px 9px;background:#fff;border:1px solid #bbb;border-radius:5px;cursor:pointer;font:inherit;font-size:11px;">Select all</button>
+          <button data-act="clearSel" style="padding:4px 9px;background:#fff;border:1px solid #bbb;border-radius:5px;cursor:pointer;font:inherit;font-size:11px;">Clear</button>
+          <button data-act="expandAll" style="padding:4px 9px;background:#fff;border:1px solid #bbb;border-radius:5px;cursor:pointer;font:inherit;font-size:11px;">Expand</button>
+          <button data-act="collapseAll" style="padding:4px 9px;background:#fff;border:1px solid #bbb;border-radius:5px;cursor:pointer;font:inherit;font-size:11px;">Collapse</button>
+        </div>
+
+        <div data-role="pageList" style="max-height:260px;overflow-y:auto;border:1px solid #ddd;border-radius:6px;background:#fff;"></div>
+        <div data-role="pageSummary" style="margin-top:5px;color:#666;font-size:11px;">—</div>
+      </div>
+
+      <!-- STEP 4: Options -->
+      <div data-role="optionsSection" style="display:none;margin-bottom:14px;padding:10px;border:2px solid #9333ea;border-radius:8px;background:#f8f0ff;">
+        <div style="font-weight:800;font-size:13px;margin-bottom:7px;color:#7e22ce;">⚙ STEP 4: Export Options</div>
+
+        <label style="display:block;margin-bottom:7px;cursor:pointer;">
+          <div style="display:flex;align-items:center;">
+            <input type="checkbox" data-role="splitReading" checked style="margin:0 7px 0 0;cursor:pointer;">
+            <span style="font-weight:700;font-size:12px;">Split JSON by Reading</span>
+          </div>
+          <span style="display:block;margin-top:2px;color:#777;font-size:11px;margin-left:20px;">Simpan file JSON terpisah per Reading. Nama file otomatis menggunakan judul Reading. Jika dimatikan, semua akan digabung dalam 1 file.</span>
+        </label>
+        
+        <hr style="border:0;border-top:1px solid #e0c8f5;margin:10px 0;">
+
+        <label style="display:block;margin-bottom:7px;">
+          <span style="display:block;font-weight:700;margin-bottom:3px;font-size:12px;">Image Mode</span>
+          <select data-role="imageMode" style="box-sizing:border-box;width:100%;padding:6px 9px;border:1px solid #ccc;border-radius:7px;font:inherit;background:#fff;">
+            <option value="json-only">JSON Only (keep original image URLs)</option>
+            <option value="json-images" selected>JSON + Download Images (rewrite ke prefix lokal)</option>
+          </select>
+        </label>
+
+        <label style="display:block;margin-bottom:7px;">
+          <span style="display:block;font-weight:700;margin-bottom:3px;font-size:12px;">Image Prefix (opsional)</span>
+          <input data-role="imagePrefix" type="text" placeholder="L127" style="box-sizing:border-box;width:100%;padding:6px 9px;border:1px solid #ccc;border-radius:7px;font:inherit;font-size:12px;">
+        </label>
+
+        <label style="display:block;margin-bottom:4px;">
+          <span style="display:block;font-weight:700;margin-bottom:3px;font-size:12px;">Delay antar fetch (ms)</span>
+          <input data-role="fetchDelay" type="number" min="100" max="5000" step="100" value="500" style="box-sizing:border-box;width:100%;padding:6px 9px;border:1px solid #ccc;border-radius:7px;font:inherit;font-size:12px;">
+        </label>
+      </div>
+
+    </div>
+
+    <!-- FOOTER -->
+    <div style="flex:0 0 auto;padding:10px 14px;border-top:2px solid #ccc;background:#f7f7f7;">
+      <div style="display:flex;gap:6px;align-items:center;">
+        <button data-act="fetch" style="flex:1;font-weight:700;padding:10px 10px;background:#f59e0b;color:#fff;border:none;border-radius:8px;cursor:pointer;font:inherit;font-size:13px;">📥 Fetch & Save JSON</button>
+        <button data-act="cancel" style="display:none;flex:1;padding:10px 10px;background:#d93025;color:#fff;border:none;border-radius:8px;cursor:pointer;font:inherit;font-weight:700;font-size:13px;">Cancel</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(ui);
+
+  const $ = (sel) => ui.querySelector(sel);
+  const statusEl = $('[data-role="status"]');
+  const cancelBtn = $('[data-act="cancel"]');
+  const fetchBtn = $('[data-act="fetch"]');
+
+  let parsedPages = [];
+  let selectedNodeIds = new Set();
+  let busy = false;
+  let cancelled = false;
+
+  const setStatus = (text, isError = false) => {
+    statusEl.textContent = text;
+    statusEl.style.color = isError ? "#d93025" : "#1e8e3e";
+    console.log(`[Kaplan Fetcher] ${text}`);
+  };
+
+  const setBusy = (val) => {
+    busy = val;
+    ui.querySelectorAll("button,input,select,textarea").forEach((el) => {
+      if (el === cancelBtn) return;
+      el.disabled = val;
+    });
+    cancelBtn.style.display = val ? "inline-block" : "none";
+    fetchBtn.style.display = val ? "none" : "inline-block";
+  };
+
+  // ============================================================
+  // Auto-fill from URL
+  // ============================================================
+  $('[data-act="autoFill"]').onclick = () => {
+    const url = location.href;
+    const match = url.match(/\/index\/([a-f0-9]+)\/course\/(\d+)/i);
+    if (match) {
+      $('[data-role="programId"]').value = match[1];
+      $('[data-role="enrollmentId"]').value = match[2];
+      setStatus(`✅ Auto-filled: programId & enrollmentId dari URL.`);
+    } else {
+      setStatus("❌ URL tidak sesuai format. Pastikan Anda di halaman kaplanlearn.com course.", true);
+    }
+
+    const courseName = document.querySelector('[data-test-id="course-name"]')?.textContent?.trim();
+    if (courseName) $('[data-role="courseName"]').value = courseName;
+  };
+
+  // ============================================================
+  // Parse TOC
+  // ============================================================
+  const buildHierarchicalPages = (pages) => {
+    const topicMap = new Map();
+    pages.forEach((p) => {
+      if (!topicMap.has(p.topic)) topicMap.set(p.topic, { title: p.topic, readings: new Map(), pages: [] });
+      const topic = topicMap.get(p.topic);
+      const rName = p.reading || "(Direct)";
+      if (!topic.readings.has(rName)) topic.readings.set(rName, { title: rName, synthetic: !p.reading, pages: [] });
+      topic.readings.get(rName).pages.push(p);
+      topic.pages.push(p);
+    });
+    return Array.from(topicMap.values()).map((t) => ({
+      ...t,
+      readings: Array.from(t.readings.values()),
+    }));
+  };
+
+  let hierarchy = [];
+
+  const renderPageList = () => {
+    const container = $('[data-role="pageList"]');
+    const bits = [];
+
+    hierarchy.forEach((topic, ti) => {
+      const topicSel = topic.pages.filter((p) => selectedNodeIds.has(p.nodeId)).length;
+      const topicAll = topicSel === topic.pages.length && topic.pages.length > 0;
+      const topicSome = topicSel > 0 && topicSel < topic.pages.length;
+
+      bits.push(`
+        <details data-topic="${ti}" open style="border-bottom:1px solid #e7e7e7;">
+          <summary style="list-style:none;display:flex;align-items:center;gap:8px;padding:7px 10px;background:#f2f4f8;cursor:pointer;">
+            <input type="checkbox" data-topic-cb="${ti}" ${topicAll ? "checked" : ""} ${topicSome ? "data-indeterminate='1'" : ""} style="margin:0;">
+            <span style="font-weight:800;flex:1;font-size:12px;">${escapeHtml(topic.title)}</span>
+            <span style="color:#777;font-size:10px;">${topic.pages.length} pg</span>
+          </summary>
+          <div>
+      `);
+
+      topic.readings.forEach((reading, ri) => {
+        const rSel = reading.pages.filter((p) => selectedNodeIds.has(p.nodeId)).length;
+        const rAll = rSel === reading.pages.length && reading.pages.length > 0;
+        const rSome = rSel > 0 && rSel < reading.pages.length;
+
+        bits.push(`
+          <details data-reading="${ti}-${ri}" open style="border-top:1px solid #eee;">
+            <summary style="list-style:none;display:flex;align-items:flex-start;gap:8px;padding:5px 10px 5px 24px;background:#fafafa;cursor:pointer;">
+              <input type="checkbox" data-reading-cb="${ti}-${ri}" ${rAll ? "checked" : ""} ${rSome ? "data-indeterminate='1'" : ""} style="margin-top:2px;">
+              <span style="font-weight:700;flex:1;font-size:11px;">${escapeHtml(reading.title)}</span>
+              <span style="color:#888;font-size:10px;">${reading.pages.length}</span>
+            </summary>
+            <div>
+        `);
+
+        reading.pages.forEach((page) => {
+          bits.push(`
+            <label style="display:flex;gap:7px;padding:4px 10px 4px 42px;align-items:flex-start;cursor:pointer;font-size:11px;">
+              <input type="checkbox" data-node-id="${page.nodeId}" ${selectedNodeIds.has(page.nodeId) ? "checked" : ""} style="margin-top:2px;">
+              <span style="min-width:0;flex:1;">${escapeHtml(page.title)} <span style="color:#999;">[${page.nodeId}]</span></span>
+            </label>
+          `);
+        });
+
+        bits.push(`</div></details>`);
+      });
+
+      bits.push(`</div></details>`);
+    });
+
+    container.innerHTML = bits.join("") || '<div style="padding:12px 14px;color:#666;">Tidak ada data.</div>';
+
+    container.querySelectorAll('[data-indeterminate="1"]').forEach((cb) => {
+      cb.indeterminate = true;
+    });
+
+    const totalSel = selectedNodeIds.size;
+    const readingCount = hierarchy.reduce((n, t) => n + t.readings.length, 0);
+    $('[data-role="pageSummary"]').textContent = `${hierarchy.length} Topics · ${readingCount} Readings · ${parsedPages.length} pages · ${totalSel} selected`;
+  };
+
+  $('[data-act="parseToc"]').onclick = () => {
+    const text = $('[data-role="tocJson"]').value.trim();
+    if (!text) {
+      setStatus("❌ Paste TOC JSON dulu.", true);
+      return;
+    }
+    try {
+      const { pages } = parseTocJson(text);
+      parsedPages = pages;
+      selectedNodeIds = new Set(pages.map((p) => p.nodeId));
+      hierarchy = buildHierarchicalPages(pages);
+
+      $('[data-role="pageSection"]').style.display = "block";
+      $('[data-role="optionsSection"]').style.display = "block";
+      renderPageList();
+      setStatus(`✅ Parsed: ${pages.length} halaman ditemukan di ${hierarchy.length} topics.`);
+    } catch (e) {
+      console.error(e);
+      setStatus(`❌ Parse error: ${e.message}`, true);
+      alert(`Parse error:\n${e.message}`);
+    }
+  };
+
+  $('[data-act="clearToc"]').onclick = () => {
+    $('[data-role="tocJson"]').value = "";
+    $('[data-role="pageSection"]').style.display = "none";
+    $('[data-role="optionsSection"]').style.display = "none";
+    parsedPages = [];
+    selectedNodeIds.clear();
+    hierarchy = [];
+    setStatus("Cleared.");
+  };
+
+  // ============================================================
+  // Page list interaction
+  // ============================================================
+  $('[data-role="pageList"]').addEventListener("click", (e) => {
+    if (e.target.matches("input[data-topic-cb],input[data-reading-cb]")) e.stopPropagation();
+  });
+
+  $('[data-role="pageList"]').addEventListener("change", (e) => {
+    const t = e.target;
+    if (t.matches("input[data-node-id]")) {
+      const id = Number(t.dataset.nodeId);
+      if (t.checked) selectedNodeIds.add(id);
+      else selectedNodeIds.delete(id);
+      renderPageList();
+      return;
+    }
+    if (t.matches("input[data-topic-cb]")) {
+      const ti = Number(t.dataset.topicCb);
+      hierarchy[ti]?.pages.forEach((p) => {
+        if (t.checked) selectedNodeIds.add(p.nodeId);
+        else selectedNodeIds.delete(p.nodeId);
+      });
+      renderPageList();
+      return;
+    }
+    if (t.matches("input[data-reading-cb]")) {
+      const [ti, ri] = t.dataset.readingCb.split("-").map(Number);
+      hierarchy[ti]?.readings[ri]?.pages.forEach((p) => {
+        if (t.checked) selectedNodeIds.add(p.nodeId);
+        else selectedNodeIds.delete(p.nodeId);
+      });
+      renderPageList();
+    }
+  });
+
+  $('[data-act="selectAll"]').onclick = () => {
+    selectedNodeIds = new Set(parsedPages.map((p) => p.nodeId));
+    renderPageList();
+  };
+  $('[data-act="clearSel"]').onclick = () => {
+    selectedNodeIds.clear();
+    renderPageList();
+  };
+  $('[data-act="expandAll"]').onclick = () => {
+    $('[data-role="pageList"]').querySelectorAll("details").forEach((d) => (d.open = true));
+  };
+  $('[data-act="collapseAll"]').onclick = () => {
+    $('[data-role="pageList"]').querySelectorAll("details").forEach((d) => (d.open = false));
+  };
+
+  $('[data-act="close"]').onclick = () => {
+    if (busy) {
+      alert("Proses masih berjalan. Cancel terlebih dahulu.");
+      return;
+    }
+    ui.remove();
+  };
+
+  cancelBtn.onclick = () => {
+    cancelled = true;
+    setStatus("Cancelling...");
+  };
+
+  // ============================================================
+  // MAIN: Fetch & Save
+  // ============================================================
+  fetchBtn.onclick = async () => {
+    if (busy) return;
+
+    const auth = $('[data-role="authToken"]').value.trim();
+    const programId = $('[data-role="programId"]').value.trim();
+    const enrollmentId = $('[data-role="enrollmentId"]').value.trim();
+    const courseName = $('[data-role="courseName"]').value.trim() || "Course Export";
+
+    if (!auth) return alert("Authorization token wajib diisi!");
+    if (!programId) return alert("Program ID wajib diisi!");
+    if (!enrollmentId) return alert("Enrollment Detail ID wajib diisi!");
+
+    const selectedPages = parsedPages.filter((p) => selectedNodeIds.has(p.nodeId));
+    if (!selectedPages.length) return alert("Pilih minimal 1 halaman!");
+
+    const isSplitMode = $('[data-role="splitReading"]').checked;
+    const imagePrefix = $('[data-role="imagePrefix"]').value.trim();
+    const withImages = $('[data-role="imageMode"]').value === "json-images";
+    const fetchDelay = Math.max(100, Number($('[data-role="fetchDelay"]').value) || 500);
+
+    cancelled = false;
+    setBusy(true);
+
+    try {
+      const jsonPages = [];
+      const allImageDownloads = new Map();
+      const usedImageNames = new Set();
+      const failed = [];
+
+      // 1. Fetching Data Phase
+      for (let i = 0; i < selectedPages.length; i++) {
+        if (cancelled) throw new Error("Export cancelled by user.");
+
+        const item = selectedPages[i];
+        setStatus(`🌐 Fetching ${i + 1}/${selectedPages.length}: ${item.title} [${item.nodeId}]`);
+
+        let nodeData = null;
+        try {
+          nodeData = await fetchNodeContent(item.nodeId, auth, programId, enrollmentId);
+        } catch (err) {
+          console.error(`Failed to fetch node ${item.nodeId}:`, err);
+          failed.push(`${item.title} [${item.nodeId}]: ${err.message}`);
+        }
+
+        const activityName = nodeData?.activityName || item.title;
+        let contentText = nodeData?.contentText || "";
+        const moduleNum = extractModuleNumber(activityName) || extractModuleNumber(item.title);
+        const pageImageMap = new Map();
+
+        if (withImages && contentText) {
+          for (const imgUrl of extractImagesFromHtml(contentText)) {
+            const absUrl = absolutize(imgUrl);
+            if (allImageDownloads.has(absUrl)) {
+              pageImageMap.set(imgUrl, allImageDownloads.get(absUrl).localName);
+              continue;
+            }
+
+            let originalName = "";
+            try {
+              originalName = decodeURIComponent(new URL(absUrl).pathname.split("/").pop());
+            } catch {
+              originalName = imgUrl.split("/").pop().split("?")[0] || `image_${allImageDownloads.size + 1}.png`;
+            }
+            originalName = originalName.trim().replace(/[\\/:*?"<>|]+/g, "_");
+            if (!originalName || !originalName.includes(".")) originalName = `image_${allImageDownloads.size + 1}.png`;
+
+            const parts = [];
+            if (imagePrefix) parts.push(imagePrefix);
+            if (moduleNum) parts.push(moduleNum);
+            parts.push(originalName);
+            let localName = parts.join("-");
+
+            let uniqueName = localName, counter = 1;
+            const extIdx = localName.lastIndexOf(".");
+            const nameBase = extIdx !== -1 ? localName.slice(0, extIdx) : localName;
+            const nameExt = extIdx !== -1 ? localName.slice(extIdx) : ".png";
+            while (usedImageNames.has(uniqueName.toLowerCase())) {
+              uniqueName = `${nameBase}_${counter}${nameExt}`;
+              counter++;
+            }
+            usedImageNames.add(uniqueName.toLowerCase());
+            localName = uniqueName;
+
+            allImageDownloads.set(absUrl, { localName, url: absUrl });
+            pageImageMap.set(imgUrl, localName);
+          }
+          contentText = rewriteImageUrls(contentText, pageImageMap);
+        }
+
+        jsonPages.push({
+          index: i,
+          nodeId: item.nodeId,
+          topic: item.topic,
+          reading: item.reading,
+          title: item.title,
+          activityName: activityName,
+          moduleNumber: moduleNum,
+          contentLength: contentText.length,
+          contentText: contentText,
+          images: withImages
+            ? Array.from(pageImageMap.entries()).map(([o, l]) => ({ originalUrl: absolutize(o), localFilename: l }))
+            : undefined,
+          _status: nodeData ? "ok" : "failed",
+        });
+
+        await sleep(fetchDelay);
+      }
+
+      // 2. Saving JSON Phase
+      let groupedByReading = {}; // Variabel dipindahkan ke scope luar agar tidak memicu error
+      if (isSplitMode) {
+        // Mode Split: Kelompokkan berdasarkan Reading
+        for (const p of jsonPages) {
+          const groupName = p.reading || p.topic || courseName; 
+          if (!groupedByReading[groupName]) {
+            groupedByReading[groupName] = [];
+          }
+          groupedByReading[groupName].push(p);
+        }
+
+        let groupCount = 1;
+        const totalGroups = Object.keys(groupedByReading).length;
+        
+        for (const [readingTitle, pagesInGroup] of Object.entries(groupedByReading)) {
+          if (cancelled) throw new Error("Cancelled during JSON save.");
+          
+          const output = {
+            exportDate: new Date().toISOString(),
+            courseName: courseName,
+            readingName: readingTitle,
+            imagePrefix: imagePrefix || null,
+            imageMode: withImages ? "local" : "original",
+            totalPages: pagesInGroup.length,
+            okCount: pagesInGroup.filter((p) => p.contentLength > 0).length,
+            pages: pagesInGroup,
+          };
+
+          const jsonFileName = cleanFilename(readingTitle);
+          setStatus(`💾 Saving JSON file (${groupCount}/${totalGroups}): ${jsonFileName}...`);
+          
+          downloadBlob(
+            new Blob([JSON.stringify(output, null, 2)], { type: "application/json;charset=utf-8" }),
+            `${jsonFileName}.json`
+          );
+          
+          await sleep(600);
+          groupCount++;
+        }
+      } else {
+        // Mode Gabung (1 File JSON)
+        const output = {
+          exportDate: new Date().toISOString(),
+          courseName: courseName,
+          imagePrefix: imagePrefix || null,
+          imageMode: withImages ? "local" : "original",
+          totalPages: jsonPages.length,
+          okCount: jsonPages.filter((p) => p.contentLength > 0).length,
+          failedCount: failed.length,
+          failedPages: failed.length ? failed : undefined,
+          pages: jsonPages,
+        };
+
+        const jsonFileName = cleanFilename(`${courseName} - ${selectedPages.length} pages`);
+        setStatus(`💾 Saving single JSON file...`);
+        downloadBlob(
+          new Blob([JSON.stringify(output, null, 2)], { type: "application/json;charset=utf-8" }),
+          `${jsonFileName}.json`
+        );
+        await sleep(500);
+      }
+
+      // 3. Downloading Images Phase
+      if (withImages && allImageDownloads.size > 0) {
+        setStatus(`📥 Downloading ${allImageDownloads.size} images...`);
+        let c = 0;
+        for (const [, d] of allImageDownloads.entries()) {
+          if (cancelled) throw new Error("Cancelled during image download.");
+          try {
+            c++;
+            setStatus(`📥 Image ${c}/${allImageDownloads.size}: ${d.localName}`);
+            downloadBlob(await fetchAsBlob(d.url), d.localName);
+          } catch (err) {
+            console.warn(`[Export] Image download failed: ${d.url}`, err);
+          }
+          await sleep(250);
+        }
+      }
+
+      // 4. Finish
+      const okCount = jsonPages.filter((p) => p.contentLength > 0).length;
+      setStatus(
+        `✅ Done: ${okCount}/${jsonPages.length} pages fetched${withImages ? ` + ${allImageDownloads.size} images` : ""}${failed.length ? ` (${failed.length} failed — cek console)` : ""}.`
+      );
+      if (failed.length) console.warn("[Kaplan Fetcher] Failed pages:", failed);
+      
+      if (isSplitMode && Object.keys(groupedByReading || {}).length > 1) {
+        console.log("INFO: Jika browser meminta izin 'Download multiple files', pastikan Anda menekan 'Allow'.");
+      }
+      
+    } catch (e) {
+      console.error(e);
+      if (cancelled || /cancelled/i.test(e.message)) {
+        setStatus("❌ Cancelled.", true);
+      } else {
+        setStatus(`❌ Error: ${e.message}`, true);
+        alert(`Error:\n${e.message}`);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (location.href.includes("kaplanlearn.com")) {
+    setTimeout(() => $('[data-act="autoFill"]').click(), 100);
+  }
+})();
