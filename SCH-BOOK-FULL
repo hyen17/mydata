@@ -1,6 +1,7 @@
 (() => {
-  const UI_ID = "__kaplanMultiPrintUI_v62";
+  const UI_ID = "__kaplanMultiPrintUI_v71";
 
+  document.getElementById("__kaplanMultiPrintUI_v62")?.remove();
   document.getElementById(UI_ID)?.remove();
 
   // ============================================================
@@ -167,6 +168,95 @@
     ].forEach((sel) => root.querySelectorAll(sel).forEach(kill));
   };
 
+  // ============================================================
+  // MathJax (CHTML) -> native MathML
+  // ============================================================
+  const MML_NS = "http://www.w3.org/1998/Math/MathML";
+
+  const normalizeMathML = (math) => {
+    const d = math.ownerDocument;
+    const mkMo = (txt) => {
+      const mo = d.createElementNS(MML_NS, "mo");
+      mo.textContent = txt;
+      mo.setAttribute("stretchy", "true");
+      return mo;
+    };
+
+    // <mfenced> tidak didukung MathML Core (Chrome/Edge) -> ubah ke mrow + mo
+    Array.from(math.querySelectorAll("mfenced"))
+      .reverse()
+      .forEach((f) => {
+        const open = f.hasAttribute("open") ? f.getAttribute("open") : "(";
+        const close = f.hasAttribute("close") ? f.getAttribute("close") : ")";
+        const seps = (
+          f.hasAttribute("separators") ? f.getAttribute("separators") : ","
+        ).replace(/\s+/g, "");
+
+        const mrow = d.createElementNS(MML_NS, "mrow");
+        if (open) mrow.appendChild(mkMo(open));
+        Array.from(f.children).forEach((kid, i) => {
+          if (i > 0 && seps) {
+            mrow.appendChild(mkMo(seps[Math.min(i - 1, seps.length - 1)]));
+          }
+          mrow.appendChild(kid);
+        });
+        if (close) mrow.appendChild(mkMo(close));
+        f.replaceWith(mrow);
+      });
+
+    // mathsize -> inline font-size
+    math.querySelectorAll("[mathsize]").forEach((el) => {
+      const v = el.getAttribute("mathsize");
+      el.removeAttribute("mathsize");
+      if (v) {
+        el.setAttribute(
+          "style",
+          `${el.getAttribute("style") || ""}font-size:${v};`
+        );
+      }
+    });
+  };
+
+  const convertMathJaxToMathML = (root) => {
+    let ok = 0;
+    let fail = 0;
+
+    root.querySelectorAll("span.MathJax_CHTML").forEach((frame) => {
+      try {
+        const id = (frame.id || "").replace(/-Frame$/, "");
+        const script = id
+          ? root.querySelector(`script[id="${CSS.escape(id)}"]`)
+          : null;
+        const src =
+          (script && script.textContent.trim()) ||
+          frame.getAttribute("data-mathml");
+        if (!src) throw new Error("MathML source not found");
+
+        const parsed = new DOMParser().parseFromString(src, "text/html");
+        const math = parsed.querySelector("math");
+        if (!math) throw new Error("Invalid MathML");
+        normalizeMathML(math);
+
+        const holder = document.createElement("span");
+        holder.className = "__mathml";
+        holder.style.fontSize = frame.style.fontSize || "121%";
+        holder.innerHTML = math.outerHTML;
+
+        const prev = frame.previousElementSibling;
+        if (prev?.classList.contains("MathJax_Preview")) prev.remove();
+        script?.remove();
+        frame.replaceWith(holder);
+        ok++;
+      } catch (e) {
+        fail++;
+        console.warn("[Kaplan Export] MathML convert failed", e, frame);
+      }
+    });
+
+    root.querySelectorAll(".MathJax_Preview").forEach(kill);
+    return { ok, fail };
+  };
+
   const processImagesInDom = async (
     root,
     imageMode,
@@ -241,7 +331,10 @@
   };
 
   // ============================================================
-  // BASELINE snapshot
+  // CSS capture
+  //   legacy       : snapshot <link>/<style> saat script dijalankan (cara lama)
+  //   cssom        : baca semua rule lewat CSSOM, URL dijadikan absolut
+  //   cssom-embed  : sama seperti cssom + font MathJax disimpan di dalam file
   // ============================================================
   const captureHeadSnapshot = () => ({
     stylesheets: Array.from(
@@ -255,6 +348,81 @@
   });
 
   const BASELINE_HEAD = captureHeadSnapshot();
+
+  const MATH_FONT_RE = /MJX|MathJax|STIX/i;
+  const cssRuleStore = new Map();
+  const cssLinkStore = new Set();
+  const fontCache = new Map();
+
+  const rewriteUrls = async (css, base, embedFonts) => {
+    const re = /url\(\s*(['"]?)([^'")]+)\1\s*\)/g;
+    let out = css;
+    for (const m of [...css.matchAll(re)]) {
+      const raw = m[2].trim();
+      if (!raw || raw.startsWith("data:") || raw.startsWith("#")) continue;
+      const abs = absolutize(raw, base);
+      let val = abs;
+      if (embedFonts && /\.(woff2?|otf|ttf|eot)(\?|#|$)/i.test(abs)) {
+        if (!fontCache.has(abs)) {
+          fontCache.set(
+            abs,
+            fetchAsBlob(abs)
+              .then(blobToDataURL)
+              .catch(() => abs)
+          );
+        }
+        val = await fontCache.get(abs);
+      }
+      out = out.split(m[0]).join(`url("${val}")`);
+    }
+    return out;
+  };
+
+  const harvestCss = async (embedFonts) => {
+    const sheets = Array.from(document.styleSheets);
+    try {
+      sheets.push(...(document.adoptedStyleSheets || []));
+    } catch {}
+
+    for (const sheet of sheets) {
+      if (sheet.disabled) continue;
+
+      let rules = null;
+      try {
+        rules = sheet.cssRules;
+      } catch {
+        rules = null;
+      }
+
+      if (!rules) {
+        if (sheet.href) cssLinkStore.add(sheet.href);
+        continue;
+      }
+
+      const base = sheet.href || location.href;
+
+      for (const rule of Array.from(rules)) {
+        if (rule instanceof CSSImportRule) {
+          if (rule.href) cssLinkStore.add(absolutize(rule.href, base));
+          continue;
+        }
+        const text = rule.cssText;
+        if (cssRuleStore.has(text)) continue;
+
+        let processed = text;
+        if (text.includes("url(")) {
+          const isMathFont =
+            rule instanceof CSSFontFaceRule && MATH_FONT_RE.test(text);
+          processed = await rewriteUrls(
+            text,
+            base,
+            embedFonts && isMathFont
+          );
+        }
+        cssRuleStore.set(text, processed);
+      }
+    }
+  };
 
   const BASELINE_BOOK_NAME = (
     document.querySelector('[data-test-id="course-name"]')?.textContent ||
@@ -294,19 +462,30 @@
 
   const BASELINE_DIVIDER_TEMPLATE = captureDividerTemplate();
 
-  const buildHeadFromBaseline = () => {
+  const buildHeadFromBaseline = (cssMode = "cssom-embed") => {
     const headBits = [
       '<meta charset="utf-8">',
       '<meta name="viewport" content="width=device-width, initial-scale=1">',
     ];
 
-    BASELINE_HEAD.stylesheets.forEach((href) => {
-      headBits.push(`<link rel="stylesheet" href="${escapeHtml(href)}">`);
-    });
-
-    BASELINE_HEAD.styles.forEach((css) => {
-      headBits.push(`<style>${css}</style>`);
-    });
+    if (cssMode === "legacy") {
+      BASELINE_HEAD.stylesheets.forEach((href) => {
+        headBits.push(`<link rel="stylesheet" href="${escapeHtml(href)}">`);
+      });
+      BASELINE_HEAD.styles.forEach((css) => {
+        headBits.push(`<style>${css}</style>`);
+      });
+    } else {
+      cssLinkStore.forEach((href) => {
+        headBits.push(`<link rel="stylesheet" href="${escapeHtml(href)}">`);
+      });
+      if (cssRuleStore.size) {
+        const css = Array.from(cssRuleStore.values()).join("\n");
+        headBits.push(
+          `<style>${css.replace(/<\/style/gi, "<\\/style")}</style>`
+        );
+      }
+    }
 
     headBits.push(`<style>
       :root { --font-ui: "Open Sans", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
@@ -361,6 +540,11 @@
 
       .__coursePageSegment table {
         transform-origin:left top;
+      }
+
+      .__mathml { display:inline; }
+      .__mathml math {
+        font-family: "Latin Modern Math","STIX Two Math","Cambria Math","Noto Sans Math",math;
       }
 
       img { max-width:100%; height:auto; }
@@ -427,9 +611,7 @@
       const titleEl = container.querySelector(
         '[data-test-id="course-module-name"]'
       );
-      const bookEl = container.querySelector(
-        '[data-test-id="course-name"]'
-      );
+      const bookEl = container.querySelector('[data-test-id="course-name"]');
 
       if (titleEl) {
         titleEl.textContent = title;
@@ -547,8 +729,7 @@
       if (!math.isConnected) return;
       reset(math);
 
-      const parent =
-        math.closest("p, li, td, th, div") || math.parentElement;
+      const parent = math.closest("p, li, td, th, div") || math.parentElement;
       if (!parent) return;
 
       const rect = math.getBoundingClientRect();
@@ -576,10 +757,7 @@
         return;
       }
 
-      const scale = Math.max(
-        0.3,
-        Math.min(1, (fullWidth - 2) / mathWidth)
-      );
+      const scale = Math.max(0.3, Math.min(1, (fullWidth - 2) / mathWidth));
       math.style.setProperty("display", "inline-block", "important");
       math.style.setProperty("zoom", String(scale), "important");
       math.setAttribute("data-export-fitted", "scaled");
@@ -625,10 +803,7 @@
     const paperLimit =
       printProfile?.printableWidthPx || Number.POSITIVE_INFINITY;
 
-    const limit = Math.max(
-      0,
-      Math.min(parentWidth || paperLimit, paperLimit)
-    );
+    const limit = Math.max(0, Math.min(parentWidth || paperLimit, paperLimit));
 
     return { parent, parentWidth, paperLimit, limit };
   };
@@ -769,8 +944,7 @@
       script.async = true;
       script.dataset.kaplanHtml2canvas = "1";
       script.onload = () => resolve();
-      script.onerror = () =>
-        reject(new Error("Could not load html2canvas."));
+      script.onerror = () => reject(new Error("Could not load html2canvas."));
       printWindow.document.head.appendChild(script);
     });
 
@@ -843,8 +1017,7 @@
 
     const img = printWindow.document.createElement("img");
     img.src = canvas.toDataURL("image/png");
-    img.alt =
-      math.getAttribute("aria-label") || "Mathematical formula";
+    img.alt = math.getAttribute("aria-label") || "Mathematical formula";
     img.className = "__mathjaxImage";
     img.dataset.mathjaxImage = "1";
     img.style.setProperty("max-width", "100%", "important");
@@ -880,7 +1053,7 @@
     );
     if (!maths.length) return { converted: 0, failed: 0 };
 
-    if (mathMode === "original") {
+    if (mathMode === "original" || mathMode === "mathml") {
       return { converted: 0, failed: 0, original: true };
     }
 
@@ -920,14 +1093,11 @@
       const rect = math.getBoundingClientRect();
       const overWide = fullWidth > 0 && rect.width > fullWidth + 1;
       const shouldConvert =
-        mathMode === "all-image" ||
-        (mathMode === "long-image" && overWide);
+        mathMode === "all-image" || (mathMode === "long-image" && overWide);
 
       if (!shouldConvert) continue;
 
-      statusFn?.(
-        `Converting MathJax to image ${i + 1}/${maths.length}...`
-      );
+      statusFn?.(`Converting MathJax to image ${i + 1}/${maths.length}...`);
       try {
         const ok = await convertMathToImage(
           printWindow,
@@ -1046,7 +1216,11 @@
       }
     }
 
-    if (mathMode !== "fit" && mathMode !== "original") {
+    if (
+      mathMode !== "fit" &&
+      mathMode !== "original" &&
+      mathMode !== "mathml"
+    ) {
       if (mathResult.fallback) {
         statusFn(
           "MathJax image conversion unavailable; using fitted MathJax instead."
@@ -1060,7 +1234,7 @@
 
     await waitForPrintDocumentReady(printWindow, 12000);
 
-    if (mathMode !== "original") {
+    if (mathMode !== "original" && mathMode !== "mathml") {
       fitMathInPrintWindow(printWindow, printProfile);
     }
     if (tableMode === "fit") {
@@ -1069,7 +1243,7 @@
 
     printWindow.addEventListener("beforeprint", () => {
       try {
-        if (mathMode !== "original")
+        if (mathMode !== "original" && mathMode !== "mathml")
           fitMathInPrintWindow(printWindow, printProfile);
         if (tableMode === "fit")
           fitTablesInPrintWindow(printWindow, printProfile);
@@ -1081,8 +1255,7 @@
 
     // Download HTML file from the rendered print window
     const renderedHtml =
-      "<!DOCTYPE html>\n" +
-      printWindow.document.documentElement.outerHTML;
+      "<!DOCTYPE html>\n" + printWindow.document.documentElement.outerHTML;
     const renderedBlob = new Blob([renderedHtml], {
       type: "text/html;charset=utf-8",
     });
@@ -1126,14 +1299,10 @@
   // TOC helpers
   // ============================================================
   const getTopicHeaders = () =>
-    Array.from(
-      document.querySelectorAll('[data-test-id="index-topic-header"]')
-    );
+    Array.from(document.querySelectorAll('[data-test-id="index-topic-header"]'));
 
   const getTopicTitle = (header) => {
-    const titled = header.querySelector(
-      '[data-test-id="title_node"] [title]'
-    );
+    const titled = header.querySelector('[data-test-id="title_node"] [title]');
     if (titled?.getAttribute("title")) {
       return titled.getAttribute("title").replace(/\s+/g, " ").trim();
     }
@@ -1145,8 +1314,7 @@
   };
 
   const findTopicHeader = (wantedTitle) =>
-    getTopicHeaders().find((h) => getTopicTitle(h) === wantedTitle) ||
-    null;
+    getTopicHeaders().find((h) => getTopicTitle(h) === wantedTitle) || null;
 
   const getTopicContainer = (header) => header?.parentElement || null;
 
@@ -1156,16 +1324,20 @@
 
     if (header.getAttribute("aria-expanded") !== "true") header.click();
 
-    await waitUntil(() => {
-      header = findTopicHeader(wantedTitle);
-      if (!header || header.getAttribute("aria-expanded") !== "true")
-        return false;
-      return (
-        getTopicContainer(header)?.querySelector(
-          '[data-test-id="index-topic-body"]'
-        ) || false
-      );
-    }, 12000, 120);
+    await waitUntil(
+      () => {
+        header = findTopicHeader(wantedTitle);
+        if (!header || header.getAttribute("aria-expanded") !== "true")
+          return false;
+        return (
+          getTopicContainer(header)?.querySelector(
+            '[data-test-id="index-topic-body"]'
+          ) || false
+        );
+      },
+      12000,
+      120
+    );
 
     await sleep(300);
     return findTopicHeader(wantedTitle);
@@ -1195,9 +1367,7 @@
 
     let button = body.parentElement?.previousElementSibling || null;
 
-    if (
-      !button?.matches?.('[data-test-id="index-session-button"]')
-    ) {
+    if (!button?.matches?.('[data-test-id="index-session-button"]')) {
       const parent = body.parentElement?.parentElement;
       if (parent) {
         const children = Array.from(parent.children);
@@ -1205,9 +1375,7 @@
         const bodyIndex = children.indexOf(bodyWrapper);
         for (let i = bodyIndex - 1; i >= 0; i--) {
           if (
-            children[i].matches?.(
-              '[data-test-id="index-session-button"]'
-            )
+            children[i].matches?.('[data-test-id="index-session-button"]')
           ) {
             button = children[i];
             break;
@@ -1219,19 +1387,14 @@
     if (!button) return null;
 
     const titled = button.querySelector("[title]");
-    return (
-      titled?.getAttribute("title") ||
-      button.textContent ||
-      "Reading"
-    )
+    return (titled?.getAttribute("title") || button.textContent || "Reading")
       .replace(/\s+/g, " ")
       .trim();
   };
 
   const scanCoursePages = async (statusFn) => {
     const headers = getTopicHeaders();
-    if (!headers.length)
-      throw new Error("Table of Contents tidak ditemukan.");
+    if (!headers.length) throw new Error("Table of Contents tidak ditemukan.");
 
     const topicTitles = headers.map(getTopicTitle);
     const pages = [];
@@ -1239,9 +1402,7 @@
 
     for (let ti = 0; ti < topicTitles.length; ti++) {
       const topic = topicTitles[ti];
-      statusFn?.(
-        `Scanning topic ${ti + 1}/${topicTitles.length}: ${topic}`
-      );
+      statusFn?.(`Scanning topic ${ti + 1}/${topicTitles.length}: ${topic}`);
 
       let header = await ensureTopicOpen(topic);
       await expandSessionsInTopic(header);
@@ -1253,9 +1414,7 @@
       await sleep(250);
 
       const links = Array.from(
-        container.querySelectorAll(
-          'a[href*="/course/"][href*="/node/"]'
-        )
+        container.querySelectorAll('a[href*="/course/"][href*="/node/"]')
       );
 
       for (const link of links) {
@@ -1295,16 +1454,12 @@
 
   const findPageLink = (item) => {
     const links = Array.from(
-      document.querySelectorAll(
-        'a[href*="/course/"][href*="/node/"]'
-      )
+      document.querySelectorAll('a[href*="/course/"][href*="/node/"]')
     );
 
     return (
       links.find(
-        (a) =>
-          pathKey(a.href || a.getAttribute("href") || "") ===
-          item.pathKey
+        (a) => pathKey(a.href || a.getAttribute("href") || "") === item.pathKey
       ) ||
       links.find((a) => {
         const title = (
@@ -1324,43 +1479,42 @@
   const waitForRenderedPage = async (item) => {
     const nodeId = item.href.match(/\/node\/(\d+)/)?.[1] || null;
 
-    await waitUntil(() => {
-      const currentTitle = (
-        document.querySelector(
-          '[data-test-id="course-module-name"]'
-        )?.textContent || ""
-      )
-        .replace(/\s+/g, " ")
-        .trim();
-
-      if (
-        !(
-          currentTitle === item.title ||
-          pathKey(location.href) === item.pathKey
+    await waitUntil(
+      () => {
+        const currentTitle = (
+          document.querySelector('[data-test-id="course-module-name"]')
+            ?.textContent || ""
         )
-      ) {
-        return false;
-      }
+          .replace(/\s+/g, " ")
+          .trim();
 
-      if (
-        nodeId &&
-        !document.querySelector(`#node-${CSS.escape(nodeId)}-content`)
-      ) {
-        return false;
-      }
+        if (
+          !(
+            currentTitle === item.title ||
+            pathKey(location.href) === item.pathKey
+          )
+        ) {
+          return false;
+        }
 
-      return document.querySelector(
-        ".CourseNode-module__container--ZjeFP"
-      );
-    }, 30000, 120);
+        if (
+          nodeId &&
+          !document.querySelector(`#node-${CSS.escape(nodeId)}-content`)
+        ) {
+          return false;
+        }
+
+        return document.querySelector(".CourseNode-module__container--ZjeFP");
+      },
+      30000,
+      120
+    );
 
     let previous = -1;
     let stableCount = 0;
 
     for (let i = 0; i < 32; i++) {
-      const el = document.querySelector(
-        ".CourseNode-module__container--ZjeFP"
-      );
+      const el = document.querySelector(".CourseNode-module__container--ZjeFP");
       const len = el?.innerHTML.length || 0;
 
       if (len > 0 && len === previous) stableCount++;
@@ -1372,10 +1526,7 @@
     }
 
     if (document.fonts?.ready) {
-      await Promise.race([
-        document.fonts.ready.catch(() => null),
-        sleep(2000),
-      ]);
+      await Promise.race([document.fonts.ready.catch(() => null), sleep(2000)]);
     }
 
     await sleep(350);
@@ -1426,8 +1577,7 @@
       const topic = topicMap.get(page.topic);
       topic.pages.push(page);
 
-      const readingName =
-        page.reading || "Direct Topic Pages / Resources";
+      const readingName = page.reading || "Direct Topic Pages / Resources";
       if (!topic.readingMap.has(readingName)) {
         const reading = {
           id: readingId++,
@@ -1475,19 +1625,20 @@
     border: "1px solid #cfcfcf",
     borderRadius: "12px",
     boxShadow: "0 10px 35px rgba(0,0,0,.25)",
-    fontFamily:
-      "system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif",
+    fontFamily: "system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif",
     fontSize: "13px",
     lineHeight: "1.35",
     overflow: "hidden",
   });
 
+  const SELECT_STYLE =
+    "box-sizing:border-box;width:100%;padding:7px 9px;border:1px solid #ccc;border-radius:7px;font:inherit;background:#fff;";
+
   ui.innerHTML = `
-    <!-- ===== FIXED HEADER ===== -->
     <div style="flex:0 0 auto;border-bottom:1px solid #ddd;">
 
       <div style="padding:12px 14px;display:flex;gap:10px;align-items:center;">
-        <div style="font-weight:700;font-size:14px;flex:1;">Kaplan Course Exporter v7.0</div>
+        <div style="font-weight:700;font-size:14px;flex:1;">Kaplan Course Exporter v7.1</div>
         <button data-act="close" title="Close" style="border:0;background:transparent;font-size:20px;line-height:1;cursor:pointer;">✕</button>
       </div>
 
@@ -1510,15 +1661,12 @@
 
     </div>
 
-    <!-- ===== SCROLLABLE MIDDLE (page list + options) ===== -->
     <div style="flex:1 1 auto;overflow-y:auto;min-height:0;">
 
-      <!-- Page list -->
       <div data-role="list" style="padding:4px 0;">
         <div style="padding:12px 14px;color:#666;">Click "Scan / Rescan" to detect pages.</div>
       </div>
 
-      <!-- Options section -->
       <div style="padding:10px 14px;border-top:2px solid #ddd;">
         <div style="font-weight:800;font-size:13px;margin-bottom:10px;color:#444;text-transform:uppercase;letter-spacing:.04em;">⚙ Export Options</div>
 
@@ -1534,9 +1682,9 @@
 
         <label style="display:block;margin-bottom:10px;">
           <span style="display:block;font-weight:700;margin-bottom:4px;">Image Output</span>
-          <select data-role="imageMode" style="box-sizing:border-box;width:100%;padding:7px 9px;border:1px solid #ccc;border-radius:7px;font:inherit;background:#fff;">
-            <option value="original" selected>Original Link (online)</option>
-            <option value="base64">Base64 (embed inline)</option>
+          <select data-role="imageMode" style="${SELECT_STYLE}">
+            <option value="original">Original Link (online)</option>
+            <option value="base64" selected>Base64 (embed inline)</option>
             <option value="local">Local Files (download images + relative links)</option>
           </select>
           <span style="display:block;margin-top:3px;color:#777;font-size:11px;">"Local Files" downloads each image and rewrites src to a local filename.</span>
@@ -1547,8 +1695,8 @@
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;">
             <label style="font-size:11px;color:#666;">Paper
               <select data-role="paperSize" style="display:block;width:100%;margin-top:3px;padding:5px;border:1px solid #ccc;border-radius:6px;font:inherit;background:#fff;">
-                <option value="A4" selected>A4</option>
-                <option value="Legal">Legal</option>
+                <option value="A4">A4</option>
+                <option value="Legal" selected>Legal</option>
                 <option value="Letter">Letter</option>
                 <option value="Tabloid">Tabloid</option>
                 <option value="A3">A3</option>
@@ -1561,25 +1709,37 @@
               </select>
             </label>
             <label style="font-size:11px;color:#666;">Margin (mm)
-              <input data-role="marginMm" type="number" min="0" max="35" step="1" value="12" style="display:block;box-sizing:border-box;width:100%;margin-top:3px;padding:5px;border:1px solid #ccc;border-radius:6px;font:inherit;">
+              <input data-role="marginMm" type="number" min="0" max="35" step="1" value="1" style="display:block;box-sizing:border-box;width:100%;margin-top:3px;padding:5px;border:1px solid #ccc;border-radius:6px;font:inherit;">
             </label>
           </div>
           <span style="display:block;margin-top:4px;color:#777;font-size:10px;">Used only for MathJax/Table width fitting calculations.</span>
         </div>
 
         <label style="display:block;margin-bottom:10px;">
-          <span style="display:block;font-weight:700;margin-bottom:4px;">MathJax Output</span>
-          <select data-role="mathMode" style="box-sizing:border-box;width:100%;padding:7px 9px;border:1px solid #ccc;border-radius:7px;font:inherit;background:#fff;">
-            <option value="original">Original (do not modify)</option>
-            <option value="fit" selected>Fit (move/shrink only when too wide)</option>
-            <option value="long-image">Convert only over-wide formulas to image</option>
-            <option value="all-image">Convert all formulas to image</option>
+          <span style="display:block;font-weight:700;margin-bottom:4px;">CSS &amp; Font Capture (untuk tampilan rumus)</span>
+          <select data-role="cssMode" style="${SELECT_STYLE}">
+            <option value="legacy" selected>1. Lama (snapshot di awal)</option>
+            <option value="cssom">2. Baru: baca semua CSS (font tetap online)</option>
+            <option value="cssom-embed">3. Baru: baca semua CSS + font MathJax disimpan di file</option>
           </select>
+          <span style="display:block;margin-top:3px;color:#777;font-size:11px;">Pilihan 3 paling aman (file jadi lebih besar). Pilihan 2 butuh internet saat membuka file.</span>
+        </label>
+
+        <label style="display:block;margin-bottom:10px;">
+          <span style="display:block;font-weight:700;margin-bottom:4px;">MathJax Output</span>
+          <select data-role="mathMode" style="${SELECT_STYLE}">
+            <option value="original">Original (do not modify)</option>
+            <option value="fit">Fit (move/shrink only when too wide)</option>
+            <option value="long-image">Convert only over-wide formulas to image</option>
+            <option value="all-image" selected>Convert all formulas to image</option>
+            <option value="mathml">Native MathML (tanpa font MathJax, jalan di Save &amp; Print)</option>
+          </select>
+          <span style="display:block;margin-top:3px;color:#777;font-size:11px;">Fit dan Image hanya berlaku di tombol Print. Native MathML berlaku di Save HTML maupun Print.</span>
         </label>
 
         <label style="display:block;margin-bottom:6px;">
           <span style="display:block;font-weight:700;margin-bottom:4px;">Table Output</span>
-          <select data-role="tableMode" style="box-sizing:border-box;width:100%;padding:7px 9px;border:1px solid #ccc;border-radius:7px;font:inherit;background:#fff;">
+          <select data-role="tableMode" style="${SELECT_STYLE}">
             <option value="original">Original (do not modify)</option>
             <option value="fit" selected>Fit only over-wide tables</option>
           </select>
@@ -1588,7 +1748,6 @@
 
     </div>
 
-    <!-- ===== FIXED FOOTER (action buttons) ===== -->
     <div style="flex:0 0 auto;padding:10px 14px;border-top:2px solid #ccc;background:#f7f7f7;display:flex;gap:8px;align-items:center;">
       <button data-act="save-html" style="flex:1;font-weight:700;padding:10px 10px;background:#1a73e8;color:#fff;border:none;border-radius:8px;cursor:pointer;font:inherit;">💾 Save HTML</button>
       <button data-act="print" style="flex:1;font-weight:700;padding:10px 10px;background:#34a853;color:#fff;border:none;border-radius:8px;cursor:pointer;font:inherit;">🖨 Print</button>
@@ -1596,7 +1755,6 @@
     </div>
   `;
 
-  // Style toolbar buttons
   ui.querySelectorAll(
     '[data-act="scan"],[data-act="all"],[data-act="clear"],[data-act="expand"],[data-act="collapse"]'
   ).forEach((button) => {
@@ -1637,29 +1795,19 @@
   };
 
   const countSelected = () =>
-    pages.reduce(
-      (n, p) => n + (selectedKeys.has(p.pathKey) ? 1 : 0),
-      0
-    );
+    pages.reduce((n, p) => n + (selectedKeys.has(p.pathKey) ? 1 : 0), 0);
 
   const updateSummary = () => {
     const selected = countSelected();
-    const readingCount = hierarchy.reduce(
-      (n, t) => n + t.readings.length,
-      0
-    );
+    const readingCount = hierarchy.reduce((n, t) => n + t.readings.length, 0);
     summaryEl.textContent = `${hierarchy.length} Topics · ${readingCount} Readings · ${pages.length} pages · ${selected} selected`;
   };
 
   const checkboxStateForPages = (groupPages) => {
-    const selected = groupPages.filter((p) =>
-      selectedKeys.has(p.pathKey)
-    ).length;
+    const selected = groupPages.filter((p) => selectedKeys.has(p.pathKey)).length;
     return {
-      checked:
-        selected === groupPages.length && groupPages.length > 0,
-      indeterminate:
-        selected > 0 && selected < groupPages.length,
+      checked: selected === groupPages.length && groupPages.length > 0,
+      indeterminate: selected > 0 && selected < groupPages.length,
     };
   };
 
@@ -1672,18 +1820,16 @@
       cb.indeterminate = state.indeterminate;
     });
 
-    listEl
-      .querySelectorAll("input[data-reading-id]")
-      .forEach((cb) => {
-        const readingId = Number(cb.dataset.readingId);
-        const reading = hierarchy
-          .flatMap((t) => t.readings)
-          .find((r) => r.id === readingId);
-        if (!reading) return;
-        const state = checkboxStateForPages(reading.pages);
-        cb.checked = state.checked;
-        cb.indeterminate = state.indeterminate;
-      });
+    listEl.querySelectorAll("input[data-reading-id]").forEach((cb) => {
+      const readingId = Number(cb.dataset.readingId);
+      const reading = hierarchy
+        .flatMap((t) => t.readings)
+        .find((r) => r.id === readingId);
+      if (!reading) return;
+      const state = checkboxStateForPages(reading.pages);
+      cb.checked = state.checked;
+      cb.indeterminate = state.indeterminate;
+    });
 
     updateSummary();
   };
@@ -1697,9 +1843,7 @@
       const matchingReadings = topic.readings.filter((reading) => {
         if (!filter || topicMatch) return true;
         if (reading.title.toLowerCase().includes(filter)) return true;
-        return reading.pages.some((p) =>
-          p.title.toLowerCase().includes(filter)
-        );
+        return reading.pages.some((p) => p.title.toLowerCase().includes(filter));
       });
 
       if (filter && !topicMatch && !matchingReadings.length) return;
@@ -1715,9 +1859,7 @@
       `);
 
       matchingReadings.forEach((reading) => {
-        const readingMatch = reading.title
-          .toLowerCase()
-          .includes(filter);
+        const readingMatch = reading.title.toLowerCase().includes(filter);
         const visiblePages = reading.pages.filter(
           (p) =>
             !filter ||
@@ -1758,11 +1900,7 @@
   };
 
   listEl.addEventListener("click", (e) => {
-    if (
-      e.target.matches(
-        "input[data-topic-id],input[data-reading-id]"
-      )
-    ) {
+    if (e.target.matches("input[data-topic-id],input[data-reading-id]")) {
       e.stopPropagation();
     }
   });
@@ -1803,18 +1941,19 @@
   filterEl.addEventListener("input", renderList);
 
   // ============================================================
-  // Shared: collect pages → build HTML
+  // Shared: collect pages -> build HTML
   // ============================================================
   const getExportOptions = () => ({
     addTopicTitles: $('[data-role="topicTitles"]').checked,
     addReadingTitles: $('[data-role="readingTitles"]').checked,
-    imageMode: $('[data-role="imageMode"]').value || "original",
-    mathMode: $('[data-role="mathMode"]').value || "fit",
+    imageMode: $('[data-role="imageMode"]').value || "base64",
+    cssMode: $('[data-role="cssMode"]').value || "legacy",
+    mathMode: $('[data-role="mathMode"]').value || "all-image",
     tableMode: $('[data-role="tableMode"]').value || "fit",
     printOptions: {
-      paper: $('[data-role="paperSize"]')?.value || "A4",
+      paper: $('[data-role="paperSize"]')?.value || "Legal",
       orientation: $('[data-role="orientation"]')?.value || "portrait",
-      marginMm: Number($('[data-role="marginMm"]')?.value ?? 12),
+      marginMm: Number($('[data-role="marginMm"]')?.value ?? 1),
     },
   });
 
@@ -1826,41 +1965,51 @@
     }
 
     const opts = getExportOptions();
+    const useCssom = opts.cssMode !== "legacy";
+    const embedFonts = opts.cssMode === "cssom-embed";
+
     const original = currentPageIdentity();
     const originalItem =
       pages.find((p) => p.pathKey === original.pathKey) || null;
 
-    const headHtml = buildHeadFromBaseline();
     const captured = new Map();
     const localImageMap = new Map();
+    let mathmlOk = 0;
+    let mathmlFail = 0;
+
+    if (useCssom) {
+      setStatus("Collecting CSS & fonts...");
+      await harvestCss(embedFonts);
+    }
 
     for (let i = 0; i < selected.length; i++) {
-      if (cancelled)
-        throw new Error("Export cancelled by user.");
+      if (cancelled) throw new Error("Export cancelled by user.");
 
       const item = selected[i];
-      setStatus(
-        `Loading ${i + 1}/${selected.length}: ${item.title}`
-      );
+      setStatus(`Loading ${i + 1}/${selected.length}: ${item.title}`);
       await navigateToItem(item);
 
-      if (cancelled)
-        throw new Error("Export cancelled by user.");
+      if (cancelled) throw new Error("Export cancelled by user.");
 
-      setStatus(
-        `Capturing ${i + 1}/${selected.length}: ${item.title}`
-      );
+      setStatus(`Capturing ${i + 1}/${selected.length}: ${item.title}`);
       const wrapper = buildCourseWrapper();
+
+      if (opts.mathMode === "mathml") {
+        const r = convertMathJaxToMathML(wrapper);
+        mathmlOk += r.ok;
+        mathmlFail += r.fail;
+      }
+
+      if (useCssom) {
+        setStatus(`Collecting CSS ${i + 1}/${selected.length}: ${item.title}`);
+        await harvestCss(embedFonts);
+      }
 
       if (opts.imageMode !== "original") {
         setStatus(
           `Processing images (${opts.imageMode}) ${i + 1}/${selected.length}: ${item.title}`
         );
-        await processImagesInDom(
-          wrapper,
-          opts.imageMode,
-          localImageMap
-        );
+        await processImagesInDom(wrapper, opts.imageMode, localImageMap);
       } else {
         wrapper.querySelectorAll("img").forEach((img) => {
           img.removeAttribute("srcset");
@@ -1872,12 +2021,20 @@
       await sleep(40);
     }
 
+    if (opts.mathMode === "mathml") {
+      setStatus(
+        `MathML: ${mathmlOk} rumus dikonversi${mathmlFail ? `, ${mathmlFail} gagal (tetap MathJax)` : ""}.`
+      );
+      await sleep(600);
+    }
+
+    if (useCssom) await harvestCss(embedFonts);
+    const headHtml = buildHeadFromBaseline(opts.cssMode);
+
     setStatus("Building hierarchical HTML...");
 
     const segments = [];
-    const selectedKeySet = new Set(
-      selected.map((p) => p.pathKey)
-    );
+    const selectedKeySet = new Set(selected.map((p) => p.pathKey));
 
     hierarchy.forEach((topic) => {
       const selectedTopicPages = topic.pages.filter((p) =>
@@ -1928,11 +2085,7 @@
     const bodyHtml = segments.join("\n");
     const fileName = `${cleanFilename(BASELINE_BOOK_NAME)} - ${selected.length} pages`;
 
-    // Navigate back
-    if (
-      originalItem &&
-      pathKey(location.href) !== originalItem.pathKey
-    ) {
+    if (originalItem && pathKey(location.href) !== originalItem.pathKey) {
       try {
         setStatus("Returning to the original page...");
         await navigateToItem(originalItem);
@@ -1966,9 +2119,7 @@
       selectedKeys = new Set(pages.map((p) => p.pathKey));
 
       renderList();
-      const directCount = pages.filter(
-        (p) => p.directTopicPage
-      ).length;
+      const directCount = pages.filter((p) => p.directTopicPage).length;
       setStatus(
         `Scan complete: ${pages.length} pages (${directCount} direct Topic pages/resources).`
       );
@@ -1982,7 +2133,7 @@
   };
 
   // ============================================================
-  // MODE 1: SAVE HTML ONLY (no print window, no print dialog)
+  // MODE 1: SAVE HTML ONLY
   // ============================================================
   const doSaveHtml = async () => {
     if (busy) return;
@@ -1997,17 +2148,13 @@
         return;
       }
 
-      const { headHtml, bodyHtml, fileName, opts, localImageMap } =
-        result;
+      const { headHtml, bodyHtml, fileName, opts, localImageMap } = result;
 
       setStatus("Saving HTML file...");
       saveHtmlDirect(fileName, headHtml, bodyHtml);
 
-      // Download local images if needed
       if (opts.imageMode === "local" && localImageMap.size > 0) {
-        setStatus(
-          `Downloading ${localImageMap.size} local image files...`
-        );
+        setStatus(`Downloading ${localImageMap.size} local image files...`);
         let imgCount = 0;
         for (const [, imgData] of localImageMap.entries()) {
           try {
@@ -2035,9 +2182,7 @@
         setStatus("Export cancelled.");
       } else {
         setStatus(`Export failed: ${e.message}`);
-        alert(
-          `Export gagal:\n${e.message}\n\nLihat Console untuk detail.`
-        );
+        alert(`Export gagal:\n${e.message}\n\nLihat Console untuk detail.`);
       }
     } finally {
       setBusy(false);
@@ -2045,7 +2190,7 @@
   };
 
   // ============================================================
-  // MODE 2: PRINT (open tab + MathJax/Table fit + print dialog)
+  // MODE 2: PRINT
   // ============================================================
   const doPrint = async () => {
     if (busy) return;
@@ -2060,13 +2205,7 @@
         return;
       }
 
-      const {
-        headHtml,
-        bodyHtml,
-        fileName,
-        opts,
-        localImageMap,
-      } = result;
+      const { headHtml, bodyHtml, fileName, opts, localImageMap } = result;
 
       setStatus("Preparing print document...");
       await openPrintDocument(
@@ -2089,9 +2228,7 @@
         setStatus("Print cancelled.");
       } else {
         setStatus(`Print failed: ${e.message}`);
-        alert(
-          `Print gagal:\n${e.message}\n\nLihat Console untuk detail.`
-        );
+        alert(`Print gagal:\n${e.message}\n\nLihat Console untuk detail.`);
       }
     } finally {
       setBusy(false);
@@ -2103,9 +2240,7 @@
   // ============================================================
   $('[data-act="close"]').onclick = () => {
     if (busy) {
-      alert(
-        "Scan/export masih berjalan. Cancel terlebih dahulu."
-      );
+      alert("Scan/export masih berjalan. Cancel terlebih dahulu.");
       return;
     }
     ui.remove();
@@ -2124,15 +2259,11 @@
   };
 
   $('[data-act="expand"]').onclick = () => {
-    listEl
-      .querySelectorAll("details")
-      .forEach((d) => (d.open = true));
+    listEl.querySelectorAll("details").forEach((d) => (d.open = true));
   };
 
   $('[data-act="collapse"]').onclick = () => {
-    listEl
-      .querySelectorAll("details")
-      .forEach((d) => (d.open = false));
+    listEl.querySelectorAll("details").forEach((d) => (d.open = false));
   };
 
   $('[data-act="save-html"]').onclick = doSaveHtml;
