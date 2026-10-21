@@ -1,6 +1,7 @@
 (() => {
   const UI_ID = "__kaplanGqlFetcherUI";
   document.getElementById(UI_ID)?.remove();
+  if (window.__kaplanWatchTimer) clearInterval(window.__kaplanWatchTimer);
 
   // ============================================================
   // Utilities
@@ -72,6 +73,23 @@
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   };
 
+  // Cek apakah isi halaman benar-benar kosong (tanpa teks dan tanpa gambar)
+  const isContentEmpty = (html) => {
+    if (!html) return true;
+    if (/<img\s/i.test(html)) return false;
+    const textOnly = String(html)
+      .replace(/<[^>]*>/g, "")
+      .replace(/&nbsp;/gi, " ")
+      .trim();
+    return textOnly.length === 0;
+  };
+
+  // Ambil Program ID & Enrollment ID dari alamat halaman
+  const readIdsFromUrl = () => {
+    const m = location.href.match(/\/index\/([a-f0-9]+)\/course\/(\d+)/i);
+    return m ? { programId: m[1], enrollmentId: m[2], key: `${m[1]}/${m[2]}` } : null;
+  };
+
   // ============================================================
   // Parse Table of Contents JSON
   // ============================================================
@@ -87,7 +105,6 @@
 
     if (!allNodes.length) throw new Error("Tidak menemukan field data.person.learner.course.nodes di JSON TOC.");
 
-    // Build hierarchy map
     const nodeMap = new Map();
     allNodes.forEach((n) => {
       nodeMap.set(n.nodeId, {
@@ -98,14 +115,12 @@
       });
     });
 
-    // Link parent-child
     nodeMap.forEach((n) => {
       if (n.parentNodeId && nodeMap.has(n.parentNodeId)) {
         nodeMap.get(n.parentNodeId).children.push(n);
       }
     });
 
-    // Identify: Topics (no parent in map), Readings (children of topics), Modules (children of readings)
     const topics = [];
     nodeMap.forEach((n) => {
       if (!n.parentNodeId || !nodeMap.has(n.parentNodeId)) {
@@ -113,7 +128,6 @@
       }
     });
 
-    // Flatten into pages list (modules + readings key concepts), preserving hierarchy context
     const pages = [];
     const walk = (node, topicTitle, readingTitle) => {
       if (node.children.length === 0) {
@@ -139,7 +153,7 @@
   };
 
   // ============================================================
-  // Fetch node content from GraphQL (FULL QUERY - BYPASS 500 ERROR)
+  // Fetch node content from GraphQL
   // ============================================================
   const fetchNodeContent = async (nodeId, authorization, programId, enrollmentDetailId) => {
     const query = `query CourseNode($programId: String!, $enrollmentDetailId: Int!, $nodeId: Int!, $courseNode: Boolean = false) {
@@ -421,7 +435,7 @@ fragment CourseNodeTimeTracker on NodeRules {
     }
 
     const json = await res.json();
-    
+
     if (json[0]?.errors && json[0]?.errors.length > 0) {
       const errMsg = json[0].errors[0].message;
       const subErr = json[0].errors[0].subsystem?.message || "";
@@ -431,13 +445,15 @@ fragment CourseNodeTimeTracker on NodeRules {
     const items = Array.isArray(json) ? json : [json];
 
     for (const item of items) {
-      const nodes = item?.data?.person?.learner?.course?.nodes;
+      const course = item?.data?.person?.learner?.course;
+      const nodes = course?.nodes;
       if (Array.isArray(nodes)) {
         for (const node of nodes) {
           if (String(node?.nodeId) === String(nodeId)) {
             return {
               nodeId: node.nodeId,
               title: node.title || "",
+              courseTitle: course?.title || "",
               activityName: node.activity?.name || node.title || "",
               activityId: node.activity?.activityId || null,
               contentText: node?.content?.contentText || "",
@@ -479,21 +495,19 @@ fragment CourseNodeTimeTracker on NodeRules {
   });
 
   ui.innerHTML = `
-    <!-- HEADER -->
     <div style="flex:0 0 auto;border-bottom:1px solid #ddd;">
       <div style="padding:10px 14px;display:flex;gap:10px;align-items:center;background:#1a73e8;color:#fff;">
-        <div style="font-weight:700;font-size:14px;flex:1;">📥 Kaplan GraphQL Direct Fetcher v1.3 (Auto-Split Fixed)</div>
+        <div style="font-weight:700;font-size:14px;flex:1;">📥 Kaplan GraphQL Direct Fetcher v1.4 (Anti-Kosong)</div>
         <button data-act="close" title="Close" style="border:0;background:transparent;color:#fff;font-size:20px;line-height:1;cursor:pointer;">✕</button>
       </div>
       <div style="padding:7px 14px;background:#f7f7f7;">
         <div data-role="status" style="font-weight:600;font-size:12px;">Ready. Paste TOC JSON & Authorization below, then click "Parse TOC".</div>
+        <div data-role="bookInfo" style="margin-top:3px;font-size:11px;color:#555;"></div>
       </div>
     </div>
 
-    <!-- SCROLLABLE AREA -->
     <div style="flex:1 1 auto;overflow-y:auto;min-height:0;padding:12px 14px;">
 
-      <!-- STEP 1: Authorization + Course Info -->
       <div style="margin-bottom:14px;padding:10px;border:2px solid #1a73e8;border-radius:8px;background:#eef4ff;">
         <div style="font-weight:800;font-size:13px;margin-bottom:7px;color:#1a73e8;">🔑 STEP 1: Credentials</div>
 
@@ -510,7 +524,7 @@ fragment CourseNodeTimeTracker on NodeRules {
           </label>
           <label>
             <span style="display:block;font-weight:700;margin-bottom:3px;font-size:12px;">Enrollment Detail ID</span>
-            <input data-role="enrollmentId" type="text" placeholder="135485598" style="box-sizing:border-box;width:100%;padding:6px 9px;border:1px solid #ccc;border-radius:7px;font-inherit;font-size:11px;font-family:monospace;">
+            <input data-role="enrollmentId" type="text" placeholder="135485598" style="box-sizing:border-box;width:100%;padding:6px 9px;border:1px solid #ccc;border-radius:7px;font:inherit;font-size:11px;font-family:monospace;">
           </label>
         </div>
 
@@ -521,24 +535,21 @@ fragment CourseNodeTimeTracker on NodeRules {
 
         <div style="margin-top:7px;padding:6px 8px;background:#fff;border-radius:5px;border:1px solid #ccddff;">
           <div style="font-size:11px;color:#555;line-height:1.4;">
-            <b>💡 Cara ambil Program ID & Enrollment ID:</b><br>
-            Dari URL browser: <code style="background:#eee;padding:1px 4px;border-radius:3px;">kaplanlearn.com/.../index/<b style="color:#1a73e8;">[PROGRAM_ID]</b>/course/<b style="color:#1a73e8;">[ENROLLMENT_ID]</b>/node/...</code>
+            <b>💡 Otomatis:</b> Program ID & Enrollment ID akan berganti sendiri ketika Anda pindah buku, dan dicek ulang tepat sebelum proses ambil data.
           </div>
-          <button data-act="autoFill" style="margin-top:5px;padding:4px 10px;background:#1a73e8;color:#fff;border:none;border-radius:5px;cursor:pointer;font:inherit;font-size:11px;font-weight:700;">Auto-fill dari URL halaman ini</button>
+          <button data-act="autoFill" style="margin-top:5px;padding:4px 10px;background:#1a73e8;color:#fff;border:none;border-radius:5px;cursor:pointer;font:inherit;font-size:11px;font-weight:700;">Auto-fill manual dari URL</button>
         </div>
       </div>
 
-      <!-- STEP 2: Paste TOC JSON -->
       <div style="margin-bottom:14px;padding:10px;border:2px solid #34a853;border-radius:8px;background:#eefef0;">
         <div style="font-weight:800;font-size:13px;margin-bottom:7px;color:#1e8e3e;">📋 STEP 2: Paste Table of Contents JSON</div>
-        <textarea data-role="tocJson" placeholder='[{"data":{"person":{"learner":{"course":{"nodes":[...]}}}}}]' style="box-sizing:border-box;width:100%;height:120px;padding:7px 9px;border:1px solid #ccc;border-radius:7px;font-inherit;font-size:11px;font-family:monospace;resize:vertical;"></textarea>
+        <textarea data-role="tocJson" placeholder='[{"data":{"person":{"learner":{"course":{"nodes":[...]}}}}}]' style="box-sizing:border-box;width:100%;height:120px;padding:7px 9px;border:1px solid #ccc;border-radius:7px;font:inherit;font-size:11px;font-family:monospace;resize:vertical;"></textarea>
         <div style="display:flex;gap:6px;margin-top:6px;">
           <button data-act="parseToc" style="flex:1;padding:7px 10px;background:#34a853;color:#fff;border:none;border-radius:7px;cursor:pointer;font:inherit;font-size:12px;font-weight:700;">🔍 Parse TOC</button>
           <button data-act="clearToc" style="padding:7px 10px;background:#eee;color:#333;border:1px solid #ccc;border-radius:7px;cursor:pointer;font:inherit;font-size:12px;">Clear</button>
         </div>
       </div>
 
-      <!-- STEP 3: Page selection -->
       <div data-role="pageSection" style="display:none;margin-bottom:14px;padding:10px;border:2px solid #f59e0b;border-radius:8px;background:#fff8ec;">
         <div style="font-weight:800;font-size:13px;margin-bottom:7px;color:#b45309;">✅ STEP 3: Pilih halaman untuk difetch</div>
 
@@ -553,7 +564,6 @@ fragment CourseNodeTimeTracker on NodeRules {
         <div data-role="pageSummary" style="margin-top:5px;color:#666;font-size:11px;">—</div>
       </div>
 
-      <!-- STEP 4: Options -->
       <div data-role="optionsSection" style="display:none;margin-bottom:14px;padding:10px;border:2px solid #9333ea;border-radius:8px;background:#f8f0ff;">
         <div style="font-weight:800;font-size:13px;margin-bottom:7px;color:#7e22ce;">⚙ STEP 4: Export Options</div>
 
@@ -562,9 +572,17 @@ fragment CourseNodeTimeTracker on NodeRules {
             <input type="checkbox" data-role="splitReading" checked style="margin:0 7px 0 0;cursor:pointer;">
             <span style="font-weight:700;font-size:12px;">Split JSON by Reading</span>
           </div>
-          <span style="display:block;margin-top:2px;color:#777;font-size:11px;margin-left:20px;">Simpan file JSON terpisah per Reading. Nama file otomatis menggunakan judul Reading. Jika dimatikan, semua akan digabung dalam 1 file.</span>
+          <span style="display:block;margin-top:2px;color:#777;font-size:11px;margin-left:20px;">Simpan file JSON terpisah per Reading. Jika dimatikan, semua digabung dalam 1 file.</span>
         </label>
-        
+
+        <label style="display:block;margin-bottom:7px;cursor:pointer;">
+          <div style="display:flex;align-items:center;">
+            <input type="checkbox" data-role="keepEmpty" style="margin:0 7px 0 0;cursor:pointer;">
+            <span style="font-weight:700;font-size:12px;">Tetap simpan halaman yang isinya kosong</span>
+          </div>
+          <span style="display:block;margin-top:2px;color:#777;font-size:11px;margin-left:20px;">Biarkan mati (disarankan). Halaman kosong tidak disimpan, tapi tetap dilaporkan di status.</span>
+        </label>
+
         <hr style="border:0;border-top:1px solid #e0c8f5;margin:10px 0;">
 
         <label style="display:block;margin-bottom:7px;">
@@ -588,7 +606,6 @@ fragment CourseNodeTimeTracker on NodeRules {
 
     </div>
 
-    <!-- FOOTER -->
     <div style="flex:0 0 auto;padding:10px 14px;border-top:2px solid #ccc;background:#f7f7f7;">
       <div style="display:flex;gap:6px;align-items:center;">
         <button data-act="fetch" style="flex:1;font-weight:700;padding:10px 10px;background:#f59e0b;color:#fff;border:none;border-radius:8px;cursor:pointer;font:inherit;font-size:13px;">📥 Fetch & Save JSON</button>
@@ -601,6 +618,7 @@ fragment CourseNodeTimeTracker on NodeRules {
 
   const $ = (sel) => ui.querySelector(sel);
   const statusEl = $('[data-role="status"]');
+  const bookInfoEl = $('[data-role="bookInfo"]');
   const cancelBtn = $('[data-act="cancel"]');
   const fetchBtn = $('[data-act="fetch"]');
 
@@ -608,6 +626,8 @@ fragment CourseNodeTimeTracker on NodeRules {
   let selectedNodeIds = new Set();
   let busy = false;
   let cancelled = false;
+  let tocBookKey = null; // buku mana yang dipakai saat TOC di-parse
+  let lastUrlKey = readIdsFromUrl()?.key || null;
 
   const setStatus = (text, isError = false) => {
     statusEl.textContent = text;
@@ -626,22 +646,56 @@ fragment CourseNodeTimeTracker on NodeRules {
   };
 
   // ============================================================
-  // Auto-fill from URL
+  // Auto-fill dari URL (manual, otomatis saat pindah buku, dan sebelum fetch)
   // ============================================================
+  const applyIdsFromUrl = () => {
+    const ids = readIdsFromUrl();
+    if (!ids) return null;
+    $('[data-role="programId"]').value = ids.programId;
+    $('[data-role="enrollmentId"]').value = ids.enrollmentId;
+    const courseName = document.querySelector('[data-test-id="course-name"]')?.textContent?.trim();
+    if (courseName) $('[data-role="courseName"]').value = courseName;
+    return ids;
+  };
+
   $('[data-act="autoFill"]').onclick = () => {
-    const url = location.href;
-    const match = url.match(/\/index\/([a-f0-9]+)\/course\/(\d+)/i);
-    if (match) {
-      $('[data-role="programId"]').value = match[1];
-      $('[data-role="enrollmentId"]').value = match[2];
-      setStatus(`✅ Auto-filled: programId & enrollmentId dari URL.`);
+    const ids = applyIdsFromUrl();
+    if (ids) {
+      lastUrlKey = ids.key;
+      setStatus("✅ Auto-filled: Program ID & Enrollment ID dari URL.");
     } else {
       setStatus("❌ URL tidak sesuai format. Pastikan Anda di halaman kaplanlearn.com course.", true);
     }
-
-    const courseName = document.querySelector('[data-test-id="course-name"]')?.textContent?.trim();
-    if (courseName) $('[data-role="courseName"]').value = courseName;
   };
+
+  const resetTocState = () => {
+    $('[data-role="tocJson"]').value = "";
+    $('[data-role="pageSection"]').style.display = "none";
+    $('[data-role="optionsSection"]').style.display = "none";
+    parsedPages = [];
+    selectedNodeIds.clear();
+    hierarchy = [];
+    tocBookKey = null;
+  };
+
+  // Pantau pindah buku: kalau URL berubah buku, isian diperbarui dan TOC lama dibuang
+  window.__kaplanWatchTimer = setInterval(() => {
+    if (!document.getElementById(UI_ID)) {
+      clearInterval(window.__kaplanWatchTimer);
+      return;
+    }
+    const ids = readIdsFromUrl();
+    if (!ids || ids.key === lastUrlKey) return;
+    lastUrlKey = ids.key;
+    if (busy) return;
+    applyIdsFromUrl();
+    if (parsedPages.length) {
+      resetTocState();
+      setStatus("⚠ Pindah buku terdeteksi. ID sudah diperbarui, TOC lama dibuang. Paste TOC buku baru lalu klik Parse TOC.", true);
+    } else {
+      setStatus("🔄 Pindah buku terdeteksi. Program ID & Enrollment ID sudah diperbarui.");
+    }
+  }, 1000);
 
   // ============================================================
   // Parse TOC
@@ -731,10 +785,15 @@ fragment CourseNodeTimeTracker on NodeRules {
       return;
     }
     try {
+      // Pastikan ID mengikuti buku yang sedang dibuka
+      const ids = applyIdsFromUrl();
+      if (ids) lastUrlKey = ids.key;
+
       const { pages } = parseTocJson(text);
       parsedPages = pages;
       selectedNodeIds = new Set(pages.map((p) => p.nodeId));
       hierarchy = buildHierarchicalPages(pages);
+      tocBookKey = ids?.key || `${$('[data-role="programId"]').value.trim()}/${$('[data-role="enrollmentId"]').value.trim()}`;
 
       $('[data-role="pageSection"]').style.display = "block";
       $('[data-role="optionsSection"]').style.display = "block";
@@ -748,12 +807,7 @@ fragment CourseNodeTimeTracker on NodeRules {
   };
 
   $('[data-act="clearToc"]').onclick = () => {
-    $('[data-role="tocJson"]').value = "";
-    $('[data-role="pageSection"]').style.display = "none";
-    $('[data-role="optionsSection"]').style.display = "none";
-    parsedPages = [];
-    selectedNodeIds.clear();
-    hierarchy = [];
+    resetTocState();
     setStatus("Cleared.");
   };
 
@@ -812,6 +866,7 @@ fragment CourseNodeTimeTracker on NodeRules {
       alert("Proses masih berjalan. Cancel terlebih dahulu.");
       return;
     }
+    clearInterval(window.__kaplanWatchTimer);
     ui.remove();
   };
 
@@ -826,10 +881,25 @@ fragment CourseNodeTimeTracker on NodeRules {
   fetchBtn.onclick = async () => {
     if (busy) return;
 
+    // Cek ulang ID dari URL tepat sebelum mulai
+    const urlIds = readIdsFromUrl();
+    if (urlIds) {
+      if (tocBookKey && urlIds.key !== tocBookKey) {
+        resetTocState();
+        applyIdsFromUrl();
+        lastUrlKey = urlIds.key;
+        setStatus("⚠ TOC ini milik buku lain. TOC dibuang. Paste TOC buku yang sedang dibuka, lalu Parse TOC.", true);
+        alert("TOC yang tertempel berasal dari buku lain.\n\nProgram ID & Enrollment ID sudah diperbarui sesuai buku yang sedang dibuka. Silakan paste TOC buku ini, klik Parse TOC, lalu Fetch lagi.");
+        return;
+      }
+      applyIdsFromUrl();
+      lastUrlKey = urlIds.key;
+    }
+
     const auth = $('[data-role="authToken"]').value.trim();
     const programId = $('[data-role="programId"]').value.trim();
     const enrollmentId = $('[data-role="enrollmentId"]').value.trim();
-    const courseName = $('[data-role="courseName"]').value.trim() || "Course Export";
+    const courseNameInput = $('[data-role="courseName"]').value.trim() || "Course Export";
 
     if (!auth) return alert("Authorization token wajib diisi!");
     if (!programId) return alert("Program ID wajib diisi!");
@@ -839,18 +909,22 @@ fragment CourseNodeTimeTracker on NodeRules {
     if (!selectedPages.length) return alert("Pilih minimal 1 halaman!");
 
     const isSplitMode = $('[data-role="splitReading"]').checked;
+    const keepEmpty = $('[data-role="keepEmpty"]').checked;
     const imagePrefix = $('[data-role="imagePrefix"]').value.trim();
     const withImages = $('[data-role="imageMode"]').value === "json-images";
     const fetchDelay = Math.max(100, Number($('[data-role="fetchDelay"]').value) || 500);
 
     cancelled = false;
     setBusy(true);
+    bookInfoEl.textContent = "";
 
     try {
       const jsonPages = [];
       const allImageDownloads = new Map();
       const usedImageNames = new Set();
       const failed = [];
+      const emptyList = [];
+      let detectedCourseTitle = "";
 
       // 1. Fetching Data Phase
       for (let i = 0; i < selectedPages.length; i++) {
@@ -862,6 +936,10 @@ fragment CourseNodeTimeTracker on NodeRules {
         let nodeData = null;
         try {
           nodeData = await fetchNodeContent(item.nodeId, auth, programId, enrollmentId);
+          if (nodeData.courseTitle && !detectedCourseTitle) {
+            detectedCourseTitle = nodeData.courseTitle;
+            bookInfoEl.textContent = `📖 Buku terdeteksi dari server: ${detectedCourseTitle}`;
+          }
         } catch (err) {
           console.error(`Failed to fetch node ${item.nodeId}:`, err);
           failed.push(`${item.title} [${item.nodeId}]: ${err.message}`);
@@ -869,6 +947,23 @@ fragment CourseNodeTimeTracker on NodeRules {
 
         const activityName = nodeData?.activityName || item.title;
         let contentText = nodeData?.contentText || "";
+        const empty = isContentEmpty(contentText);
+        if (nodeData && empty) emptyList.push(`${item.title} [${item.nodeId}]`);
+
+        // Peringatan dini: 3 halaman pertama semuanya kosong/gagal
+        if (i === 2) {
+          const firstThree = jsonPages.slice(0, 2).concat([{ _status: nodeData ? (empty ? "empty" : "ok") : "failed" }]);
+          if (firstThree.every((p) => p._status !== "ok")) {
+            const goOn = confirm(
+              "3 halaman pertama semuanya kosong atau gagal.\n\n" +
+              "Kemungkinan: buku salah, TOC milik buku lain, atau token kedaluwarsa.\n" +
+              "(Halaman 'Exam Focus' kadang memang kosong.)\n\n" +
+              "Lanjutkan sampai selesai?"
+            );
+            if (!goOn) throw new Error("Cancelled: dihentikan karena 3 halaman pertama kosong.");
+          }
+        }
+
         const moduleNum = extractModuleNumber(activityName) || extractModuleNumber(item.title);
         const pageImageMap = new Map();
 
@@ -925,30 +1020,44 @@ fragment CourseNodeTimeTracker on NodeRules {
           images: withImages
             ? Array.from(pageImageMap.entries()).map(([o, l]) => ({ originalUrl: absolutize(o), localFilename: l }))
             : undefined,
-          _status: nodeData ? "ok" : "failed",
+          _status: !nodeData ? "failed" : empty ? "empty" : "ok",
         });
 
         await sleep(fetchDelay);
       }
 
+      const okPages = jsonPages.filter((p) => p._status === "ok");
+      const savePages = keepEmpty ? jsonPages.filter((p) => p._status !== "failed") : okPages;
+      const courseName = detectedCourseTitle && courseNameInput === "Course Export" ? detectedCourseTitle : courseNameInput;
+
+      // Kalau semuanya kosong: jangan simpan apa pun
+      if (!savePages.length) {
+        setStatus(`❌ Semua ${jsonPages.length} halaman kosong/gagal. Tidak ada file yang disimpan.`, true);
+        alert(
+          "Tidak ada file yang disimpan karena semua halaman kosong atau gagal.\n\n" +
+          "Yang perlu dicek:\n" +
+          "1. Pastikan Anda sedang membuka buku yang sama dengan TOC.\n" +
+          "2. Ambil Authorization token yang baru.\n" +
+          "3. Paste ulang TOC buku ini lalu Parse TOC."
+        );
+        return;
+      }
+
       // 2. Saving JSON Phase
-      let groupedByReading = {}; // Variabel dipindahkan ke scope luar agar tidak memicu error
+      let groupedByReading = {};
       if (isSplitMode) {
-        // Mode Split: Kelompokkan berdasarkan Reading
-        for (const p of jsonPages) {
-          const groupName = p.reading || p.topic || courseName; 
-          if (!groupedByReading[groupName]) {
-            groupedByReading[groupName] = [];
-          }
+        for (const p of savePages) {
+          const groupName = p.reading || p.topic || courseName;
+          if (!groupedByReading[groupName]) groupedByReading[groupName] = [];
           groupedByReading[groupName].push(p);
         }
 
         let groupCount = 1;
         const totalGroups = Object.keys(groupedByReading).length;
-        
+
         for (const [readingTitle, pagesInGroup] of Object.entries(groupedByReading)) {
           if (cancelled) throw new Error("Cancelled during JSON save.");
-          
+
           const output = {
             exportDate: new Date().toISOString(),
             courseName: courseName,
@@ -956,36 +1065,37 @@ fragment CourseNodeTimeTracker on NodeRules {
             imagePrefix: imagePrefix || null,
             imageMode: withImages ? "local" : "original",
             totalPages: pagesInGroup.length,
-            okCount: pagesInGroup.filter((p) => p.contentLength > 0).length,
+            okCount: pagesInGroup.filter((p) => p._status === "ok").length,
             pages: pagesInGroup,
           };
 
           const jsonFileName = cleanFilename(readingTitle);
           setStatus(`💾 Saving JSON file (${groupCount}/${totalGroups}): ${jsonFileName}...`);
-          
+
           downloadBlob(
             new Blob([JSON.stringify(output, null, 2)], { type: "application/json;charset=utf-8" }),
             `${jsonFileName}.json`
           );
-          
+
           await sleep(600);
           groupCount++;
         }
       } else {
-        // Mode Gabung (1 File JSON)
         const output = {
           exportDate: new Date().toISOString(),
           courseName: courseName,
           imagePrefix: imagePrefix || null,
           imageMode: withImages ? "local" : "original",
-          totalPages: jsonPages.length,
-          okCount: jsonPages.filter((p) => p.contentLength > 0).length,
+          totalPages: savePages.length,
+          okCount: savePages.filter((p) => p._status === "ok").length,
+          emptyCount: emptyList.length,
+          emptyPages: emptyList.length ? emptyList : undefined,
           failedCount: failed.length,
           failedPages: failed.length ? failed : undefined,
-          pages: jsonPages,
+          pages: savePages,
         };
 
-        const jsonFileName = cleanFilename(`${courseName} - ${selectedPages.length} pages`);
+        const jsonFileName = cleanFilename(`${courseName} - ${savePages.length} pages`);
         setStatus(`💾 Saving single JSON file...`);
         downloadBlob(
           new Blob([JSON.stringify(output, null, 2)], { type: "application/json;charset=utf-8" }),
@@ -994,15 +1104,25 @@ fragment CourseNodeTimeTracker on NodeRules {
         await sleep(500);
       }
 
-      // 3. Downloading Images Phase
-      if (withImages && allImageDownloads.size > 0) {
-        setStatus(`📥 Downloading ${allImageDownloads.size} images...`);
+      // 3. Downloading Images Phase (hanya gambar dari halaman yang disimpan)
+      const neededImages = new Map();
+      if (withImages) {
+        for (const p of savePages) {
+          for (const img of p.images || []) {
+            const d = allImageDownloads.get(img.originalUrl);
+            if (d) neededImages.set(d.url, d);
+          }
+        }
+      }
+
+      if (withImages && neededImages.size > 0) {
+        setStatus(`📥 Downloading ${neededImages.size} images...`);
         let c = 0;
-        for (const [, d] of allImageDownloads.entries()) {
+        for (const [, d] of neededImages.entries()) {
           if (cancelled) throw new Error("Cancelled during image download.");
           try {
             c++;
-            setStatus(`📥 Image ${c}/${allImageDownloads.size}: ${d.localName}`);
+            setStatus(`📥 Image ${c}/${neededImages.size}: ${d.localName}`);
             downloadBlob(await fetchAsBlob(d.url), d.localName);
           } catch (err) {
             console.warn(`[Export] Image download failed: ${d.url}`, err);
@@ -1011,17 +1131,32 @@ fragment CourseNodeTimeTracker on NodeRules {
         }
       }
 
-      // 4. Finish
-      const okCount = jsonPages.filter((p) => p.contentLength > 0).length;
-      setStatus(
-        `✅ Done: ${okCount}/${jsonPages.length} pages fetched${withImages ? ` + ${allImageDownloads.size} images` : ""}${failed.length ? ` (${failed.length} failed — cek console)` : ""}.`
-      );
-      if (failed.length) console.warn("[Kaplan Fetcher] Failed pages:", failed);
-      
-      if (isSplitMode && Object.keys(groupedByReading || {}).length > 1) {
+      // 4. Finish + laporan
+      const problems = emptyList.length + failed.length;
+      const msg =
+        `${problems ? "⚠" : "✅"} Selesai: ${okPages.length}/${jsonPages.length} halaman berisi` +
+        `${withImages ? ` + ${neededImages.size} gambar` : ""}` +
+        `${emptyList.length ? ` · ${emptyList.length} kosong` : ""}` +
+        `${failed.length ? ` · ${failed.length} gagal` : ""}` +
+        `${problems ? " (daftar lengkap ada di console)" : ""}.`;
+      setStatus(msg, problems > 0);
+
+      if (emptyList.length) console.warn("[Kaplan Fetcher] Halaman KOSONG:", emptyList);
+      if (failed.length) console.warn("[Kaplan Fetcher] Halaman GAGAL:", failed);
+
+      if (problems > 0) {
+        alert(
+          `Selesai, tapi ada yang perlu diperhatikan:\n\n` +
+          `Berisi: ${okPages.length}\nKosong: ${emptyList.length}\nGagal: ${failed.length}\n\n` +
+          `${keepEmpty ? "Halaman kosong ikut tersimpan." : "Halaman kosong tidak disimpan."}\n` +
+          `Daftar lengkap ada di Console (F12).`
+        );
+      }
+
+      if (isSplitMode && Object.keys(groupedByReading).length > 1) {
         console.log("INFO: Jika browser meminta izin 'Download multiple files', pastikan Anda menekan 'Allow'.");
       }
-      
+
     } catch (e) {
       console.error(e);
       if (cancelled || /cancelled/i.test(e.message)) {
