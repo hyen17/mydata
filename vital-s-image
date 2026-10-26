@@ -1,0 +1,376 @@
+(() => {
+  const PANEL_ID = 'har-image-modal';
+  if (document.getElementById(PANEL_ID)) {
+    document.getElementById(PANEL_ID).style.display = 'flex';
+    return;
+  }
+
+  const imageExtRegex = /\.(png|jpe?g|gif|webp|bmp|svg|ico|tiff?|avif)$/i;
+  const mimeToExt = {
+    'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg',
+    'image/gif': 'gif', 'image/webp': 'webp', 'image/bmp': 'bmp',
+    'image/svg+xml': 'svg', 'image/x-icon': 'ico',
+    'image/vnd.microsoft.icon': 'ico', 'image/tiff': 'tiff', 'image/avif': 'avif'
+  };
+
+  const formatSize = bytes => {
+    if (!bytes || bytes === 0) return 'Ukuran tidak diketahui';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+  };
+
+  const getHeader = (headers, name) => {
+    const h = (headers || []).find(x => x.name.toLowerCase() === name.toLowerCase());
+    return h ? h.value : '';
+  };
+
+  const getFilenameFromHeaders = (entry) => {
+    const cd = getHeader(entry.response.headers, 'content-disposition');
+    if (!cd) return null;
+    const utf8Match = cd.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8Match) {
+      try { return decodeURIComponent(utf8Match[1].trim()); } catch { /* ignore */ }
+    }
+    const normalMatch = cd.match(/filename="?([^";]+)"?/i);
+    if (normalMatch) {
+      try { return decodeURIComponent(normalMatch[1].trim()); } catch { return normalMatch[1].trim(); }
+    }
+    return null;
+  };
+
+  const extractFilename = (entry, index) => {
+    const headerFilename = getFilenameFromHeaders(entry);
+    if (headerFilename) return headerFilename;
+    try {
+      const cleanUrl = entry.request.url.split('?')[0].split('#')[0];
+      let name = decodeURIComponent(cleanUrl.substring(cleanUrl.lastIndexOf('/') + 1));
+      if (name && imageExtRegex.test(name)) return name;
+      if (name) {
+        const mimeType = (entry.response.content?.mimeType || '').toLowerCase().split(';')[0].trim();
+        return `${name}.${mimeToExt[mimeType] || 'img'}`;
+      }
+    } catch { /* ignore */ }
+    const mimeType = (entry.response.content?.mimeType || '').toLowerCase().split(';')[0].trim();
+    return `gambar_${index + 1}.${mimeToExt[mimeType] || 'img'}`;
+  };
+
+  const isImageEntry = (entry) => {
+    const mimeType = (entry.response.content?.mimeType || getHeader(entry.response.headers, 'content-type') || '')
+      .toLowerCase().split(';')[0].trim();
+    const url = (entry.request.url || '').toLowerCase();
+    const resourceType = (entry._resourceType || '').toLowerCase();
+    return mimeType.startsWith('image/') || resourceType === 'image' || imageExtRegex.test(url.split('?')[0]);
+  };
+
+  const triggerDownload = (entry, filename) => {
+    const content = entry.response.content;
+    const mimeType = content.mimeType || 'application/octet-stream';
+    let blob;
+    if (content.encoding === 'base64') {
+      const byteCharacters = atob(content.text);
+      const byteNumbers = new Uint8Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) byteNumbers[i] = byteCharacters.charCodeAt(i);
+      blob = new Blob([byteNumbers], { type: mimeType });
+    } else {
+      blob = new Blob([content.text], { type: mimeType });
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  const loadJSZip = () => {
+    if (window.JSZip) return Promise.resolve(window.JSZip);
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+      script.onload = () => resolve(window.JSZip);
+      script.onerror = () => reject(new Error('Gagal memuat JSZip'));
+      document.head.appendChild(script);
+    });
+  };
+
+  const makeUniqueFilename = (filename, usedNames) => {
+    if (!usedNames.has(filename)) { usedNames.add(filename); return filename; }
+    const dotIdx = filename.lastIndexOf('.');
+    const base = dotIdx > -1 ? filename.slice(0, dotIdx) : filename;
+    const ext = dotIdx > -1 ? filename.slice(dotIdx) : '';
+    let n = 1, newName = `${base}_${n}${ext}`;
+    while (usedNames.has(newName)) { n++; newName = `${base}_${n}${ext}`; }
+    usedNames.add(newName);
+    return newName;
+  };
+
+  const panel = document.createElement('div');
+  panel.id = PANEL_ID;
+  panel.style.cssText = `
+    position: fixed; top: 30px; right: 30px; z-index: 999999;
+    background: #1e1e24; color: #fff; padding: 20px;
+    border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    font-family: system-ui, sans-serif; max-width: 540px; width: 92vw;
+    max-height: 85vh; display: flex; flex-direction: column; gap: 12px;
+  `;
+  document.body.appendChild(panel);
+
+  let fileInfos = [];
+  let skipDuplicates = true;
+  let harFileName = '';
+  let missingCount = 0;
+
+  const getActiveList = () => skipDuplicates ? fileInfos.filter(i => !i.isDuplicate) : fileInfos;
+
+  const resetSession = () => {
+    fileInfos = [];
+    skipDuplicates = true;
+    harFileName = '';
+    missingCount = 0;
+    renderIdle();
+  };
+
+  const openFilePicker = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.har,application/json';
+    input.onchange = ev => {
+      const file = ev.target.files[0];
+      if (file) processHarFile(file);
+    };
+    input.click();
+  };
+
+  const processHarFile = (file) => {
+    harFileName = file.name;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const har = JSON.parse(reader.result);
+        const entries = har?.log?.entries;
+        if (!Array.isArray(entries)) throw new Error('Struktur HAR tidak valid');
+
+        const imageEntries = entries.filter(isImageEntry);
+        const withContent = [];
+        let withoutContent = 0;
+
+        imageEntries.forEach((entry, idx) => {
+          if (entry.response.content?.text) {
+            withContent.push({
+              entry,
+              filename: extractFilename(entry, idx),
+              size: entry.response.content.size || entry.response.bodySize
+            });
+          } else {
+            withoutContent++;
+          }
+        });
+
+        missingCount = withoutContent;
+
+        if (withContent.length === 0) {
+          renderEmpty(imageEntries.length, entries.length);
+          return;
+        }
+
+        const nameCount = {};
+        withContent.forEach(info => { nameCount[info.filename] = (nameCount[info.filename] || 0) + 1; });
+        const seen = new Set();
+        withContent.forEach(info => {
+          info.isDuplicate = seen.has(info.filename);
+          seen.add(info.filename);
+          info.duplicateCount = nameCount[info.filename];
+        });
+
+        fileInfos = withContent;
+        skipDuplicates = withContent.some(i => i.isDuplicate);
+        renderLoaded();
+      } catch (err) {
+        console.error(err);
+        renderIdle('File HAR rusak atau tidak valid.');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const downloadAsZip = async (statusEl) => {
+    try {
+      statusEl.textContent = 'Memuat library ZIP...';
+      const JSZip = await loadJSZip();
+      const zip = new JSZip();
+      const usedNames = new Set();
+      const activeList = getActiveList();
+
+      activeList.forEach(info => {
+        const filename = makeUniqueFilename(info.filename, usedNames);
+        const content = info.entry.response.content;
+        if (content.encoding === 'base64') zip.file(filename, content.text, { base64: true });
+        else zip.file(filename, content.text);
+      });
+
+      const blob = await zip.generateAsync({ type: 'blob' }, meta => {
+        statusEl.textContent = `Membuat ZIP... ${meta.percent.toFixed(0)}%`;
+      });
+
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `gambar_${Date.now()}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      statusEl.textContent = `ZIP berhasil diunduh (${activeList.length} file)`;
+      setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 3000);
+    } catch (err) {
+      console.error(err);
+      statusEl.textContent = 'Gagal membuat ZIP.';
+    }
+  };
+
+  const headerHtml = (title, showClear) => `
+    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #333; padding-bottom:10px; gap:8px;">
+      <strong style="font-size:16px;">${title}</strong>
+      <div style="display:flex; align-items:center; gap:8px;">
+        ${showClear ? `<button id="clear-har-session" style="background:#374151; color:#fff; border:none; padding:5px 10px; border-radius:5px; font-size:12px; cursor:pointer;">Clear</button>` : ''}
+        <button id="close-har-modal" style="background:none; border:none; color:#aaa; font-size:20px; cursor:pointer; line-height:1;">&times;</button>
+      </div>
+    </div>
+  `;
+
+  const bindChrome = () => {
+    document.getElementById('close-har-modal').onclick = () => panel.remove();
+    const clearBtn = document.getElementById('clear-har-session');
+    if (clearBtn) clearBtn.onclick = resetSession;
+  };
+
+  const bindDropZone = (el) => {
+    el.ondragover = ev => { ev.preventDefault(); el.style.borderColor = '#7c3aed'; };
+    el.ondragleave = () => { el.style.borderColor = '#4b5563'; };
+    el.ondrop = ev => {
+      ev.preventDefault();
+      el.style.borderColor = '#4b5563';
+      const file = ev.dataTransfer.files[0];
+      if (file) processHarFile(file);
+    };
+  };
+
+  const renderIdle = (errorMsg) => {
+    panel.innerHTML = `
+      ${headerHtml('HAR Image Extractor', false)}
+      ${errorMsg ? `<div style="background:#7f1d1d; color:#fecaca; padding:8px 10px; border-radius:6px; font-size:12px;">${errorMsg}</div>` : ''}
+      <div id="har-dropzone" style="border:2px dashed #4b5563; border-radius:10px; padding:28px 16px; text-align:center; cursor:pointer;">
+        <div style="font-size:32px; margin-bottom:8px;">📁</div>
+        <div style="font-weight:600; margin-bottom:4px;">Pilih File HAR</div>
+        <div style="font-size:12px; color:#9ca3af;">Klik atau drop file .har ke sini</div>
+      </div>
+      <div style="background:#2a2b36; padding:10px 12px; border-radius:8px; font-size:11px; color:#9ca3af; line-height:1.55;">
+        <strong style="color:#d1d5db;">Agar gambar ikut tersimpan di HAR (Chrome):</strong><br>
+        1. Network → buka filter <strong style="color:#f3f4f6;">Img</strong><br>
+        2. Centang <strong style="color:#f3f4f6;">Disable cache</strong> &amp; <strong style="color:#f3f4f6;">Preserve log</strong><br>
+        3. Klik kanan list → <strong style="color:#f3f4f6;">Save all as HAR with content</strong>
+      </div>
+    `;
+    bindChrome();
+    const zone = document.getElementById('har-dropzone');
+    zone.onclick = openFilePicker;
+    bindDropZone(zone);
+  };
+
+  const renderEmpty = (imageRequestCount, totalEntries) => {
+    panel.innerHTML = `
+      ${headerHtml('Tidak ada gambar yang bisa diunduh', true)}
+      <div style="font-size:12px; color:#9ca3af;">File: ${harFileName} · ${totalEntries} request</div>
+      <div style="background:#78350f; color:#fde68a; padding:10px 12px; border-radius:8px; font-size:12px; line-height:1.55;">
+        ${imageRequestCount > 0
+          ? `Ada <strong>${imageRequestCount}</strong> request gambar, tapi <strong>body-nya kosong</strong> di HAR. Script tidak bisa mengekstrak file yang datanya tidak tersimpan.`
+          : `Tidak ada request gambar di HAR ini.`}
+        <br><br>
+        Biasanya ini terjadi jika tab <strong>Img</strong> tidak dibuka saat export, cache tidak di-disable, atau export tanpa opsi <strong>with content</strong>.
+      </div>
+      <button id="pick-another-har" style="background:#2563eb; color:white; border:none; padding:8px 12px; border-radius:6px; font-weight:bold; cursor:pointer;">
+        Pilih HAR Lain
+      </button>
+    `;
+    bindChrome();
+    document.getElementById('pick-another-har').onclick = openFilePicker;
+  };
+
+  const renderLoaded = () => {
+    const totalDup = fileInfos.filter(i => i.isDuplicate).length;
+    const activeList = getActiveList();
+
+    let html = `
+      ${headerHtml(`Ditemukan ${fileInfos.length} Gambar`, true)}
+      <div style="font-size:12px; color:#9ca3af;">${harFileName}${missingCount ? ` · ${missingCount} gambar tanpa konten dilewati` : ''}</div>
+    `;
+
+    if (totalDup > 0) {
+      html += `
+        <label style="display:flex; align-items:center; gap:8px; font-size:13px; background:#2a2b36; padding:8px 10px; border-radius:6px; cursor:pointer;">
+          <input type="checkbox" id="skip-dup-checkbox" ${skipDuplicates ? 'checked' : ''} style="cursor:pointer;">
+          <span>Lewati file duplikat (nama sama) — <strong style="color:#f59e0b;">${totalDup} duplikat</strong></span>
+        </label>
+      `;
+    }
+
+    html += `
+      <button id="download-zip-btn" style="background:#7c3aed; color:white; border:none; padding:10px 12px; border-radius:6px; font-weight:bold; cursor:pointer;">
+        Unduh sebagai ZIP (${activeList.length} file)
+      </button>
+      <button id="download-all-btn" style="background:#2563eb; color:white; border:none; padding:8px 12px; border-radius:6px; font-weight:bold; cursor:pointer;">
+        Unduh Satu Per Satu (${activeList.length} file)
+      </button>
+      <div id="zip-status" style="font-size:12px; color:#a78bfa; text-align:center; min-height:14px;"></div>
+      <div style="overflow-y:auto; display:flex; flex-direction:column; gap:8px; padding-right:4px;">
+    `;
+
+    fileInfos.forEach((info, idx) => {
+      const hidden = skipDuplicates && info.isDuplicate;
+      const badge = info.duplicateCount > 1
+        ? `<span style="color:#f59e0b; font-size:10px; margin-left:6px;">(${info.duplicateCount}x sama)</span>`
+        : '';
+      html += `
+        <div style="background:${hidden ? '#1a1a1f' : '#2a2b36'}; opacity:${hidden ? 0.4 : 1}; padding:10px; border-radius:6px; display:flex; justify-content:space-between; align-items:center; gap:10px;">
+          <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:300px;">
+            <div style="font-size:13px; font-weight:600; color:#f3f4f6;" title="${info.filename}">${info.filename}${badge}</div>
+            <div style="font-size:11px; color:#9ca3af;">${formatSize(info.size)}${hidden ? ' — dilewati' : ''}</div>
+          </div>
+          <button class="download-single-btn" data-index="${idx}" ${hidden ? 'disabled' : ''} style="background:${hidden ? '#4b5563' : '#059669'}; color:white; border:none; padding:6px 12px; border-radius:4px; font-size:12px; cursor:${hidden ? 'not-allowed' : 'pointer'}; flex-shrink:0;">
+            Unduh
+          </button>
+        </div>
+      `;
+    });
+
+    html += `</div>`;
+    panel.innerHTML = html;
+    bindChrome();
+
+    const dupCheckbox = document.getElementById('skip-dup-checkbox');
+    if (dupCheckbox) {
+      dupCheckbox.onchange = ev => {
+        skipDuplicates = ev.target.checked;
+        renderLoaded();
+      };
+    }
+
+    panel.querySelectorAll('.download-single-btn:not([disabled])').forEach(btn => {
+      btn.onclick = () => {
+        const info = fileInfos[btn.getAttribute('data-index')];
+        triggerDownload(info.entry, info.filename);
+      };
+    });
+
+    document.getElementById('download-all-btn').onclick = () => {
+      getActiveList().forEach((info, idx) => {
+        setTimeout(() => triggerDownload(info.entry, info.filename), idx * 500);
+      });
+    };
+
+    document.getElementById('download-zip-btn').onclick = () => {
+      downloadAsZip(document.getElementById('zip-status'));
+    };
+  };
+
+  renderIdle();
+})();
