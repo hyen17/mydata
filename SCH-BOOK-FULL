@@ -1,9 +1,10 @@
 (() => {
-  const UI_ID = "__kaplanMultiPrintUI_v73";
+  const UI_ID = "__kaplanMultiPrintUI_v74";
 
   document.getElementById("__kaplanMultiPrintUI_v62")?.remove();
   document.getElementById("__kaplanMultiPrintUI_v71")?.remove();
   document.getElementById("__kaplanMultiPrintUI_v72")?.remove();
+  document.getElementById("__kaplanMultiPrintUI_v73")?.remove();
   document.getElementById(UI_ID)?.remove();
 
   // ============================================================
@@ -1760,7 +1761,8 @@
     <div style="flex:0 0 auto;border-bottom:1px solid #ddd;">
 
       <div style="padding:12px 14px;display:flex;gap:10px;align-items:center;">
-        <div style="font-weight:700;font-size:14px;flex:1;">Kaplan Course Exporter v7.3</div>
+        <div style="font-weight:700;font-size:14px;flex:1;">Kaplan Course Exporter v7.4</div>
+        <button data-act="minimize" title="Minimize" style="border:0;background:transparent;font-size:20px;line-height:1;cursor:pointer;padding:0 4px;">–</button>
         <button data-act="close" title="Close" style="border:0;background:transparent;font-size:20px;line-height:1;cursor:pointer;">✕</button>
       </div>
 
@@ -1893,6 +1895,79 @@
 
   document.body.appendChild(ui);
 
+  // ---------- Minimize ----------
+  // Tombol kecil (pill) mengambang; bisa digeser agar tidak menutupi menu situs.
+  const MINI_ID = UI_ID + "_mini";
+  document.getElementById(MINI_ID)?.remove();
+  const mini = document.createElement("div");
+  mini.id = MINI_ID;
+  mini.title = "Klik untuk membuka Kaplan Exporter (tarik untuk memindah)";
+  Object.assign(mini.style, {
+    position: "fixed",
+    bottom: "18px",
+    left: "18px",
+    zIndex: "2147483647",
+    display: "none",
+    alignItems: "center",
+    gap: "8px",
+    padding: "9px 14px",
+    background: "#1a73e8",
+    color: "#fff",
+    borderRadius: "999px",
+    boxShadow: "0 6px 20px rgba(0,0,0,.3)",
+    fontFamily: "system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif",
+    fontSize: "13px",
+    fontWeight: "700",
+    cursor: "pointer",
+    userSelect: "none",
+    touchAction: "none",
+  });
+  mini.innerHTML =
+    '<span>📄 Kaplan Exporter</span><span data-role="miniStatus" style="font-weight:500;font-size:11px;opacity:.9;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>';
+  document.body.appendChild(mini);
+
+  const miniStatusEl = mini.querySelector('[data-role="miniStatus"]');
+  let minimized = false;
+
+  const setMinimized = (value) => {
+    minimized = value;
+    ui.style.display = value ? "none" : "flex";
+    mini.style.display = value ? "flex" : "none";
+    if (value) miniStatusEl.textContent = statusEl?.textContent || "";
+  };
+
+  // Drag pill (dibedakan dari klik biasa)
+  (() => {
+    let sx = 0, sy = 0, ox = 0, oy = 0, moved = false, down = false;
+    mini.addEventListener("pointerdown", (e) => {
+      down = true;
+      moved = false;
+      sx = e.clientX;
+      sy = e.clientY;
+      const r = mini.getBoundingClientRect();
+      ox = r.left;
+      oy = r.top;
+      mini.setPointerCapture(e.pointerId);
+    });
+    mini.addEventListener("pointermove", (e) => {
+      if (!down) return;
+      const dx = e.clientX - sx;
+      const dy = e.clientY - sy;
+      if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
+      if (!moved) return;
+      const x = Math.max(0, Math.min(window.innerWidth - mini.offsetWidth, ox + dx));
+      const y = Math.max(0, Math.min(window.innerHeight - mini.offsetHeight, oy + dy));
+      mini.style.left = `${x}px`;
+      mini.style.top = `${y}px`;
+      mini.style.bottom = "auto";
+      mini.style.right = "auto";
+    });
+    mini.addEventListener("pointerup", () => {
+      down = false;
+      if (!moved) setMinimized(false);
+    });
+  })();
+
   const $ = (sel) => ui.querySelector(sel);
   const statusEl = $('[data-role="status"]');
   const summaryEl = $('[data-role="summary"]');
@@ -1902,13 +1977,15 @@
 
   const setStatus = (text) => {
     statusEl.textContent = text;
+    if (typeof miniStatusEl !== "undefined" && miniStatusEl)
+      miniStatusEl.textContent = text;
     console.log(`[Kaplan Export] ${text}`);
   };
 
   const setBusy = (value) => {
     busy = value;
     ui.querySelectorAll("button,input,select").forEach((el) => {
-      if (el === cancelBtn) return;
+      if (el === cancelBtn || el.dataset.act === "minimize") return;
       el.disabled = value;
     });
     cancelBtn.style.display = value ? "inline-block" : "none";
@@ -2360,12 +2437,15 @@
   // ============================================================
   // UI actions
   // ============================================================
+  $('[data-act="minimize"]').onclick = () => setMinimized(true);
+
   $('[data-act="close"]').onclick = () => {
     if (busy) {
       alert("Scan/export masih berjalan. Cancel terlebih dahulu.");
       return;
     }
     ui.remove();
+    mini.remove();
   };
 
   $('[data-act="scan"]').onclick = doScan;
