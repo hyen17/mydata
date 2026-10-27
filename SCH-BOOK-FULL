@@ -1,7 +1,9 @@
 (() => {
-  const UI_ID = "__kaplanMultiPrintUI_v71";
+  const UI_ID = "__kaplanMultiPrintUI_v73";
 
   document.getElementById("__kaplanMultiPrintUI_v62")?.remove();
+  document.getElementById("__kaplanMultiPrintUI_v71")?.remove();
+  document.getElementById("__kaplanMultiPrintUI_v72")?.remove();
   document.getElementById(UI_ID)?.remove();
 
   // ============================================================
@@ -350,8 +352,10 @@
   const BASELINE_HEAD = captureHeadSnapshot();
 
   const MATH_FONT_RE = /MJX|MathJax|STIX/i;
-  const cssRuleStore = new Map();
-  const cssLinkStore = new Set();
+  // Per-stylesheet store: urutan sheet & urutan rule dipertahankan persis
+  // seperti di halaman asli (tanpa dedupe lintas-sheet yang merusak cascade).
+  const cssSheetStore = new Map(); // CSSStyleSheet -> { links:[], rules:[] }
+  const cssOrphanLinks = []; // sheet cross-origin (tidak bisa dibaca CSSOM)
   const fontCache = new Map();
 
   const rewriteUrls = async (css, base, embedFonts) => {
@@ -395,32 +399,46 @@
       }
 
       if (!rules) {
-        if (sheet.href) cssLinkStore.add(sheet.href);
+        // Cross-origin: tidak bisa dibaca, cukup di-link (urutan tetap
+        // sesuai kemunculan pertama).
+        if (sheet.href && !cssOrphanLinks.some((o) => o.sheet === sheet)) {
+          cssOrphanLinks.push({ sheet, href: sheet.href, order: cssSheetStore.size });
+          cssSheetStore.set(sheet, { links: [sheet.href], rules: [], linkOnly: true });
+        }
         continue;
       }
 
       const base = sheet.href || location.href;
+      let entry = cssSheetStore.get(sheet);
+      if (!entry || entry.linkOnly) {
+        entry = { links: [], rules: [], count: 0 };
+        cssSheetStore.set(sheet, entry);
+      }
 
-      for (const rule of Array.from(rules)) {
+      // Sheet yang di-reset / diganti isinya -> baca ulang dari awal.
+      if (rules.length < entry.count) {
+        entry.rules = [];
+        entry.links = [];
+        entry.count = 0;
+      }
+
+      // Hanya proses rule baru (sheet bersifat append-only), urutan terjaga.
+      for (let i = entry.count; i < rules.length; i++) {
+        const rule = rules[i];
         if (rule instanceof CSSImportRule) {
-          if (rule.href) cssLinkStore.add(absolutize(rule.href, base));
+          if (rule.href) entry.links.push(absolutize(rule.href, base));
           continue;
         }
         const text = rule.cssText;
-        if (cssRuleStore.has(text)) continue;
-
         let processed = text;
         if (text.includes("url(")) {
           const isMathFont =
             rule instanceof CSSFontFaceRule && MATH_FONT_RE.test(text);
-          processed = await rewriteUrls(
-            text,
-            base,
-            embedFonts && isMathFont
-          );
+          processed = await rewriteUrls(text, base, embedFonts && isMathFont);
         }
-        cssRuleStore.set(text, processed);
+        entry.rules.push(processed);
       }
+      entry.count = rules.length;
     }
   };
 
@@ -476,15 +494,18 @@
         headBits.push(`<style>${css}</style>`);
       });
     } else {
-      cssLinkStore.forEach((href) => {
-        headBits.push(`<link rel="stylesheet" href="${escapeHtml(href)}">`);
+      // Emit sesuai urutan sheet asli: <link> lalu <style> per sheet.
+      cssSheetStore.forEach((entry) => {
+        entry.links.forEach((href) => {
+          headBits.push(`<link rel="stylesheet" href="${escapeHtml(href)}">`);
+        });
+        if (entry.rules.length) {
+          const css = entry.rules.join("\n");
+          headBits.push(
+            `<style>${css.replace(/<\/style/gi, "<\\/style")}</style>`
+          );
+        }
       });
-      if (cssRuleStore.size) {
-        const css = Array.from(cssRuleStore.values()).join("\n");
-        headBits.push(
-          `<style>${css.replace(/<\/style/gi, "<\\/style")}</style>`
-        );
-      }
     }
 
     headBits.push(`<style>
@@ -569,7 +590,7 @@
         margin-bottom:8px;
       }
 
-      .__topicDivider [data-test-id="course-module-name"] {
+      .__topicDivider .__dividerTitle {
         font-size:38px !important;
         line-height:1.16 !important;
         font-weight:600 !important;
@@ -577,7 +598,7 @@
         bookmark-label:content(text);
       }
 
-      .__readingDivider [data-test-id="course-module-name"] {
+      .__readingDivider .__dividerTitle {
         font-size:29px !important;
         line-height:1.2 !important;
         font-weight:600 !important;
@@ -601,38 +622,20 @@
   };
 
   const buildDividerSegment = (kind, title, anchorId) => {
+    // Markup mandiri dengan inline style: tidak bergantung pada urutan/isi
+    // CSS situs, sehingga tampilannya sama di semua mode CSS Capture.
+    const isTopic = kind === "topic";
+    const FONT =
+      '"Open Sans",system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif';
     const segment = document.createElement("section");
     segment.className = `__exportSegment __dividerSegment __${kind}Divider`;
     segment.id = anchorId;
-
-    let container = BASELINE_DIVIDER_TEMPLATE?.cloneNode(true) || null;
-
-    if (container) {
-      const titleEl = container.querySelector(
-        '[data-test-id="course-module-name"]'
-      );
-      const bookEl = container.querySelector('[data-test-id="course-name"]');
-
-      if (titleEl) {
-        titleEl.textContent = title;
-        const kicker = document.createElement("div");
-        kicker.className = "__dividerKicker";
-        kicker.textContent = kind === "topic" ? "TOPIC" : "READING";
-        titleEl.parentElement?.insertBefore(kicker, titleEl);
-      }
-
-      if (bookEl) bookEl.textContent = BASELINE_BOOK_NAME;
-
-      segment.appendChild(container);
-    } else {
-      segment.innerHTML = `
-        <div style="padding:48px;background:linear-gradient(120deg,#29147e,#0868df);color:#fff;">
-          <div class="__dividerKicker">${kind === "topic" ? "TOPIC" : "READING"}</div>
-          <div style="font-size:${kind === "topic" ? "38px" : "29px"};font-weight:600;line-height:1.2;">${escapeHtml(title)}</div>
-          <div style="margin-top:10px;font-size:14px;font-weight:600;text-transform:uppercase;">${escapeHtml(BASELINE_BOOK_NAME)}</div>
-        </div>`;
-    }
-
+    segment.innerHTML = `
+      <div class="__dividerBanner" style="display:block;box-sizing:border-box;width:100%;margin:0;padding:${isTopic ? "34px 44px 38px" : "28px 44px 32px"};background:linear-gradient(120deg,#29147e 0%,#0868df 100%);color:#fff;font-family:${FONT};text-align:left;-webkit-print-color-adjust:exact;print-color-adjust:exact;">
+        <div class="__dividerKicker" style="display:block;margin:0 0 8px 0;padding:0;font-size:12px;line-height:1.2;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.86);">${isTopic ? "TOPIC" : "READING"}</div>
+        <div class="__dividerTitle" style="display:block;margin:0;padding:0;font-size:${isTopic ? "38px" : "29px"};line-height:${isTopic ? "1.16" : "1.2"};font-weight:600;color:#fff;">${escapeHtml(title)}</div>
+        <div class="__dividerBook" style="display:block;margin:10px 0 0 0;padding:0;font-size:12px;line-height:1.2;font-weight:700;text-transform:uppercase;color:rgba(255,255,255,.6);">${escapeHtml(BASELINE_BOOK_NAME)}</div>
+      </div>`;
     return segment;
   };
 
@@ -660,6 +663,10 @@
     A3: { width: 297, height: 420 },
   };
 
+  // Cadangan keamanan (px) yang dikurangkan dari batas lebar rumus,
+  // untuk menutup pembulatan font / sub-pixel / padding kecil.
+  const MATH_SAFETY_PX = 8;
+
   const makePrintProfile = (
     paper = "A4",
     orientation = "portrait",
@@ -685,6 +692,25 @@
     };
   };
 
+  // Lebar "asli" rumus tanpa pembungkusan baris (nowrap + inline-block).
+  // getBoundingClientRect() pada elemen inline yang membungkus baris
+  // tidak mencerminkan lebar sebenarnya, sehingga rumus yang meluber
+  // bisa terlihat "muat".
+  const naturalWidth = (el) => {
+    if (!el) return 0;
+    const prevDisplay = el.style.display;
+    const prevWhiteSpace = el.style.whiteSpace;
+    el.style.display = "inline-block";
+    el.style.whiteSpace = "nowrap";
+    const width = Math.max(
+      el.getBoundingClientRect().width || 0,
+      el.scrollWidth || 0
+    );
+    el.style.display = prevDisplay;
+    el.style.whiteSpace = prevWhiteSpace;
+    return width;
+  };
+
   const getEffectiveMathLimit = (printWindow, math, printProfile) => {
     const parent = math.closest("p, li, td, th, div") || math.parentElement;
     if (!parent) return { parent: null, parentWidth: 0, limit: 0 };
@@ -697,7 +723,10 @@
     );
     const paperLimit =
       printProfile?.printableWidthPx || Number.POSITIVE_INFINITY;
-    const limit = Math.max(0, Math.min(parentWidth || paperLimit, paperLimit));
+    const limit = Math.max(
+      0,
+      Math.min(parentWidth || paperLimit, paperLimit) - MATH_SAFETY_PX
+    );
     return { parent, parentWidth, limit };
   };
 
@@ -722,7 +751,10 @@
       const pr = parent.getBoundingClientRect();
       const mr = math.getBoundingClientRect();
       const cs = printWindow.getComputedStyle(parent);
-      return Math.max(0, pr.right - cssNumber(cs.paddingRight) - mr.left);
+      return Math.max(
+        0,
+        pr.right - cssNumber(cs.paddingRight) - mr.left - MATH_SAFETY_PX
+      );
     };
 
     maths.forEach((math) => {
@@ -732,14 +764,14 @@
       const parent = math.closest("p, li, td, th, div") || math.parentElement;
       if (!parent) return;
 
-      const rect = math.getBoundingClientRect();
-      const mathWidth = rect.width;
-      const availableAtPosition = widthFromCurrentPosition(math, parent);
+      // Lebar asli (tanpa wrap), bukan bounding box yang bisa membungkus.
+      const mathWidth = naturalWidth(math);
       const { limit: effectiveLimit } = getEffectiveMathLimit(
         printWindow,
         math,
         printProfile
       );
+      const availableAtPosition = widthFromCurrentPosition(math, parent);
       const available = Math.min(
         availableAtPosition || effectiveLimit,
         effectiveLimit
@@ -880,6 +912,54 @@
     return { total: tables.length, fitted };
   };
 
+  // ------------------------------------------------------------
+  // Hilangkan scrollbar / clipping dari wrapper rumus & verifikasi
+  // bahwa tidak ada rumus yang melewati batas kanan area cetak.
+  // ------------------------------------------------------------
+  const relaxOverflowAndVerifyMath = (printWindow) => {
+    const doc = printWindow.document;
+    const segs = doc.querySelectorAll(".__coursePageSegment");
+
+    // 1) Elemen dengan overflow auto/scroll (sumber garis scrollbar)
+    //    dibuat visible, dan tinggi tetapnya dilepas.
+    segs.forEach((seg) => {
+      seg.querySelectorAll("*").forEach((el) => {
+        const cs = printWindow.getComputedStyle(el);
+        const ox = cs.overflowX;
+        const oy = cs.overflowY;
+        const scrolly = (v) => v === "auto" || v === "scroll";
+        if (scrolly(ox) || scrolly(oy)) {
+          el.style.setProperty("overflow", "visible", "important");
+          el.style.setProperty("max-height", "none", "important");
+          if (cs.height && el.scrollHeight > el.clientHeight + 1) {
+            el.style.setProperty("height", "auto", "important");
+          }
+        }
+      });
+    });
+
+    // 2) Verifikasi batas kanan: rumus (MathJax asli) yang masih melewati
+    //    tepi kanan area cetak di-zoom lagi sampai muat.
+    const boundary = doc.documentElement.clientWidth - 4;
+    let corrected = 0;
+    doc
+      .querySelectorAll(".__coursePageSegment .MathJax_CHTML")
+      .forEach((math) => {
+        for (let i = 0; i < 4; i++) {
+          const rect = math.getBoundingClientRect();
+          if (!rect.width || rect.right <= boundary + 1) break;
+          const allowed = Math.max(1, boundary - rect.left);
+          const current = parseFloat(math.style.zoom) || 1;
+          const next = Math.max(0.1, current * (allowed / rect.width) * 0.98);
+          math.style.setProperty("display", "inline-block", "important");
+          math.style.setProperty("zoom", String(next), "important");
+          math.setAttribute("data-export-fitted", "bounded");
+          corrected++;
+        }
+      });
+    return corrected;
+  };
+
   const waitForPrintDocumentReady = async (printWindow, timeout = 20000) => {
     const doc = printWindow.document;
     const started = Date.now();
@@ -997,23 +1077,39 @@
     );
     if (!parent || fullWidth <= 0) return false;
 
-    const rect = math.getBoundingClientRect();
-    if (!rect.width || !rect.height) return false;
+    // Tangkap rumus dalam bentuk satu baris utuh (tanpa wrap) supaya
+    // gambar hasil capture tidak terpotong / terbungkus.
+    const prevDisplay = math.style.display;
+    const prevWhiteSpace = math.style.whiteSpace;
+    math.style.display = "inline-block";
+    math.style.whiteSpace = "nowrap";
 
-    const captureScale = Math.min(
-      3,
-      Math.max(2, printWindow.devicePixelRatio || 1)
-    );
-    const canvas = await html2canvas(math, {
-      backgroundColor: null,
-      logging: false,
-      useCORS: true,
-      scale: captureScale,
-      scrollX: 0,
-      scrollY: 0,
-      windowWidth: printWindow.document.documentElement.scrollWidth,
-      windowHeight: printWindow.document.documentElement.scrollHeight,
-    });
+    let canvas = null;
+    let rect = null;
+    try {
+      rect = math.getBoundingClientRect();
+      if (!rect.width || !rect.height) return false;
+
+      const captureScale = Math.min(
+        3,
+        Math.max(2, printWindow.devicePixelRatio || 1)
+      );
+      canvas = await html2canvas(math, {
+        backgroundColor: null,
+        logging: false,
+        useCORS: true,
+        scale: captureScale,
+        scrollX: 0,
+        scrollY: 0,
+        windowWidth: printWindow.document.documentElement.scrollWidth,
+        windowHeight: printWindow.document.documentElement.scrollHeight,
+      });
+    } finally {
+      math.style.display = prevDisplay;
+      math.style.whiteSpace = prevWhiteSpace;
+    }
+
+    const naturalW = Math.max(rect.width, 1);
 
     const img = printWindow.document.createElement("img");
     img.src = canvas.toDataURL("image/png");
@@ -1025,10 +1121,10 @@
     img.style.setProperty("object-fit", "contain", "important");
     img.style.setProperty("box-sizing", "border-box", "important");
 
-    const targetWidth = Math.max(1, Math.min(rect.width, fullWidth - 2));
+    const targetWidth = Math.max(1, Math.min(naturalW, fullWidth - 2));
     img.style.setProperty("width", `${targetWidth}px`, "important");
 
-    if (forceBlock || rect.width > fullWidth + 1) {
+    if (forceBlock || naturalW > fullWidth + 1) {
       img.style.setProperty("display", "block", "important");
       img.style.setProperty("margin", "0.22em 0 0.12em 0", "important");
     } else {
@@ -1090,8 +1186,9 @@
         math,
         printProfile
       );
-      const rect = math.getBoundingClientRect();
-      const overWide = fullWidth > 0 && rect.width > fullWidth + 1;
+      // Pakai lebar asli (tanpa wrap), bukan bounding box inline.
+      const wideNow = naturalWidth(math);
+      const overWide = fullWidth > 0 && wideNow > fullWidth - 4;
       const shouldConvert =
         mathMode === "all-image" || (mathMode === "long-image" && overWide);
 
@@ -1120,6 +1217,7 @@
       if (i % 5 === 0) await sleep(0);
     }
 
+    // Rumus yang tidak dikonversi (muat) tetap dicek ulang.
     fitMathInPrintWindow(printWindow, printProfile);
     await sleep(250);
 
@@ -1197,6 +1295,23 @@
     printWindow.document.write(doc);
     printWindow.document.close();
 
+    // --- FIX: samakan layout tab dengan area cetak sebenarnya ---
+    // 1) @page: ukuran kertas + margin sesuai pengaturan (agar margin
+    //    "1 mm" benar-benar berlaku saat cetak, bukan hanya hitungan).
+    const pageStyle = printWindow.document.createElement("style");
+    pageStyle.id = "__pageSetup";
+    pageStyle.textContent = `@page { size: ${printProfile.pageWidthMm}mm ${printProfile.pageHeightMm}mm; margin: ${printProfile.marginMm}mm; } * { scrollbar-width: none !important; } *::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; } .__coursePageSegment .MathJax_CHTML, .__coursePageSegment .MJXc-display { max-width: 100%; }`;
+    printWindow.document.head.appendChild(pageStyle);
+
+    // 2) Simulasi lebar area cetak di layar, supaya semua pengukuran
+    //    (parent.clientWidth, padding wrapper, dst.) memakai lebar yang
+    //    sama dengan saat dicetak. Hanya berlaku di media screen dan
+    //    dibuang dari file HTML yang diunduh.
+    const simStyle = printWindow.document.createElement("style");
+    simStyle.id = "__screenSim";
+    simStyle.textContent = `@media screen { html { width: ${printProfile.printableWidthPx}px !important; max-width: none !important; margin: 0 auto !important; } body { width: 100% !important; } }`;
+    printWindow.document.head.appendChild(simStyle);
+
     await waitForPrintDocumentReady(printWindow);
 
     const mathResult = await prepareMathForOutput(
@@ -1240,6 +1355,10 @@
     if (tableMode === "fit") {
       fitTablesInPrintWindow(printWindow, printProfile);
     }
+    if (mathMode !== "mathml") {
+      const fixed = relaxOverflowAndVerifyMath(printWindow);
+      if (fixed) statusFn(`Bounds check: ${fixed} formula(s) shrunk to fit.`);
+    }
 
     printWindow.addEventListener("beforeprint", () => {
       try {
@@ -1247,6 +1366,7 @@
           fitMathInPrintWindow(printWindow, printProfile);
         if (tableMode === "fit")
           fitTablesInPrintWindow(printWindow, printProfile);
+        if (mathMode !== "mathml") relaxOverflowAndVerifyMath(printWindow);
       } catch (e) {
         console.warn("[Kaplan Export] beforeprint fit failed:", e);
       }
@@ -1254,8 +1374,10 @@
     await sleep(120);
 
     // Download HTML file from the rendered print window
-    const renderedHtml =
-      "<!DOCTYPE html>\n" + printWindow.document.documentElement.outerHTML;
+    // (tanpa style simulasi lebar layar, agar file bisa dibuka normal)
+    const renderClone = printWindow.document.documentElement.cloneNode(true);
+    renderClone.querySelector("#__screenSim")?.remove();
+    const renderedHtml = "<!DOCTYPE html>\n" + renderClone.outerHTML;
     const renderedBlob = new Blob([renderedHtml], {
       type: "text/html;charset=utf-8",
     });
@@ -1638,7 +1760,7 @@
     <div style="flex:0 0 auto;border-bottom:1px solid #ddd;">
 
       <div style="padding:12px 14px;display:flex;gap:10px;align-items:center;">
-        <div style="font-weight:700;font-size:14px;flex:1;">Kaplan Course Exporter v7.1</div>
+        <div style="font-weight:700;font-size:14px;flex:1;">Kaplan Course Exporter v7.3</div>
         <button data-act="close" title="Close" style="border:0;background:transparent;font-size:20px;line-height:1;cursor:pointer;">✕</button>
       </div>
 
@@ -1712,14 +1834,14 @@
               <input data-role="marginMm" type="number" min="0" max="35" step="1" value="1" style="display:block;box-sizing:border-box;width:100%;margin-top:3px;padding:5px;border:1px solid #ccc;border-radius:6px;font:inherit;">
             </label>
           </div>
-          <span style="display:block;margin-top:4px;color:#777;font-size:10px;">Used only for MathJax/Table width fitting calculations.</span>
+          <span style="display:block;margin-top:4px;color:#777;font-size:10px;">Dipakai untuk @page (margin cetak) dan perhitungan lebar MathJax/Table. Di dialog cetak Chrome, pilih Margins: Default agar @page dipakai.</span>
         </div>
 
         <label style="display:block;margin-bottom:10px;">
           <span style="display:block;font-weight:700;margin-bottom:4px;">CSS &amp; Font Capture (untuk tampilan rumus)</span>
           <select data-role="cssMode" style="${SELECT_STYLE}">
-            <option value="legacy" selected>1. Lama (snapshot di awal)</option>
-            <option value="cssom">2. Baru: baca semua CSS (font tetap online)</option>
+            <option value="legacy">1. Lama (snapshot di awal)</option>
+            <option value="cssom" selected>2. Baru: baca semua CSS (font tetap online)</option>
             <option value="cssom-embed">3. Baru: baca semua CSS + font MathJax disimpan di file</option>
           </select>
           <span style="display:block;margin-top:3px;color:#777;font-size:11px;">Pilihan 3 paling aman (file jadi lebih besar). Pilihan 2 butuh internet saat membuka file.</span>
@@ -1730,8 +1852,8 @@
           <select data-role="mathMode" style="${SELECT_STYLE}">
             <option value="original">Original (do not modify)</option>
             <option value="fit">Fit (move/shrink only when too wide)</option>
-            <option value="long-image">Convert only over-wide formulas to image</option>
-            <option value="all-image" selected>Convert all formulas to image</option>
+            <option value="long-image" selected>Convert only over-wide formulas to image</option>
+            <option value="all-image">Convert all formulas to image</option>
             <option value="mathml">Native MathML (tanpa font MathJax, jalan di Save &amp; Print)</option>
           </select>
           <span style="display:block;margin-top:3px;color:#777;font-size:11px;">Fit dan Image hanya berlaku di tombol Print. Native MathML berlaku di Save HTML maupun Print.</span>
@@ -1947,8 +2069,8 @@
     addTopicTitles: $('[data-role="topicTitles"]').checked,
     addReadingTitles: $('[data-role="readingTitles"]').checked,
     imageMode: $('[data-role="imageMode"]').value || "base64",
-    cssMode: $('[data-role="cssMode"]').value || "legacy",
-    mathMode: $('[data-role="mathMode"]').value || "all-image",
+    cssMode: $('[data-role="cssMode"]').value || "cssom",
+    mathMode: $('[data-role="mathMode"]').value || "long-image",
     tableMode: $('[data-role="tableMode"]').value || "fit",
     printOptions: {
       paper: $('[data-role="paperSize"]')?.value || "Legal",
