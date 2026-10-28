@@ -393,8 +393,20 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
                     }
                     const idxText = rec.indexText || ('Question ' + (i + 1));
                     const choiceLis = rec.choices.map(ch => {
-                        const core = (ch.html && ch.html.length) ? ch.html : esc(ch.text);
-                        const tick = (mode === 'A' && ch.isCorrect) ? '<span class="qc-tick">✓</span>' : '';
+                        let core = (ch.html && ch.html.length) ? ch.html : esc(ch.text);
+                        let tick = (mode === 'A' && ch.isCorrect) ? '<span class="qc-tick">✓</span>' : '';
+                        // Jika pilihan berupa tabel, taruh centang di sel pertama (sejajar teks), bukan di bawah tabel
+                        if (tick && /<table/i.test(core)) {
+                            const tpl = document.createElement('template');
+                            tpl.innerHTML = core;
+                            const cells = tpl.content.querySelectorAll('td, th');
+                            const lastCell = cells.length ? cells[cells.length - 1] : null;
+                            if (lastCell) {
+                                lastCell.insertAdjacentHTML('beforeend', tick);
+                                core = tpl.innerHTML;
+                                tick = '';
+                            }
+                        }
                         const base = '<span class="qc-letter">' + esc(ch.letter) + ')</span>' + '<span class="qc-text">' + core + tick + '</span>';
                         return '<li class="qc-choice ' + ((mode === 'A' && ch.isCorrect) ? 'qc-correct' : '') + '">' + base + '</li>';
                     }).join('');
