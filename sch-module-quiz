@@ -23,7 +23,7 @@
     // =================================================================================
     async function toggleAutoAnswer() {
         const btn = document.getElementById('quiz-answer-btn');
-        
+
         if (window.isAutoAnswerRunning) {
             window.isAutoAnswerRunning = false;
             if (btn) {
@@ -49,9 +49,7 @@
                 for (const block of questionBlocks) {
                     if (!window.isAutoAnswerRunning) break;
 
-                    // -------------------------------------------------------------
                     // 1) MULTIPLE CHOICE
-                    // -------------------------------------------------------------
                     const radios = Array.from(block.querySelectorAll('input[type="radio"]'));
                     if (radios.length > 0) {
                         if (!radios.some(r => r.checked)) {
@@ -63,9 +61,7 @@
                         continue;
                     }
 
-                    // -------------------------------------------------------------
                     // 2) ESSAY / CONSTRUCTED RESPONSE (QUILL)
-                    // -------------------------------------------------------------
                     const essayEditor =
                         block.querySelector('.quill .ql-editor[contenteditable="true"]') ||
                         block.querySelector('.ql-editor[contenteditable="true"]') ||
@@ -75,8 +71,6 @@
                         const currentText = (essayEditor.innerText || essayEditor.textContent || '').trim();
 
                         if (!currentText) {
-                            // Quill listens to DOM/input events. Put the requested answer
-                            // into the editable area and emit the events React/Quill expects.
                             essayEditor.focus();
                             essayEditor.innerHTML = '<p>answer</p>';
 
@@ -91,8 +85,6 @@
                             answersClicked++;
                             await sleep(300);
 
-                            // Some React/Quill builds update state only after a real edit.
-                            // If the button is still Skip, use execCommand as a fallback.
                             let navBtn = $('[data-test-id="runnner-footer-nextskip-button"]');
                             let navText = (navBtn?.innerText || navBtn?.textContent || '').trim().toLowerCase();
 
@@ -112,7 +104,6 @@
                                 await sleep(300);
                             }
 
-                            // Wait until Kaplan recognizes the essay as answered.
                             await waitFor(() => {
                                 const btnNext = $('[data-test-id="runnner-footer-nextskip-button"]');
                                 if (!btnNext) return false;
@@ -126,27 +117,25 @@
                 if (!window.isAutoAnswerRunning) break;
                 if (answersClicked > 0) await sleep(500);
 
-                let nextBtn = $('[data-test-id="runnner-footer-nextskip-button"]') || 
+                let nextBtn = $('[data-test-id="runnner-footer-nextskip-button"]') ||
                               $('[data-test-id="attempt-review-footer-nextattempt"]') ||
-                              $('.RunFooter-module__rightButton--gMXAV'); 
+                              $('.RunFooter-module__rightButton--gMXAV');
 
                 if (!nextBtn) {
-                     nextBtn = Array.from(document.querySelectorAll('button')).find(b => {
+                    nextBtn = Array.from(document.querySelectorAll('button')).find(b => {
                         const txt = (b.innerText || '').trim().toLowerCase();
                         return (txt === 'next' || txt === 'skip' || b.querySelector('img[src*="right-arrow"]'));
-                     });
+                    });
                 }
 
                 let submitBtn = $('[data-test-id="runnner-footer-submit-button"]');
                 if (!submitBtn) {
-                     submitBtn = Array.from(document.querySelectorAll('button')).find(b => (b.innerText || '').trim().toLowerCase() === 'submit');
+                    submitBtn = Array.from(document.querySelectorAll('button')).find(b => (b.innerText || '').trim().toLowerCase() === 'submit');
                 }
 
                 if (nextBtn && !nextBtn.disabled) {
                     const navLabel = (nextBtn.innerText || nextBtn.textContent || '').trim().toLowerCase();
 
-                    // For essay questions Kaplan initially shows "Skip".
-                    // Do not advance until the entered answer has been accepted and it becomes "Next".
                     const pageHasEssay = questionBlocks.some(block =>
                         block.querySelector('.ql-editor[contenteditable="true"]')
                     );
@@ -159,12 +148,10 @@
                     const anyUnchecked = questionBlocks.some(block => {
                         const rs = Array.from(block.querySelectorAll('input[type="radio"]'));
 
-                        // MCQ: unanswered when no radio is checked.
                         if (rs.length > 0) {
                             return !rs.some(r => r.checked);
                         }
 
-                        // Essay: unanswered when the Quill editor is empty.
                         const essayEditor =
                             block.querySelector('.quill .ql-editor[contenteditable="true"]') ||
                             block.querySelector('.ql-editor[contenteditable="true"]') ||
@@ -188,13 +175,13 @@
                     } else {
                         await sleep(1000);
                     }
-                } 
+                }
                 else if (submitBtn && !submitBtn.disabled) {
                     submitBtn.click();
                     window.isAutoAnswerRunning = false;
                     if (btn) { btn.textContent = 'Selesai'; btn.style.backgroundColor = '#6c757d'; }
                     break;
-                } 
+                }
                 else {
                     await sleep(1000);
                 }
@@ -212,7 +199,7 @@
     }
 
     // =================================================================================
-    // BAGIAN 2: EKSTRAK QUIZ (CSS FONT DIPERKUAT)
+    // BAGIAN 2: EKSTRAK QUIZ (MATHJAX DIPERBAIKI)
     // =================================================================================
     async function jalankanProsesEkstraksi() {
         window.isAutoAnswerRunning = false;
@@ -224,11 +211,10 @@
 
         try {
             const esc = (s) => s ? s.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])) : '';
-            function sanitizeHTML(html) { if (!html) return ''; const tpl = document.createElement('template'); tpl.innerHTML = html; const walker = document.createTreeWalker(tpl.content, NodeFilter.SHOW_ELEMENT, null); const toRemove = []; while (walker.nextNode()) { const el = walker.currentNode; const tag = el.tagName ? el.tagName.toLowerCase() : ''; if (tag === 'script') { toRemove.push(el); continue; } [...el.attributes].forEach(attr => { const name = attr.name.toLowerCase(); const val = (attr.value || '').trim(); if (name.startsWith('on')) el.removeAttribute(attr.name); if ((name === 'href' || name === 'src') && /^javascript:/i.test(val)) el.removeAttribute(attr.name); }); } toRemove.forEach(n => n.remove()); return tpl.innerHTML; }
             function pickText(el) { return el ? (el.textContent || el.innerText || '').trim() : ''; }
             function getFullCourseTitleImmediate() { const el = $('h1.CourseNodeHeader-module__courseTitleHeadingTwo--RL41B[data-test-id="course-module-name"]') || $('h1[data-test-id="course-module-name"]') || $('h1[class*="courseTitleHeadingTwo"]') || $('[class*="CourseNodeHeader-module__wrapper"] h1') || $('h1'); return pickText(el) || 'Quiz'; }
             async function getFullCourseTitle() { const now = getFullCourseTitleImmediate(); if (now !== 'Quiz') return now; const el = await waitFor(() => $('h1[data-test-id="course-module-name"]') || $('h1[class*="courseTitleHeadingTwo"]') || null, 2000, 120); return el ? pickText(el) : 'Quiz'; }
-            
+
             function toSafeFileBase(fullTitle) {
                 return String(fullTitle || 'Quiz')
                     .replace(/[:\\/*?"<>|]/g, '')
@@ -239,25 +225,49 @@
             function parseQNumFromIndexText(s) { if (!s) return null; const m = s.match(/Question(?:\s*#)?\s*(\d+)/i); return m ? parseInt(m[1], 10) : null; }
             function getNextAriaNumber() { const btn = $('[data-test-id="attempt-review-footer-nextattempt"]') || $('button[class*="__nextbtn"]') || $('.RunFooter-module__rightButton--gMXAV'); if (!btn) return null; const aria = btn.getAttribute('aria-label') || ''; const m = aria.match(/Next item question #(\d+)/i); return m ? parseInt(m[1], 10) : null; }
             function getTotalQuestionsFromNav() { const table = $('table[data-test-id="exam-review-results"]') || $('.css-19cszzt'); if (!table) return null; const rows = $all('tbody tr', table); if (rows.length) return rows.length; const rowsById = $all('tbody tr[id^="exam-review-table-row-"]', table); if (rowsById.length) return rowsById.length; const nums = $all('tbody tr td:first-child span', table).map(s => parseInt((s.textContent || '').trim(), 10)).filter(n => Number.isFinite(n)); return nums.length ? Math.max(...nums) : null; }
-            
+
             function extractFromContainer(root, readingHTML) { const content = $('[data-id="question-content"]', root) || root; const idxEl = $('.QuestionBody-module__questionOrder--kNol4,[class*="questionOrder"]', root); const indexText = idxEl ? idxEl.innerText.trim() : ($('[data-test-id="attempt-review-question-index"]')?.innerText?.trim() || ($('[data-id="runner-header-question-index"]')?.innerText?.trim()) || null); const qEl = $('.QuestionBody-module__questionText--mVV91,[class*="QuestionBody-module__questionText"]', root) || content; const questionHTML = qEl.innerHTML; const questionText = qEl.innerText.trim(); const group = $('[role="radiogroup"]', root) || root; const blocks = $all('[data-id="question-body-container"]', group); const makeChoice = (container, idx) => { const letterEl = $('[class*="alphaOrdinal"]', container); const textEl = $('[class*="optionText"]', container) || container; const correctImg = $('img[alt="Correct Answer"]', container) || $('img[src*="check-icon"]', container); const letter = (letterEl ? letterEl.innerText : String.fromCharCode(65 + idx)).replace(/[)\.]/g, '').trim(); const choiceHTML = (textEl.innerHTML || '').trim(); const choiceText = (textEl.innerText || '').trim(); return { letter, text: choiceText, html: choiceHTML, isCorrect: !!correctImg }; }; const choices = blocks.length ? blocks.map(makeChoice) : $all('label[class*="e1bppr3n2"], label', group).map(makeChoice); let expWrap = $('[id^="question-explanation-"]', root); if (!expWrap) { const secs = $all('section', root); expWrap = secs.find(s => s.querySelector('b')) || secs[0] || null; } let explanationHTML = '', explanationText = '', explanationHasLabel = false; if (expWrap) { const clone = expWrap.cloneNode(true); explanationHasLabel = !!$('b', clone); explanationHTML = clone.innerHTML.trim(); explanationText = clone.innerText.trim(); } const idEl = content.closest('[id^="question_"]') || content; const qId = idEl.id || null; const correct = choices.find(c => c.isCorrect) || null; return { id: qId, indexText, questionHTML, questionText, choices, correct, explanationHTML, explanationText, explanationHasLabel, readingHTML: readingHTML || null }; }
             function collectAllQuestionsOnPage() { const results = []; const setContainer = $('.AttemptReview-module__questionSetContainer--k2LgH') || $('[data-question-target="overview"]')?.closest('.AttemptReview-module__questionSetContainer--k2LgH') || $('.Runner-module__questionSetContainer--ovz6k'); if (setContainer) { const readingEl = $('.QuestionSet-module__questionText--e_VDw', setContainer) || $('[data-question-target="overview"]', setContainer); const readingHTML = readingEl ? readingEl.innerHTML : null; const qBodies = $all('.QuestionSet-module__questionSetBodyContainer--N7Atb', setContainer).map(span => $('.QuestionBody-module__questionContainer--wi5XU', span) || span).filter(Boolean); qBodies.forEach(root => { const rec = extractFromContainer(root, readingHTML); results.push(rec); }); return { records: results, pageMaxQNum: getMaxQNumFromRecords(results) }; } const wrap = $('[data-id="question-content"]'); if (wrap) { const rec = extractFromContainer(wrap, null); return { records: [rec], pageMaxQNum: parseQNumFromIndexText(rec.indexText) || null }; } return { records: [], pageMaxQNum: null }; }
             function getMaxQNumFromRecords(recs) { let max = null; recs.forEach(r => { const n = parseQNumFromIndexText(r.indexText); if (Number.isFinite(n)) max = max == null ? n : Math.max(max, n); }); return max; }
 
+            // ---- BARU: tunggu MathJax selesai render & DOM stabil ----
+            async function waitForMathReady() {
+                try { if (window.MathJax?.startup?.promise) await window.MathJax.startup.promise; } catch (_) {}
+                try { if (window.MathJax?.typesetPromise) await window.MathJax.typesetPromise(); } catch (_) {}
+                try { if (window.MathJax?.Hub?.Queue) await new Promise(r => window.MathJax.Hub.Queue(r)); } catch (_) {}
+                try { if (document.fonts?.ready) await document.fonts.ready; } catch (_) {}
+
+                let last = '', stable = 0;
+                const start = performance.now();
+                while (performance.now() - start < 5000 && stable < 3) {
+                    const root = document.querySelector('.AttemptReview-module__questionSetContainer--k2LgH')
+                              || document.querySelector('.Runner-module__questionSetContainer--ovz6k')
+                              || document.body;
+                    const snap = root.innerHTML.length + '|' +
+                                 root.querySelectorAll('mjx-container, .mjx-chtml, .MathJax_CHTML').length + '|' +
+                                 root.querySelectorAll('.MathJax_Processing, .MathJax_Preview:not([style*="none"])').length;
+                    stable = (snap === last) ? stable + 1 : 0;
+                    last = snap;
+                    await sleep(150);
+                }
+            }
+
             async function captureAll() {
                 await waitFor(() => $('[data-id="question-content"]') || $('.AttemptReview-module__questionSetContainer--k2LgH') || $('.Runner-module__questionSetContainer--ovz6k'));
+                await waitForMathReady();
                 let prevFirstId = ($('[data-id="question-content"]')?.closest('[id^="question_"]') || $('[data-id="question-content"]'))?.id || null;
                 const totalFromNav = getTotalQuestionsFromNav();
                 const all = [];
                 const seen = new Set();
                 while (true) {
+                    await waitForMathReady();
                     const { records: pageRecs, pageMaxQNum } = collectAllQuestionsOnPage();
                     for (const rec of pageRecs) {
                         const key = rec.id || (rec.indexText + '|' + rec.questionText.slice(0, 40));
                         if (!seen.has(key)) { seen.add(key); all.push(rec); }
                     }
                     if (totalFromNav && pageMaxQNum && pageMaxQNum >= totalFromNav) break;
-                    const nextBtn = $('[data-test-id="attempt-review-footer-nextattempt"]') || $('button[class*="__nextbtn"]') || $('[data-test-id="runnner-footer-nextskip-button"]') || $('.RunFooter-module__rightButton--gMXAV'); 
+                    const nextBtn = $('[data-test-id="attempt-review-footer-nextattempt"]') || $('button[class*="__nextbtn"]') || $('[data-test-id="runnner-footer-nextskip-button"]') || $('.RunFooter-module__rightButton--gMXAV');
                     if (!nextBtn || nextBtn.disabled) break;
                     const nextNum = getNextAriaNumber();
                     if (pageMaxQNum != null && nextNum != null && nextNum <= pageMaxQNum) break;
@@ -267,15 +277,43 @@
                     if (!changed) break;
                     prevFirstId = changed;
                 }
+                await waitForMathReady();
                 return all;
             }
 
-            function gatherOriginalHead() { let headBits = ['<meta charset="utf-8">', '<meta name="viewport" content="width=device-width, initial-scale=1">']; document.querySelectorAll('link[rel="stylesheet"], style, head script').forEach(el => { headBits.push(el.outerHTML); }); return headBits.join("\n"); }
-            function getPageTemplate(title, originalHeadHTML, bodyHTML) { 
-                const mjxCfg = `<script>window.MathJax = window.MathJax || {}; MathJax.chtml = Object.assign({ matchFontHeight: false }, MathJax.chtml || {});</script>`; 
-                // Paksa root font size ke 16px
-                const normalize = `<style>html { font-size: 16px !important; } @media print { .qc-reading.qc-break { page-break-before: always; break-before: page; } .qc-item { page-break-inside: avoid; break-inside: avoid; } body { padding:0 20px; } }</style>`; 
-                
+            // ---- DIPERBAIKI: ambil CSS lewat CSSOM (termasuk CSS MathJax dinamis), tanpa menyalin <script> ----
+            function gatherOriginalHead() {
+                const bits = [
+                    '<meta charset="utf-8">',
+                    '<meta name="viewport" content="width=device-width, initial-scale=1">',
+                    '<base href="' + esc(location.href) + '">'
+                ];
+                const safeCSS = (css) => css.replace(/<\/style/gi, '<\\/style');
+
+                document.querySelectorAll('link[rel="stylesheet"], style').forEach(el => {
+                    if (el.tagName === 'LINK') {
+                        bits.push('<link rel="stylesheet" href="' + esc(el.href) + '">');
+                        return;
+                    }
+                    let css = '';
+                    try { css = Array.from(el.sheet.cssRules).map(r => r.cssText).join('\n'); } catch (_) {}
+                    if (!css) css = el.textContent || '';
+                    if (css) bits.push('<style>' + safeCSS(css) + '</style>');
+                });
+
+                try {
+                    (document.adoptedStyleSheets || []).forEach(sh => {
+                        const css = Array.from(sh.cssRules).map(r => r.cssText).join('\n');
+                        if (css) bits.push('<style>' + safeCSS(css) + '</style>');
+                    });
+                } catch (_) {}
+
+                return bits.join('\n');
+            }
+
+            function getPageTemplate(title, originalHeadHTML, bodyHTML) {
+                const normalize = `<style>html { font-size: 16px !important; } @media print { .qc-reading.qc-break { page-break-before: always; break-before: page; } .qc-item { page-break-inside: avoid; break-inside: avoid; } body { padding:0 20px; } }</style>`;
+
                 const quizStyles = `
 <style>
 :root { --qc-maxw: 900px; --qc-pad: 16px; --qc-gray: #f3f4f6; --qc-reading:#f9fafb; }
@@ -288,12 +326,10 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
 .qc-item { padding:12px 8px; margin-bottom:12px; border-radius:8px; border:1px solid #f0f0f0; background:#fff; break-inside: avoid; page-break-inside: avoid; }
 .qc-item h3 { margin:0 0 6px; font-size:16px; font-weight:700; }
 
-/* NORMALISASI TEKS TANPA MENGUBAH ELEMEN INTERNAL MATHJAX */
 .qc-stem { font-size:16px !important; line-height:1.5 !important; }
 .qc-choices { font-size:16px !important; line-height:1.5 !important; }
 .qc-expl { font-size:16px !important; line-height:1.5 !important; }
 
-/* Hanya elemen teks luar. Jangan gunakan selector * atau .qc-expl span. */
 .qc-stem > p,
 .qc-stem > div,
 .qc-stem > section,
@@ -342,46 +378,43 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
 .qc-correct .qc-text { font-weight:700; }
 .qc-tick { font-weight:700; margin-left:6px; }
 .qc-answer-block { border-top:1px dashed #e5e7eb; margin-top:10px; padding:10px; background: var(--qc-gray); border-radius:8px; }
+</style>`;
+                return '<!doctype html><html><head><title>' + esc(title) + '</title>' + originalHeadHTML + quizStyles + normalize + '</head><body>' + bodyHTML + '</body></html>';
+            }
 
-/* Jangan override span internal MathJax. Biarkan style asli MathJax bekerja. */
-.qc-container .MathJax_CHTML,
-.qc-container .MathJax_CHTML *,
-.qc-container .mjx-chtml,
-.qc-container .mjx-chtml * {
-    /* sengaja kosong */
-}
-</style>`; 
-                return '<!doctype html><html><head><title>' + esc(title) + '</title>' + mjxCfg + originalHeadHTML + quizStyles + normalize + '</head><body>' + bodyHTML + '</body></html>'; 
+            function renderListHTML(records, displayTitle, mode) {
+                let html = '<div class="qc-container"><h1 class="qc-title">' + esc(displayTitle) + '</h1>';
+                let lastReadingKey = null, firstBlock = true;
+                records.forEach((rec, i) => {
+                    if (rec.readingHTML && rec.readingHTML !== lastReadingKey) {
+                        const readingClass = firstBlock ? 'qc-reading' : 'qc-reading qc-break';
+                        html += (firstBlock ? '' : '<hr class="qc-breakMarker">') + `<section class="${readingClass}">${rec.readingHTML}</section>`;
+                        lastReadingKey = rec.readingHTML; firstBlock = false;
+                    }
+                    const idxText = rec.indexText || ('Question ' + (i + 1));
+                    const choiceLis = rec.choices.map(ch => {
+                        const core = (ch.html && ch.html.length) ? ch.html : esc(ch.text);
+                        const tick = (mode === 'A' && ch.isCorrect) ? '<span class="qc-tick">✓</span>' : '';
+                        const base = '<span class="qc-letter">' + esc(ch.letter) + ')</span>' + '<span class="qc-text">' + core + tick + '</span>';
+                        return '<li class="qc-choice ' + ((mode === 'A' && ch.isCorrect) ? 'qc-correct' : '') + '">' + base + '</li>';
+                    }).join('');
+
+                    html += `<article class="qc-item" data-qid="${esc(rec.id || ('q-' + (i + 1)))}"><h3>${esc(idxText)}</h3><div class="qc-stem">${(rec.questionHTML || esc(rec.questionText))}</div><ul class="qc-choices">${choiceLis}</ul>`;
+
+                    if (mode === 'A') {
+                        html += '<div class="qc-answer-block">' + (rec.explanationHTML ? (rec.explanationHasLabel ? `<div class="qc-expl">` + rec.explanationHTML + '</div>' : `<div class="qc-expl"><b>Explanation:</b> ` + rec.explanationHTML + '</div>') : '<div class="qc-expl"><b>Explanation:</b> <em>No explanation found.</em></div>') + '</div>';
+                    }
+                    html += '</article>'; firstBlock = false;
+                });
+                html += '</div>'; return html;
             }
-            
-            function renderListHTML(records, displayTitle, mode) { 
-                let html = '<div class="qc-container"><h1 class="qc-title">' + esc(displayTitle) + '</h1>'; 
-                let lastReadingKey = null, firstBlock = true; 
-                records.forEach((rec, i) => { 
-                    if (rec.readingHTML && rec.readingHTML !== lastReadingKey) { 
-                        const readingClass = firstBlock ? 'qc-reading' : 'qc-reading qc-break'; 
-                        html += (firstBlock ? '' : '<hr class="qc-breakMarker">') + `<section class="${readingClass}">${rec.readingHTML}</section>`; 
-                        lastReadingKey = rec.readingHTML; firstBlock = false; 
-                    } 
-                    const idxText = rec.indexText || ('Question ' + (i + 1)); 
-                    const choiceLis = rec.choices.map(ch => { 
-                        const core = (ch.html && ch.html.length) ? ch.html : esc(ch.text); 
-                        const tick = (mode === 'A' && ch.isCorrect) ? '<span class="qc-tick">✓</span>' : ''; 
-                        const base = '<span class="qc-letter">' + esc(ch.letter) + ')</span>' + '<span class="qc-text">' + core + tick + '</span>'; 
-                        return '<li class="qc-choice ' + ((mode === 'A' && ch.isCorrect) ? 'qc-correct' : '') + '">' + base + '</li>'; 
-                    }).join(''); 
-                    
-                    html += `<article class="qc-item" data-qid="${esc(rec.id || ('q-' + (i + 1)))}"><h3>${esc(idxText)}</h3><div class="qc-stem">${(rec.questionHTML || esc(rec.questionText))}</div><ul class="qc-choices">${choiceLis}</ul>`; 
-                    
-                    if (mode === 'A') { 
-                        html += '<div class="qc-answer-block">' + (rec.explanationHTML ? (rec.explanationHasLabel ? `<div class="qc-expl">` + rec.explanationHTML + '</div>' : `<div class="qc-expl"><b>Explanation:</b> ` + rec.explanationHTML + '</div>') : '<div class="qc-expl"><b>Explanation:</b> <em>No explanation found.</em></div>') + '</div>'; 
-                    } 
-                    html += '</article>'; firstBlock = false; 
-                }); 
-                html += '</div>'; return html; 
+
+            function openTabWith(docHTML) {
+                const win = window.open('', '_blank');
+                if (!win) { alert('Popup diblokir. Izinkan pop-up untuk situs ini.'); return; }
+                const doc = win.document;
+                doc.open(); doc.write(docHTML); doc.close();
             }
-            
-            function openTabWith(docHTML) { const win = window.open('', '_blank'); if (!win) { alert('Popup diblokir. Izinkan pop-up untuk situs ini.'); return; } const doc = win.document; doc.open(); doc.write(docHTML); doc.close(); try { if (win.MathJax && win.MathJax.typesetPromise) { win.MathJax.typesetPromise(); } } catch (_) {} }
 
             const fullTitle = await getFullCourseTitle();
             const safeFileBase = toSafeFileBase(fullTitle);
@@ -408,7 +441,7 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
     }
 
     // =================================================================================
-    // BAGIAN 3: AUTO GRADING ESSAY -> 0 POINTS
+    // BAGIAN 3: AUTO GRADING ESSAY -> 0 POINTS (TIDAK BERUBAH)
     // =================================================================================
     async function jalankanGradingNol() {
         const btn = document.getElementById('quiz-grade-zero-btn');
@@ -418,7 +451,6 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
         }
 
         try {
-            // Pastikan tab Ungraded aktif bila tersedia.
             const tabs = $all('[data-id="exam-review-section"]');
             const ungradedTab = tabs.find(t => (t.innerText || t.textContent || '').trim().toLowerCase() === 'ungraded');
             if (ungradedTab && ungradedTab.getAttribute('aria-selected') !== 'true') {
@@ -443,7 +475,6 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
 
                 row.click();
 
-                // Tunggu detail soal + score input muncul.
                 const scoreInput = await waitFor(() => {
                     const candidates = $all('input[aria-label="Question count"], input[title="count value"], input.count-value');
                     return candidates.find(el => el.offsetParent !== null) || candidates[0] || null;
@@ -455,7 +486,6 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
                     continue;
                 }
 
-                // Isi score = 0 dengan native setter agar React mengenali perubahan.
                 const nativeSetter = Object.getOwnPropertyDescriptor(
                     window.HTMLInputElement.prototype,
                     'value'
@@ -479,7 +509,6 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
 
                 await sleep(250);
 
-                // Jika React mengembalikan field kosong, coba fallback keyboard-like.
                 if ((scoreInput.value || '').trim() !== '0') {
                     scoreInput.focus();
                     try {
@@ -496,8 +525,6 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
                     await sleep(250);
                 }
 
-                // Beberapa halaman langsung menyimpan score saat field berubah.
-                // Jika ada tombol eksplisit Save/Grade/Submit untuk grading, klik.
                 const actionBtn = $all('button').find(b => {
                     if (b.disabled || b.offsetParent === null) return false;
                     const t = (b.innerText || b.textContent || '').trim().toLowerCase();
@@ -509,7 +536,6 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
                     await sleep(500);
                 }
 
-                // Tunggu row tidak lagi "ungraded" bila state langsung diperbarui.
                 await waitFor(() => {
                     const sameRow = rowId ? document.getElementById(rowId) : null;
                     if (!sameRow) return true;
@@ -517,7 +543,6 @@ body { font-family:"Open Sans", Arial, sans-serif; color:#333; margin:0; padding
                     return !txt.includes('ungraded');
                 }, 1500, 100);
 
-                // Refresh daftar dan lanjut ke row ungraded berikutnya.
                 await sleep(250);
             }
 
