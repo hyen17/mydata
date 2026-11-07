@@ -1,236 +1,474 @@
-(function() {
-  const existingUI = document.getElementById('salt-exporter-panel');
-  if (existingUI) existingUI.remove();
+(function () {
+  const old = document.getElementById('salt-exporter-panel');
+  if (old) old.remove();
 
-  // 1. Container UI
-  const panel = document.createElement('div');
-  panel.id = 'salt-exporter-panel';
-  panel.style.position = 'fixed';
-  panel.style.bottom = '20px';
-  panel.style.right = '20px';
-  panel.style.zIndex = '999999';
-  panel.style.backgroundColor = '#ffffff';
-  panel.style.border = '2px solid #334155';
-  panel.style.borderRadius = '8px';
-  panel.style.padding = '14px 16px';
-  panel.style.boxShadow = '0 6px 16px rgba(0,0,0,0.18)';
-  panel.style.display = 'flex';
-  panel.style.flexDirection = 'column';
-  panel.style.gap = '8px';
-  panel.style.width = '280px';
-  panel.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif';
+  const API_URL = "https://be.saltsolutions.com/json/study/get/section-or-content";
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-  // Helper untuk membuat label + input
-  function makeLabel(text) {
-    const l = document.createElement('label');
-    l.textContent = text;
-    l.style.fontSize = '12px';
-    l.style.fontWeight = 'bold';
-    l.style.color = '#334155';
-    return l;
+  // Nama aman untuk file: ":" -> " - ", "/" -> "_", karakter terlarang lain -> "_"
+  function safeName(s) {
+    return String(s ?? '')
+      .replace(/\s*:\s*/g, ' - ')
+      .replace(/\//g, '_')
+      .replace(/[\\*?"<>|]/g, '_')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+  function fileTitleOf(prefix, title) {
+    return (prefix ? prefix + ' ' : '') + safeName(title);
   }
 
-  function styleField(el) {
-    el.style.padding = '6px 8px';
-    el.style.fontSize = '12px';
-    el.style.border = '1px solid #cbd5e1';
-    el.style.borderRadius = '4px';
-    el.style.outline = 'none';
-    el.style.color = '#0f172a';
-    el.style.backgroundColor = '#ffffff';
+  function el(tag, css, text) {
+    const e = document.createElement(tag);
+    if (css) e.style.cssText = css;
+    if (text != null) e.textContent = text;
+    return e;
   }
+
+  const FIELD_CSS = 'padding:6px 8px;font-size:12px;border:1px solid #cbd5e1;border-radius:4px;outline:none;color:#0f172a;background:#fff;box-sizing:border-box;width:100%;';
+  const LABEL_CSS = 'font-size:12px;font-weight:bold;color:#334155;';
+  const GROUP_CSS = 'font-size:11px;font-weight:800;color:#fff;background:#475569;border-radius:4px;padding:3px 8px;margin-top:4px;';
 
   function makeInput(value, placeholder) {
-    const i = document.createElement('input');
+    const i = el('input', FIELD_CSS);
     i.type = 'text';
-    i.value = value;
+    i.value = value || '';
     i.placeholder = placeholder || '';
-    styleField(i);
     return i;
   }
 
-  // Pengaturan: Exam Name
-  const examLabel = makeLabel('Exam Name:');
-  const examInput = makeInput('level-iii-private-wealth-2027', 'contoh: level-iii-private-wealth-2027');
+  function makeBtn(label, bg, extra) {
+    return el('button', 'background:' + bg + ';color:#fff;border:none;padding:7px 12px;font-size:12px;font-weight:bold;border-radius:4px;cursor:pointer;' + (extra || ''), label);
+  }
 
-  // Pengaturan: Chapter 1 & Chapter 2
-  const chapterLabel = makeLabel('Chapter 1 & Chapter 2:');
-  const chapterRow = document.createElement('div');
-  chapterRow.style.display = 'flex';
-  chapterRow.style.gap = '8px';
+  async function copyText(text, btn, baseColor) {
+    const orig = btn.textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+      btn.textContent = 'Tersalin ✓';
+      btn.style.background = '#16a34a';
+      setTimeout(() => { btn.textContent = orig; btn.style.background = baseColor; }, 1800);
+    } catch (e) {
+      prompt('Salin manual di bawah ini:', text);
+    }
+  }
 
-  const chapter1Input = makeInput('2795', 'Chapter 1');
-  const chapter2Input = makeInput('2796', 'Chapter 2');
-  chapter1Input.style.width = '100%';
-  chapter2Input.style.width = '100%';
-  chapter1Input.style.minWidth = '0';
-  chapter2Input.style.minWidth = '0';
-  chapterRow.appendChild(chapter1Input);
-  chapterRow.appendChild(chapter2Input);
+  // ===== PANEL =====
+  const panel = el('div', 'position:fixed;bottom:20px;right:20px;z-index:999999;background:#fff;color:#0f172a;border:2px solid #334155;border-radius:8px;padding:14px 16px;box-shadow:0 6px 16px rgba(0,0,0,0.18);display:flex;flex-direction:column;gap:8px;width:400px;max-height:calc(100vh - 40px);overflow-y:auto;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;font-size:12px;');
+  panel.id = 'salt-exporter-panel';
 
-  // Pengaturan: Versi Gambar
-  const imgLabel = makeLabel('Versi Gambar:');
-  const imgSelect = document.createElement('select');
-  styleField(imgSelect);
-  [
-    { value: 'alt', text: 'Alt (teks gelap)' },
-    { value: 'default', text: 'Default' },
-    { value: 'both', text: 'Keduanya' }
-  ].forEach(opt => {
+  const header = el('div', 'display:flex;justify-content:space-between;align-items:center;');
+  header.appendChild(el('div', 'font-size:13px;font-weight:800;color:#0f172a;', 'Salt Exporter'));
+  const closeBtn = el('button', 'background:none;border:none;font-size:16px;cursor:pointer;color:#64748b;', '✕');
+  closeBtn.onclick = () => panel.remove();
+  header.appendChild(closeBtn);
+  panel.appendChild(header);
+
+  // --- 1. Pengaturan API ---
+  panel.appendChild(el('div', GROUP_CSS, '1. Pengaturan API (untuk ambil lastLesson)'));
+  const apiExam = makeInput('level-ii-2027', 'examName API');
+  const apiCh1 = makeInput('2614', 'Chapter 1 API');
+  const apiCh2 = makeInput('2615', 'Chapter 2 API');
+  const apiRow = el('div', 'display:flex;gap:8px;');
+  apiRow.appendChild(apiCh1);
+  apiRow.appendChild(apiCh2);
+  panel.appendChild(el('label', LABEL_CSS, 'Exam Name (API):'));
+  panel.appendChild(apiExam);
+  panel.appendChild(el('label', LABEL_CSS, 'Chapter 1 & Chapter 2 (API):'));
+  panel.appendChild(apiRow);
+
+  // --- 2. Alamat halaman ---
+  panel.appendChild(el('div', GROUP_CSS, '2. Alamat halaman pelajaran (untuk pindah otomatis)'));
+  const urlExam = makeInput('', 'contoh: level-ii-2027');
+  const urlCh1 = makeInput('', 'Chapter 1 URL (isi manual, contoh 2625)');
+  const urlCh2 = makeInput('', 'Chapter 2 URL (otomatis dari JSON)');
+  const urlRow = el('div', 'display:flex;gap:8px;');
+  urlRow.appendChild(urlCh1);
+  urlRow.appendChild(urlCh2);
+  panel.appendChild(el('label', LABEL_CSS, 'Exam di URL (otomatis dari JSON):'));
+  panel.appendChild(urlExam);
+  panel.appendChild(el('label', LABEL_CSS, 'Chapter 1 (manual) & Chapter 2 (dari JSON) di URL:'));
+  panel.appendChild(urlRow);
+
+  // --- 3. Lainnya ---
+  panel.appendChild(el('div', GROUP_CSS, '3. Lainnya'));
+  const imgSelect = el('select', FIELD_CSS);
+  [['alt', 'Alt (teks gelap)'], ['default', 'Default'], ['both', 'Keduanya']].forEach(([v, t]) => {
     const o = document.createElement('option');
-    o.value = opt.value;
-    o.textContent = opt.text;
+    o.value = v; o.textContent = t;
     imgSelect.appendChild(o);
   });
   imgSelect.value = 'alt';
+  const footerInput = makeInput('Salt Solutions - CFA 2027 Level II', 'Teks footer...');
+  const modeSelect = el('select', FIELD_CSS);
+  [
+    ['auto', 'Otomatis (klik menu → pindah alamat → cadangan)'],
+    ['click', 'Hanya klik tautan di menu halaman'],
+    ['push', 'Hanya pindah alamat di dalam halaman'],
+    ['iframe', 'Hanya salinan tersembunyi (cara lama)'],
+    ['popup', 'Hanya tab sementara (cara lama)']
+  ].forEach(([v, t]) => {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = t;
+    modeSelect.appendChild(o);
+  });
+  const waitInput = makeInput('10', 'Batas tunggu per cara (detik)');
 
-  // Input Teks Footer Cetak
-  const footerLabel = makeLabel('Footer Cetak:');
-  const footerInput = makeInput('Salt Solutions - CFA 2027 Level III', 'Teks footer...');
-
-  // 2. Tombol Print / Render
-  const btn = document.createElement('button');
-  btn.textContent = 'Fetch & Process';
-  btn.style.backgroundColor = '#1e293b';
-  btn.style.color = '#ffffff';
-  btn.style.border = 'none';
-  btn.style.padding = '9px 16px';
-  btn.style.fontSize = '13px';
-  btn.style.fontWeight = 'bold';
-  btn.style.borderRadius = '4px';
-  btn.style.cursor = 'pointer';
-  btn.style.marginTop = '4px';
-
-  // Status Info
-  const status = document.createElement('div');
-  status.textContent = 'Ready';
-  status.style.fontSize = '11px';
-  status.style.color = '#64748b';
-  status.style.textAlign = 'center';
-
-  // Container Khusus Hasil Video ID
-  const videoResultBox = document.createElement('div');
-  videoResultBox.id = 'video-result-box';
-  videoResultBox.style.display = 'none';
-  videoResultBox.style.flexDirection = 'column';
-  videoResultBox.style.gap = '6px';
-  videoResultBox.style.padding = '10px';
-  videoResultBox.style.backgroundColor = '#f8fafc';
-  videoResultBox.style.border = '1px solid #e2e8f0';
-  videoResultBox.style.borderRadius = '6px';
-  videoResultBox.style.marginTop = '4px';
-
-  panel.appendChild(examLabel);
-  panel.appendChild(examInput);
-  panel.appendChild(chapterLabel);
-  panel.appendChild(chapterRow);
-  panel.appendChild(imgLabel);
+  panel.appendChild(el('label', LABEL_CSS, 'Versi Gambar:'));
   panel.appendChild(imgSelect);
-  panel.appendChild(footerLabel);
+  panel.appendChild(el('label', LABEL_CSS, 'Footer Cetak:'));
   panel.appendChild(footerInput);
-  panel.appendChild(btn);
+  panel.appendChild(el('label', LABEL_CSS, 'Cara pindah ke pelajaran:'));
+  panel.appendChild(modeSelect);
+  panel.appendChild(el('label', LABEL_CSS, 'Batas tunggu per cara (detik):'));
+  panel.appendChild(waitInput);
+
+  // --- 4. Daftar isi ---
+  panel.appendChild(el('div', GROUP_CSS, '4. Daftar isi'));
+  const jsonArea = el('textarea', FIELD_CSS + 'height:70px;font-family:monospace;font-size:11px;resize:vertical;');
+  jsonArea.placeholder = 'Paste JSON daftar isi...';
+  panel.appendChild(jsonArea);
+  const btnList = makeBtn('Buat Daftar Isi', '#1e293b');
+  panel.appendChild(btnList);
+
+  const tocBox = el('div', 'display:none;flex-direction:column;gap:6px;');
+  const tocBar = el('div', 'display:flex;gap:6px;');
+  const btnAll = makeBtn('Centang semua', '#475569', 'flex:1;');
+  const btnNone = makeBtn('Kosongkan', '#475569', 'flex:1;');
+  tocBar.appendChild(btnAll);
+  tocBar.appendChild(btnNone);
+  const tocList = el('div', 'max-height:230px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px;background:#f8fafc;display:flex;flex-direction:column;gap:4px;');
+  const btnRun = makeBtn('Proses yang Dicentang', '#2563eb', 'padding:9px 12px;font-size:13px;');
+  tocBox.appendChild(tocBar);
+  tocBox.appendChild(tocList);
+  tocBox.appendChild(btnRun);
+  panel.appendChild(tocBox);
+
+  const status = el('div', 'font-size:11px;color:#64748b;text-align:center;', 'Siap');
   panel.appendChild(status);
-  panel.appendChild(videoResultBox);
+  const resultsBox = el('div', 'display:flex;flex-direction:column;gap:6px;');
+  panel.appendChild(resultsBox);
+
+  const btnLast = makeBtn('Ambil pelajaran terakhir saja (manual, tanpa prefix)', '#64748b', 'font-size:11px;font-weight:normal;');
+  panel.appendChild(btnLast);
+
   document.body.appendChild(panel);
 
-  // 3. Logic Fetch & Process
-  btn.addEventListener('click', async () => {
+  let items = [];
+  let sectionGroups = []; // { cb, items: [] } untuk centang sub heading
+
+  function refreshSection(g) {
+    const enabled = g.items.filter(i => !i.cb.disabled);
+    if (!enabled.length) {
+      g.cb.checked = false;
+      g.cb.indeterminate = false;
+      g.cb.disabled = true;
+      return;
+    }
+    const n = enabled.filter(i => i.cb.checked).length;
+    g.cb.checked = n === enabled.length;
+    g.cb.indeterminate = n > 0 && n < enabled.length;
+  }
+  function refreshAllSections() { sectionGroups.forEach(refreshSection); }
+
+  function readApiConfig() {
+    const cfg = {
+      exam: apiExam.value.trim(),
+      ch1: apiCh1.value.trim(),
+      ch2: apiCh2.value.trim(),
+      img: imgSelect.value,
+      footer: footerInput.value.trim()
+    };
+    if (!cfg.exam || !cfg.ch1 || !cfg.ch2) {
+      throw new Error('Pengaturan API (Exam Name, Chapter 1, Chapter 2) harus diisi.');
+    }
+    return cfg;
+  }
+
+  function readUrlConfig() {
+    const u = { exam: urlExam.value.trim(), ch1: urlCh1.value.trim(), ch2: urlCh2.value.trim() };
+    if (!u.exam || !u.ch1 || !u.ch2) {
+      throw new Error('Alamat halaman: Exam, Chapter 1, dan Chapter 2 di URL harus diisi.');
+    }
+    return u;
+  }
+
+  // ===== Buat daftar isi dari JSON (+ hitung prefix) =====
+  btnList.addEventListener('click', () => {
     try {
-      btn.disabled = true;
-      btn.style.backgroundColor = '#94a3b8';
-      status.textContent = 'Fetching data...';
-      videoResultBox.style.display = 'none';
-      videoResultBox.innerHTML = '';
-
-      const examName = examInput.value.trim();
-      const chapter1 = chapter1Input.value.trim();
-      const chapter2 = chapter2Input.value.trim();
-
-      if (!examName || !chapter1 || !chapter2) {
-        throw new Error('Exam Name, Chapter 1, dan Chapter 2 harus diisi.');
+      const raw = jsonArea.value.trim();
+      if (!raw) throw new Error('Tempel JSON daftar isi dulu.');
+      const json = JSON.parse(raw);
+      const d = json.data || json;
+      const sections = d.sections || {};
+      const artifacts = d.artifacts || {};
+      const secId = String(d.data?.section ?? Object.keys(sections)[0] ?? '');
+      const sec = sections[secId];
+      if (!sec || !Array.isArray(sec.artifacts)) {
+        throw new Error('Urutan daftar isi tidak ditemukan di JSON.');
       }
 
-      const res = await fetch("https://be.saltsolutions.com/json/study/get/section-or-content", {
-        "headers": {
-          "accept": "*/*",
-          "accept-language": "en-US,en;q=0.9",
-          "content-type": "application/json",
-          "priority": "u=1, i",
-          "sec-fetch-dest": "empty",
-          "sec-fetch-mode": "cors",
-          "sec-fetch-site": "same-site"
-        },
-        "referrer": "https://account.saltsolutions.com/",
-        "body": JSON.stringify({
-          "breadcrumbs": ["learn", chapter1, chapter2],
-          "depth": 1,
-          "examName": examName,
-          "liveOnly": true
-        }),
-        "method": "POST",
-        "mode": "cors",
-        "credentials": "include"
+      // Hanya bagian URL yang diisi otomatis. Pengaturan API TIDAK diubah.
+      urlCh2.value = secId;
+      const bc = sec.breadcrumbs || [];
+      if (bc[0]?.id) urlExam.value = bc[0].id;
+      if (bc.length >= 2 && bc[bc.length - 2]?.id && !urlCh1.value) urlCh1.value = bc[bc.length - 2].id;
+
+      const shortName = String(sec.shortName || '').trim(); // contoh "2.1"
+
+      const counts = {};
+      {
+        let s = -1;
+        sec.artifacts.forEach(id => {
+          const t = artifacts[id]?.artifactType?.name || '';
+          if (t === 'sectiontitle') { s++; counts[s] = 0; }
+          else { const k = Math.max(s, 0); counts[k] = (counts[k] || 0) + 1; }
+        });
+      }
+
+      items = [];
+      sectionGroups = [];
+      tocList.innerHTML = '';
+
+      let secIdx = -1;
+      let itemIdx = 0;
+      let currentGroup = null;
+
+      sec.artifacts.forEach(id => {
+        const a = artifacts[id] || {};
+        const type = a.artifactType?.name || '';
+        const name = a.name || String(id);
+
+        if (type === 'sectiontitle') {
+          secIdx++;
+          itemIdx = 0;
+
+          const headRow = el('label', 'display:flex;align-items:center;gap:6px;font-weight:800;color:#1e293b;margin-top:6px;border-bottom:1px solid #e2e8f0;padding-bottom:2px;cursor:pointer;');
+          const hcb = document.createElement('input');
+          hcb.type = 'checkbox';
+          headRow.appendChild(hcb);
+          headRow.appendChild(el('span', '', name));
+          tocList.appendChild(headRow);
+
+          const group = { cb: hcb, items: [] };
+          sectionGroups.push(group);
+          currentGroup = group;
+          hcb.addEventListener('change', () => {
+            group.items.forEach(i => { if (!i.cb.disabled) i.cb.checked = hcb.checked; });
+            hcb.indeterminate = false;
+          });
+          return;
+        }
+
+        itemIdx++;
+        const sIdx = Math.max(secIdx, 0);
+        let prefix = null;
+        if (shortName) {
+          if (sIdx === 0 && counts[0] === 1) prefix = shortName + '.0';
+          else prefix = shortName + '.' + sIdx + '.' + itemIdx;
+        }
+
+        const canProcess = (type === 'manual' || type === 'video');
+        const row = el('label', 'display:flex;align-items:flex-start;gap:6px;cursor:' + (canProcess ? 'pointer' : 'default') + ';opacity:' + (canProcess ? '1' : '0.5') + ';');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.disabled = !canProcess;
+        cb.style.marginTop = '2px';
+        row.appendChild(cb);
+
+        const badgeText = type === 'manual' ? 'Baca' : type === 'video' ? 'Video' : (type === 'assignment' ? 'Latihan' : type);
+        const badgeColor = type === 'manual' ? '#0f766e' : type === 'video' ? '#2563eb' : '#94a3b8';
+        row.appendChild(el('span', 'background:' + badgeColor + ';color:#fff;border-radius:3px;padding:0 5px;font-size:10px;font-weight:bold;white-space:nowrap;margin-top:1px;', badgeText));
+        row.appendChild(el('span', 'flex:1;color:#0f172a;', (prefix ? prefix + ' ' : '') + name));
+        tocList.appendChild(row);
+
+        const item = { id: String(id), name, type, cb, prefix };
+        items.push(item);
+        if (currentGroup) {
+          currentGroup.items.push(item);
+          const g = currentGroup;
+          cb.addEventListener('change', () => refreshSection(g));
+        }
       });
 
-      if (!res.ok) {
-        throw new Error(`HTTP Error: ${res.status}`);
+      refreshAllSections();
+      tocBox.style.display = 'flex';
+      status.textContent = 'Daftar isi siap. Cek prefix di daftar, isi "Chapter 1 URL" (mis. 2625) jika masih kosong, lalu centang item atau sub heading.';
+    } catch (err) {
+      console.error(err);
+      status.textContent = 'Error: ' + err.message;
+    }
+  });
+
+  btnAll.onclick = () => { items.forEach(i => { if (!i.cb.disabled) i.cb.checked = true; }); refreshAllSections(); };
+  btnNone.onclick = () => { items.forEach(i => { i.cb.checked = false; }); refreshAllSections(); };
+
+  // ===== Fetch asli =====
+  async function fetchLastLesson(cfg) {
+    const res = await fetch(API_URL, {
+      headers: {
+        "accept": "*/*",
+        "accept-language": "en-US,en;q=0.9",
+        "content-type": "application/json",
+        "priority": "u=1, i",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site"
+      },
+      referrer: "https://account.saltsolutions.com/",
+      body: JSON.stringify({
+        breadcrumbs: ["learn", cfg.ch1, cfg.ch2],
+        depth: 1,
+        examName: cfg.exam,
+        liveOnly: true
+      }),
+      method: "POST",
+      mode: "cors",
+      credentials: "include"
+    });
+    if (!res.ok) throw new Error('HTTP Error: ' + res.status);
+    const json = await res.json();
+    return json?.data?.lastLesson || json?.data?.lastlesson || null;
+  }
+
+  // ===== Cara-cara pindah ke pelajaran =====
+  const METHOD_NAMES = {
+    click: 'klik tautan di menu',
+    push: 'pindah alamat di dalam halaman',
+    iframe: 'salinan tersembunyi',
+    popup: 'tab sementara'
+  };
+
+  function lessonPath(urlCfg, id) {
+    return '/' + urlCfg.exam + '/learn/' + urlCfg.ch1 + '/' + urlCfg.ch2 + '/' + id;
+  }
+
+  async function navigate(method, urlCfg, id, waitSec) {
+    const path = lessonPath(urlCfg, id);
+
+    if (method === 'click') {
+      const a = Array.from(document.querySelectorAll('a[href]')).find(x => {
+        const h = (x.getAttribute('href') || '').split('?')[0].split('#')[0].replace(/\/$/, '');
+        return h.endsWith('/' + id);
+      });
+      if (!a) return false;
+      a.click();
+      return true;
+    }
+
+    if (method === 'push') {
+      if (location.origin !== 'https://account.saltsolutions.com') {
+        throw new Error('Halaman yang sedang terbuka bukan account.saltsolutions.com');
       }
+      history.pushState(history.state, '', path);
+      window.dispatchEvent(new PopStateEvent('popstate', { state: history.state }));
+      return true;
+    }
 
-      const json = await res.json();
-      const lastLesson = json?.data?.lastLesson || json?.data?.lastlesson;
-      const detail = lastLesson?.detail;
-      const title = detail?.name || lastLesson?.name || 'Untitled Lesson';
-      const contentCache = detail?.contentCache;
-      const providerId = detail?.providerId;
-      const footerText = footerInput.value.trim();
+    if (method === 'iframe') {
+      const url = 'https://account.saltsolutions.com' + path;
+      await new Promise(resolve => {
+        const f = document.createElement('iframe');
+        f.style.cssText = 'position:fixed;width:1024px;height:768px;opacity:0;pointer-events:none;border:0;left:-2000px;top:0;';
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          setTimeout(() => { f.remove(); resolve(); }, 3000);
+        };
+        f.onload = finish;
+        setTimeout(finish, 15000);
+        f.src = url;
+        document.body.appendChild(f);
+      });
+      return true;
+    }
 
-      // Aturan CSS untuk memilih versi gambar yang ditampilkan
-      const imgChoice = imgSelect.value;
-      const imageCss = imgChoice === 'both'
-        ? ''
-        : `img[data-theme]:not([data-theme="${imgChoice}"]) { display: none !important; }`;
+    if (method === 'popup') {
+      const url = 'https://account.saltsolutions.com' + path;
+      const w = window.open(url, '_blank', 'width=900,height=700');
+      if (!w) throw new Error('Pop-up diblokir browser.');
+      await sleep(Math.max(6, waitSec) * 1000);
+      try { w.close(); } catch (e) {}
+      return true;
+    }
 
-      // KONDISI 1: JIKA KONTEN BERUPA VIDEO (providerId)
-      if (providerId) {
-        status.textContent = 'Video content detected!';
-        videoResultBox.style.display = 'flex';
+    return false;
+  }
 
-        const copyTextValue = `${title}\n${providerId}`;
-
-        videoResultBox.innerHTML = `
-          <div style="font-size: 11px; font-weight: bold; color: #1e3a8a;">VIDEO INFO</div>
-          <div style="font-size: 12px; font-weight: 600; color: #0f172a; word-break: break-word;">${title}</div>
-          <div style="font-size: 13px; font-family: monospace; color: #2563eb; background: #e0e7ff; padding: 4px 6px; border-radius: 4px; font-weight: bold;">${providerId}</div>
-          <button id="copy-video-btn" style="margin-top: 4px; padding: 6px; background-color: #2563eb; color: #fff; border: none; border-radius: 4px; font-size: 11px; font-weight: bold; cursor: pointer;">Copy Text & ID</button>
-        `;
-
-        document.getElementById('copy-video-btn').addEventListener('click', async (e) => {
-          try {
-            await navigator.clipboard.writeText(copyTextValue);
-            e.target.textContent = 'Copied to Clipboard!';
-            e.target.style.backgroundColor = '#16a34a';
-            setTimeout(() => {
-              e.target.textContent = 'Copy Text & ID';
-              e.target.style.backgroundColor = '#2563eb';
-            }, 2000);
-          } catch (err) {
-            prompt('Copy manual di bawah ini:', copyTextValue);
-          }
-        });
-
-        return;
+  async function waitForLesson(id, apiCfg, seconds, note, label) {
+    const end = Date.now() + seconds * 1000;
+    let seen = null;
+    do {
+      try {
+        const l = await fetchLastLesson(apiCfg);
+        if (l) {
+          seen = String(l.id);
+          if (seen === String(id)) return { lesson: l, seen };
+        }
+      } catch (e) {
+        console.warn(e);
       }
+      note(label + ' — server masih menyebut pelajaran ' + (seen || '?') + ', menunggu...');
+      await sleep(1500);
+    } while (Date.now() < end);
+    return { lesson: null, seen };
+  }
 
-      // KONDISI 2: JIKA KONTEN BERUPA TEKS / ARTIKEL (contentCache)
-      if (contentCache) {
-        status.textContent = 'Opening new tab...';
+  async function getLessonForItem(it, apiCfg, urlCfg, note) {
+    const waitSec = Math.max(3, Number(waitInput.value) || 10);
 
-        const fullHtml = `<!DOCTYPE html>
+    note('Mengecek pelajaran terakhir di server...');
+    let r = await waitForLesson(it.id, apiCfg, 0, note, 'Cek awal');
+    if (r.lesson) return r.lesson;
+
+    const mode = modeSelect.value;
+    const methods = mode === 'auto' ? ['click', 'push', 'iframe'] : [mode];
+    const tried = [];
+
+    for (const m of methods) {
+      note('Mencoba: ' + METHOD_NAMES[m] + '...');
+      try {
+        const ok = await navigate(m, urlCfg, it.id, waitSec);
+        if (!ok) {
+          tried.push(METHOD_NAMES[m] + ' (tidak tersedia)');
+          continue;
+        }
+      } catch (e) {
+        console.warn(e);
+        tried.push(METHOD_NAMES[m] + ' (' + e.message + ')');
+        continue;
+      }
+      r = await waitForLesson(it.id, apiCfg, waitSec, note, METHOD_NAMES[m]);
+      if (r.lesson) {
+        console.log('Berhasil dengan cara:', METHOD_NAMES[m], 'untuk', it.id);
+        return r.lesson;
+      }
+      tried.push(METHOD_NAMES[m] + ' (server menyebut ' + (r.seen || '?') + ')');
+    }
+
+    throw new Error('Server tidak pernah menyebut pelajaran ' + it.id + ' sebagai terakhir. Percobaan: ' + tried.join('; '));
+  }
+
+  // ===== Halaman hasil bacaan =====
+  // fileTitle = isi <title> (nama file saat disimpan)
+  // title     = judul besar di dalam halaman (tanpa prefix)
+  function buildReadingHtml(fileTitle, title, contentCache, footerText, imgChoice) {
+    const imageCss = imgChoice === 'both'
+      ? ''
+      : `img[data-theme]:not([data-theme="${imgChoice}"]) { display: none !important; }`;
+
+    // Apakah materi ini berisi rumus MathJax?
+    const hasMath = /\\\(|\\\[|\$\$/.test(String(contentCache));
+
+    return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>${title}</title>
+  <title>${esc(fileTitle)}</title>
   <script>
+    window.__hasMath = ${hasMath ? 'true' : 'false'};
     window.MathJax = {
       tex: {
         inlineMath: [['\\\\(', '\\\\)']],
@@ -239,10 +477,35 @@
       },
       svg: {
         fontCache: 'global'
+      },
+      startup: {
+        pageReady: function () {
+          return MathJax.startup.defaultPageReady().then(function () {
+            window.__mjDone = true;
+          });
+        }
       }
     };
   </script>
-  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <script>
+    // Muat MathJax; kalau sumber utama gagal, coba sumber cadangan
+    (function () {
+      var urls = [
+        'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js',
+        'https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/tex-mml-chtml.js'
+      ];
+      var i = 0;
+      function load() {
+        if (i >= urls.length) { window.__mjFailed = true; return; }
+        var s = document.createElement('script');
+        s.src = urls[i++];
+        s.async = true;
+        s.onerror = function () { s.remove(); load(); };
+        document.head.appendChild(s);
+      }
+      load();
+    })();
+  </script>
   <style>
     body {
       background: #ffffff;
@@ -254,7 +517,6 @@
       max-width: 860px;
       margin: 0 auto;
     }
-
     h1 {
       font-size: 28px;
       font-weight: 800;
@@ -266,7 +528,6 @@
       border-bottom: 2.5px solid #334155;
       line-height: 1.25;
     }
-
     h2 {
       margin-top: 36px;
       margin-bottom: 14px;
@@ -279,7 +540,6 @@
       border-radius: 0 4px 4px 0;
       page-break-after: avoid;
     }
-
     h3 {
       margin-top: 24px;
       margin-bottom: 10px;
@@ -290,28 +550,21 @@
       padding-bottom: 4px;
       page-break-after: avoid;
     }
-
     p {
       margin-bottom: 14px;
       text-align: justify;
       orphans: 3;
       widows: 3;
     }
-
     #content > *:last-child,
     #content p:last-child {
       margin-bottom: 0 !important;
     }
-
-    em {
-      font-style: italic;
-    }
-
+    em { font-style: italic; }
     mjx-container svg {
       stroke: #0f172a !important;
       fill: #0f172a !important;
     }
-
     img {
       max-width: 100% !important;
       height: auto !important;
@@ -320,27 +573,21 @@
       object-fit: contain;
       page-break-inside: avoid;
     }
-
-    /* Pilihan versi gambar (dari pengaturan di kotak) */
     ${imageCss}
-
     table, th, td {
       border: 1px solid #cbd5e1;
       border-collapse: collapse;
       padding: 8px 12px;
       color: #1e293b;
     }
-
     th {
       background-color: #f1f5f9;
       font-weight: 600;
     }
-
     table {
       width: 100%;
       margin: 18px 0;
     }
-
     blockquote {
       background-color: #ebeff5;
       padding: 12px 16px;
@@ -349,7 +596,6 @@
       color: #1e293b;
       border-radius: 0 4px 4px 0;
     }
-
     .print-footer {
       display: block;
       text-align: center;
@@ -359,28 +605,42 @@
       padding-top: 12px;
       border-top: 1px solid #e2e8f0;
     }
-
+    #mj-status {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      z-index: 9999;
+      max-width: 320px;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      line-height: 1.4;
+      font-weight: 600;
+      background: #fef3c7;
+      color: #92400e;
+      border: 1px solid #fcd34d;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    }
+    #mj-status.ok { background: #dcfce7; color: #166534; border-color: #86efac; }
+    #mj-status.err { background: #fee2e2; color: #991b1b; border-color: #fca5a5; }
     @media print {
       @page {
         margin: 18mm 16mm 18mm 16mm;
         size: auto;
       }
-
       body {
         padding: 0 !important;
         margin: 0 !important;
         max-width: 100% !important;
         font-size: 16.5px !important;
       }
-
+      #mj-status { display: none !important; }
       h2, blockquote {
         background-color: #ebeff5 !important;
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }
-
       ${imageCss}
-
       .print-footer {
         display: block !important;
         margin-top: 14px !important;
@@ -398,30 +658,159 @@
   </style>
 </head>
 <body>
-  <h1>${title}</h1>
+  ${hasMath ? '<div id="mj-status">Rumus sedang dimuat… tunggu sebentar sebelum menyimpan/mencetak.</div>' : ''}
+  <h1>${esc(title)}</h1>
   <div id="content">${contentCache}</div>
-  ${footerText ? `<div class="print-footer">${footerText}</div>` : ''}
+  ${footerText ? `<div class="print-footer">${esc(footerText)}</div>` : ''}
+  <script>
+    // Penjaga: pastikan rumus benar-benar tampil
+    (function () {
+      if (!window.__hasMath) return;
+      var bar = document.getElementById('mj-status');
+      if (!bar) return;
+      var tries = 0;
+      var finished = false;
+      function ok() { return window.__mjDone || !!document.querySelector('mjx-container'); }
+      function finish() {
+        if (finished) return;
+        finished = true;
+        bar.textContent = 'Rumus siap ✓';
+        bar.className = 'ok';
+        setTimeout(function () { bar.style.display = 'none'; }, 2500);
+      }
+      function check() {
+        if (finished) return;
+        if (ok()) { finish(); return; }
+        if (window.MathJax && window.MathJax.typesetPromise) {
+          window.MathJax.typesetPromise().then(function () { if (ok()) finish(); }).catch(function () {});
+        }
+        tries++;
+        if (tries > 40 || window.__mjFailed) {
+          bar.textContent = 'Rumus belum tampil. Periksa internet lalu tekan F5 sebelum menyimpan/mencetak.';
+          bar.className = 'err';
+        }
+      }
+      setInterval(check, 1500);
+      document.addEventListener('visibilitychange', check);
+      window.addEventListener('load', check);
+    })();
+  </script>
 </body>
 </html>`;
+  }
 
-        const blob = new Blob([fullHtml], { type: 'text/html;charset=utf-8' });
-        const blobUrl = URL.createObjectURL(blob);
-        window.open(blobUrl, '_blank');
+  function addResultRow(name) {
+    const box = el('div', 'border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;background:#f8fafc;display:flex;flex-direction:column;gap:5px;');
+    box.appendChild(el('div', 'font-size:12px;font-weight:700;color:#0f172a;word-break:break-word;', name));
+    const noteEl = el('div', 'font-size:11px;color:#64748b;word-break:break-word;', 'Menunggu...');
+    const body = el('div', 'display:flex;flex-direction:column;gap:5px;');
+    box.appendChild(noteEl);
+    box.appendChild(body);
+    resultsBox.appendChild(box);
+    return {
+      note(text, color) { noteEl.textContent = text; noteEl.style.color = color || '#64748b'; },
+      body,
+      scroll() { box.scrollIntoView({ block: 'nearest' }); }
+    };
+  }
 
-        status.textContent = 'Success! Tab Opened.';
-        return;
+  // prefix = null untuk mode manual (tanpa JSON)
+  function renderLesson(row, lesson, fallbackName, cfg, prefix) {
+    const detail = lesson?.detail || {};
+    const title = detail.name || lesson?.name || fallbackName || 'Untitled Lesson';
+    const contentCache = detail.contentCache;
+    const providerId = detail.providerId;
+    const fileTitle = fileTitleOf(prefix, title);
+
+    // KONDISI 1: video
+    if (providerId) {
+      row.note('Video terdeteksi ✓', '#16a34a');
+      row.body.appendChild(el('div', 'font-size:12px;font-weight:600;color:#0f172a;word-break:break-word;', fileTitle));
+      row.body.appendChild(el('div', 'font-size:13px;font-family:monospace;color:#2563eb;background:#e0e7ff;padding:4px 6px;border-radius:4px;font-weight:bold;word-break:break-all;', providerId));
+      const btns = el('div', 'display:flex;gap:6px;');
+      const bText = makeBtn('Copy Text', '#2563eb', 'flex:1;');
+      bText.onclick = () => copyText(fileTitle, bText, '#2563eb');
+      const bId = makeBtn('Copy ID', '#2563eb', 'flex:1;');
+      bId.onclick = () => copyText(String(providerId), bId, '#2563eb');
+      btns.appendChild(bText);
+      btns.appendChild(bId);
+      row.body.appendChild(btns);
+      return;
+    }
+
+    // KONDISI 2: bacaan
+    if (contentCache) {
+      const html = buildReadingHtml(fileTitle, title, contentCache, cfg.footer, cfg.img);
+      const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+      const w = window.open(blobUrl, '_blank');
+      row.note(w ? 'Tab baru terbuka ✓' : 'Browser menahan tab baru. Klik "Buka hasil" atau izinkan pop-up.', w ? '#16a34a' : '#b45309');
+      const b = makeBtn('Buka hasil', '#0f766e');
+      b.onclick = () => window.open(blobUrl, '_blank');
+      row.body.appendChild(b);
+      return;
+    }
+
+    throw new Error('Materi tidak memiliki contentCache maupun providerId.');
+  }
+
+  // ===== Proses yang dicentang =====
+  btnRun.addEventListener('click', async () => {
+    let apiCfg, urlCfg;
+    try {
+      apiCfg = readApiConfig();
+      urlCfg = readUrlConfig();
+    } catch (e) {
+      status.textContent = 'Error: ' + e.message;
+      return;
+    }
+    const chosen = items.filter(i => i.cb.checked);
+    if (!chosen.length) {
+      status.textContent = 'Belum ada yang dicentang.';
+      return;
+    }
+
+    resultsBox.innerHTML = '';
+    btnRun.disabled = true;
+    btnRun.style.opacity = '0.6';
+    btnList.disabled = true;
+
+    for (let n = 0; n < chosen.length; n++) {
+      const it = chosen[n];
+      status.textContent = 'Memproses ' + (n + 1) + ' dari ' + chosen.length + ': ' + it.name;
+      const row = addResultRow((it.prefix ? it.prefix + ' ' : '') + it.name);
+      row.scroll();
+      try {
+        const lesson = await getLessonForItem(it, apiCfg, urlCfg, t => row.note(t));
+        renderLesson(row, lesson, it.name, apiCfg, it.prefix);
+      } catch (err) {
+        console.error(err);
+        row.note('Gagal: ' + err.message, '#dc2626');
       }
+      await sleep(700);
+    }
 
-      throw new Error('Materi tidak memiliki contentCache maupun providerId.');
+    status.textContent = 'Selesai. ' + chosen.length + ' item diproses.';
+    btnRun.disabled = false;
+    btnRun.style.opacity = '1';
+    btnList.disabled = false;
+  });
 
+  // ===== Mode manual: pelajaran terakhir saja, TANPA prefix =====
+  btnLast.addEventListener('click', async () => {
+    try {
+      const cfg = readApiConfig();
+      resultsBox.innerHTML = '';
+      status.textContent = 'Fetching data...';
+      const lesson = await fetchLastLesson(cfg);
+      if (!lesson) throw new Error('Pelajaran terakhir tidak ditemukan.');
+      const row = addResultRow(lesson.detail?.name || lesson.name || 'Pelajaran terakhir');
+      renderLesson(row, lesson, lesson.name, cfg, null);
+      status.textContent = 'Selesai.';
     } catch (err) {
       console.error(err);
       status.textContent = 'Error: ' + err.message;
-    } finally {
-      btn.disabled = false;
-      btn.style.backgroundColor = '#1e293b';
     }
   });
 
-  console.log('Exporter UI with Video & Reading support injected.');
+  console.log('Salt Exporter (daftar isi + prefix + centang sub heading + penjaga rumus) dimuat.');
 })();
