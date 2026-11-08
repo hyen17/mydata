@@ -1,120 +1,327 @@
-(function() {
+(function () {
+    // Kalau script dijalankan ulang, tutup panel lama dulu (iframe dikembalikan ke halaman)
+    if (window.__viClose) { try { window.__viClose(); } catch (e) {} }
+
+    const STORE_KEY = 'vimeo-injector-playlist';
+
     let iframe = document.querySelector('iframe[src*="vimeo.com/video/"]');
-    
-    // Fungsi utama untuk injeksi / ganti video
-    function updateVimeoId(videoId) {
-        const cleanId = videoId.trim();
-        if (!cleanId) return;
+    let origParent = null, origNext = null, origStyle = null;
+    let playlist = [];      // [{id, hash, title}]
+    let currentIndex = -1;
+    let autoNext = true;
+    let autoCopy = false;
+    const COPY_KEY = 'vimeo-injector-autocopy';
 
-        const vimeoSrc = `https://player.vimeo.com/video/${cleanId}?dnt=1&app_id=122963&autoplay=1`;
+    // ---------- Parsing ----------
+    function parseVimeo(raw) {
+        raw = raw.trim();
+        let id = null, hash = null;
+        if (/^\d+$/.test(raw)) {
+            id = raw;
+        } else {
+            const m = raw.match(/vimeo\.com\/(?:.*\/)?(\d{5,})(?:\/([a-z0-9]+))?/i);
+            if (m) { id = m[1]; hash = m[2] || null; }
+            const h = raw.match(/[?&]h=([a-z0-9]+)/i);
+            if (h) hash = h[1];
+        }
+        return id ? { id, hash } : null;
+    }
 
-        // JIKA IFRAME BELUM ADA -> BUAT SENDIRI
-        if (!iframe || !document.contains(iframe)) {
-            // Cari kontainer target di web Divi / WordPress
-            const container = document.querySelector('.fluid-width-video-wrapper') 
-                           || document.querySelector('.et_pb_video_box') 
-                           || document.querySelector('.et_pb_video');
-
-            iframe = document.createElement('iframe');
-            iframe.src = vimeoSrc;
-            iframe.style.width = '100%';
-            iframe.style.height = '100%';
-            iframe.style.border = '0';
-            iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture');
-
-            if (container) {
-                container.innerHTML = ''; // Bersihkan isi lama jika ada
-                container.appendChild(iframe);
-                console.log('[Vimeo Injector] Iframe baru berhasil disuntikkan ke dalam halaman.');
+    function parsePlaylist(text) {
+        const items = [];
+        text.split('\n').forEach((line, i) => {
+            line = line.trim();
+            if (!line) return;
+            const sep = line.indexOf('|');
+            const link = sep >= 0 ? line.slice(0, sep) : line;
+            const title = sep >= 0 ? line.slice(sep + 1).trim() : '';
+            const v = parseVimeo(link);
+            if (v) {
+                items.push({ id: v.id, hash: v.hash, title: title || `Video ${items.length + 1} (${v.id})` });
             } else {
-                // JIKA TIDAK ADA CONTAINER SAMA SEKALI -> BUAT FLOATING PLAYER
-                const floatBox = document.createElement('div');
-                floatBox.id = 'vimeo-floating-player';
-                floatBox.style.cssText = `
-                    position: fixed;
-                    top: 50px;
-                    right: 20px;
-                    width: 960px;
-                    height: 540px;
-                    z-index: 999998;
-                    box-shadow: 0 10px 25px rgba(0,0,0,0.5);
-                    border-radius: 8px;
-                    overflow: hidden;
-                    background: #000;
-                `;
-                floatBox.appendChild(iframe);
-                document.body.appendChild(floatBox);
-                console.log('[Vimeo Injector] Container tidak ditemukan. Membuat Floating Player.');
+                console.warn(`[Vimeo Injector] Baris ${i + 1} dilewati (link tidak valid): ${line}`);
+            }
+        });
+        return items;
+    }
+
+    // ---------- Layout (theater: player kiri, playlist kanan, tidak saling menimpa) ----------
+    const style = document.createElement('style');
+    style.id = 'vimeo-injector-style';
+    style.textContent = `
+        #vimeo-injector-panel{position:fixed;inset:0;z-index:999999;display:flex;background:#000;color:#fff;font-family:sans-serif}
+        #vimeo-injector-panel *{box-sizing:border-box}
+        #vi-stage{position:relative;flex:1;min-width:0;min-height:0;background:#000;display:flex;align-items:center;justify-content:center}
+        #vi-stage .vi-ph{color:#666;font-size:14px}
+        #vi-side{width:340px;flex:none;display:flex;flex-direction:column;background:#1e1e2e;border-left:1px solid #333;padding:12px;gap:8px;min-height:0}
+        #vimeo-injector-panel.vi-collapsed #vi-side{display:none}
+        #vi-head{display:flex;justify-content:space-between;align-items:center}
+        #vi-head .vi-tabs{display:flex;gap:6px}
+        #vimeo-injector-panel .vi-btn{padding:6px 12px;background:#00adef;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:bold;font-size:12px}
+        #vimeo-injector-panel .vi-btn.gray{background:#444}
+        #vimeo-injector-panel .vi-in{padding:6px 10px;border:1px solid #444;border-radius:4px;background:#2b2b3b;color:#fff;outline:none;font-size:12px}
+        #vi-single{display:flex;gap:8px;align-items:center}
+        #vi-single .vi-in{flex:1;min-width:0}
+        #vi-playlist{display:none;flex-direction:column;gap:8px;flex:1;min-height:0}
+        #vi-textarea{width:100%;resize:vertical;font-family:monospace;min-height:90px}
+        #vi-controls,#vi-nav{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+        #vi-nav{display:none}
+        #vi-list{flex:1;min-height:0;overflow-y:auto}
+        #vi-list .vi-item{padding:8px 10px;cursor:pointer;font-size:12px;line-height:1.35;border-radius:4px;margin-bottom:2px;color:#ddd;word-break:break-word}
+        #vi-list .vi-item:hover{background:#2b2b3b}
+        #vi-list .vi-item.active{background:#00adef;color:#fff;font-weight:bold}
+        #vi-handle{display:none;position:fixed;right:0;top:50%;transform:translateY(-50%);border-radius:6px 0 0 6px !important;padding:10px 8px !important;z-index:1000000}
+        #vimeo-injector-panel.vi-collapsed #vi-handle{display:block}
+        @media (max-width:800px){
+            #vimeo-injector-panel{flex-direction:column}
+            #vi-side{width:100%;height:45%;border-left:0;border-top:1px solid #333}
+        }
+    `;
+    document.head.appendChild(style);
+
+    const panel = document.createElement('div');
+    panel.id = 'vimeo-injector-panel';
+    panel.innerHTML = `
+        <div id="vi-stage"><div class="vi-ph">Pilih video untuk mulai</div></div>
+        <div id="vi-side">
+            <div id="vi-head">
+                <div class="vi-tabs">
+                    <button class="vi-btn" id="vi-tab-single">Single</button>
+                    <button class="vi-btn gray" id="vi-tab-list">Playlist</button>
+                </div>
+                <div class="vi-tabs">
+                    <button class="vi-btn gray" id="vi-collapse" title="Sembunyikan panel">⇥</button>
+                    <button class="vi-btn gray" id="vi-close" title="Tutup & kembali ke halaman">✕</button>
+                </div>
+            </div>
+
+            <div id="vi-single">
+                <input type="text" id="vimeo-id-input" class="vi-in" placeholder="ID / link Vimeo" />
+                <button class="vi-btn" id="vimeo-btn-change">Ganti</button>
+            </div>
+
+            <div id="vi-playlist">
+                <textarea id="vi-textarea" class="vi-in" rows="6" placeholder="Satu video per baris:&#10;https://vimeo.com/753095678 | Judul Video 1&#10;https://vimeo.com/123456789/abcdef1234 | Judul Video 2&#10;987654321 | Judul Video 3"></textarea>
+                <div id="vi-controls">
+                    <button class="vi-btn" id="vi-start">Start</button>
+                    <label style="font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer;">
+                        <input type="checkbox" id="vi-auto" checked /> Auto-next
+                    </label>
+                    <label style="font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer;" title="Salin judul otomatis setiap video dimulai / berganti">
+                        <input type="checkbox" id="vi-autocopy" /> Auto-copy
+                    </label>
+                </div>
+                <div id="vi-nav">
+                    <button class="vi-btn gray" id="vi-prev">« Prev</button>
+                    <button class="vi-btn gray" id="vi-next">Next »</button>
+                    <button class="vi-btn gray" id="vi-copy" title="Salin judul video yang sedang dipilih">Copy</button>
+                    <button class="vi-btn gray" id="vi-edit" style="margin-left:auto">Edit list</button>
+                </div>
+                <div id="vi-list"></div>
+            </div>
+        </div>
+        <button class="vi-btn" id="vi-handle" title="Tampilkan playlist">☰</button>
+    `;
+    document.body.appendChild(panel);
+
+    const prevOverflow = document.documentElement.style.overflow;
+    document.documentElement.style.overflow = 'hidden';
+
+    const $ = (id) => panel.querySelector('#' + id);
+    const stage = $('vi-stage');
+    const listEl = $('vi-list');
+    const navEl = $('vi-nav');
+    const textarea = $('vi-textarea');
+
+    // ---------- Player ----------
+    function buildSrc(id, hash) {
+        let src = `https://player.vimeo.com/video/${id}?dnt=1&app_id=122963&autoplay=1`;
+        if (hash) src += `&h=${hash}`;
+        return src;
+    }
+
+    function listenFinish() {
+        try {
+            iframe.contentWindow.postMessage(
+                JSON.stringify({ method: 'addEventListener', value: 'finish' }), '*'
+            );
+        } catch (e) {}
+    }
+
+    function ensureIframe() {
+        if (iframe && document.contains(iframe)) {
+            if (iframe.parentNode !== stage) {
+                if (!origParent) {
+                    origParent = iframe.parentNode;
+                    origNext = iframe.nextSibling;
+                    origStyle = iframe.getAttribute('style');
+                }
+                stage.appendChild(iframe);
             }
         } else {
-            // JIKA IFRAME SUDAH ADA -> CUKUP GANTI SRC
-            iframe.src = vimeoSrc;
+            iframe = document.createElement('iframe');
+            stage.appendChild(iframe);
         }
-
-        console.log(`[Vimeo Injector] Video ID diubah ke: ${cleanId}`);
+        iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;max-width:none;max-height:none;margin:0;';
+        iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture');
+        iframe.setAttribute('allowfullscreen', '');
+        if (!iframe._viBound) {
+            iframe.addEventListener('load', listenFinish);
+            iframe._viBound = true;
+        }
     }
 
-    // 1. Minta ID pertama kali via prompt
-    const initialId = prompt('Masukkan Vimeo Video ID (contoh: 753095678):', '753095678');
-    if (initialId) {
-        updateVimeoId(initialId);
+    function setVideo(id, hash) {
+        ensureIframe();
+        iframe.src = buildSrc(id, hash);
+        console.log(`[Vimeo Injector] Video ID: ${id}`);
     }
 
-    // 2. Buat Panel Kontrol Mengambang
-    if (!document.getElementById('vimeo-injector-panel')) {
-        const panel = document.createElement('div');
-        panel.id = 'vimeo-injector-panel';
-        panel.style.cssText = `
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            z-index: 999999;
-            background: #1e1e2e;
-            color: #fff;
-            padding: 12px 16px;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            font-family: sans-serif;
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        `;
+    // Auto-next saat video selesai (event 'finish' dari Vimeo via postMessage)
+    function onMessage(e) {
+        let host = '';
+        try { host = new URL(e.origin).hostname; } catch (_) { return; }
+        if (!/vimeo\.com$/.test(host)) return;
+        let data = e.data;
+        if (typeof data === 'string') {
+            try { data = JSON.parse(data); } catch (_) { return; }
+        }
+        if (data && data.event === 'finish' && autoNext && playlist.length) {
+            playIndex(currentIndex + 1);
+        }
+    }
+    window.addEventListener('message', onMessage);
 
-        panel.innerHTML = `
-            <span style="font-size: 12px; font-weight: bold;">Vimeo ID:</span>
-            <input type="text" id="vimeo-id-input" placeholder="753095678" style="
-                padding: 6px 10px;
-                border: 1px solid #444;
-                border-radius: 4px;
-                background: #2b2b3b;
-                color: #fff;
-                width: 120px;
-                outline: none;
-            " />
-            <button id="vimeo-btn-change" style="
-                padding: 6px 12px;
-                background: #00adef;
-                color: #fff;
-                border: none;
-                border-radius: 4px;
-                cursor: pointer;
-                font-weight: bold;
-            ">Ganti</button>
-        `;
+    // ---------- Playlist ----------
+    function playIndex(i) {
+        if (i < 0 || i >= playlist.length) return;
+        currentIndex = i;
+        const item = playlist[i];
+        setVideo(item.id, item.hash);
+        renderList();
+        if (autoCopy) copyTitle();
+    }
 
-        document.body.appendChild(panel);
-
-        const input = document.getElementById('vimeo-id-input');
-        const btn = document.getElementById('vimeo-btn-change');
-
-        btn.addEventListener('click', () => {
-            if (input.value) updateVimeoId(input.value);
+    function renderList() {
+        listEl.innerHTML = '';
+        playlist.forEach((item, i) => {
+            const row = document.createElement('div');
+            row.className = 'vi-item' + (i === currentIndex ? ' active' : '');
+            row.textContent = `${i + 1}. ${item.title}`;
+            row.title = item.title;
+            row.onclick = () => playIndex(i);
+            listEl.appendChild(row);
         });
+        navEl.style.display = playlist.length ? 'flex' : 'none';
+        const active = listEl.children[currentIndex];
+        if (active) active.scrollIntoView({ block: 'nearest' });
+    }
 
-        input.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter' && input.value) {
-                updateVimeoId(input.value);
+    // ---------- Kontrol UI ----------
+    function showTab(name) {
+        const single = name === 'single';
+        $('vi-single').style.display = single ? 'flex' : 'none';
+        $('vi-playlist').style.display = single ? 'none' : 'flex';
+        $('vi-tab-single').classList.toggle('gray', !single);
+        $('vi-tab-list').classList.toggle('gray', single);
+    }
+    $('vi-tab-single').onclick = () => showTab('single');
+    $('vi-tab-list').onclick = () => showTab('list');
+
+    $('vi-collapse').onclick = () => panel.classList.add('vi-collapsed');
+    $('vi-handle').onclick = () => panel.classList.remove('vi-collapsed');
+
+    // Single mode
+    const input = $('vimeo-id-input');
+    function goSingle() {
+        const v = parseVimeo(input.value);
+        if (v) setVideo(v.id, v.hash);
+        else alert('ID / link Vimeo tidak valid.');
+    }
+    $('vimeo-btn-change').onclick = goSingle;
+    input.addEventListener('keypress', (e) => { if (e.key === 'Enter') goSingle(); });
+
+    // Playlist mode
+    $('vi-auto').onchange = (e) => { autoNext = e.target.checked; };
+    $('vi-autocopy').onchange = (e) => {
+        autoCopy = e.target.checked;
+        try { localStorage.setItem(COPY_KEY, autoCopy ? '1' : '0'); } catch (_) {}
+        if (autoCopy && playlist[currentIndex]) copyTitle();
+    };
+    $('vi-start').onclick = () => {
+        playlist = parsePlaylist(textarea.value);
+        if (!playlist.length) {
+            alert('Tidak ada link valid. Format: Link | Judul (satu per baris).');
+            return;
+        }
+        try { localStorage.setItem(STORE_KEY, textarea.value); } catch (_) {}
+        textarea.style.display = 'none';
+        $('vi-start').textContent = 'Reload';
+        playIndex(0);
+    };
+    $('vi-prev').onclick = () => playIndex(currentIndex - 1);
+    $('vi-next').onclick = () => playIndex(currentIndex + 1);
+    async function copyTitle() {
+        const item = playlist[currentIndex];
+        if (!item) return;
+        const btn = $('vi-copy');
+        let ok = false;
+        try {
+            await navigator.clipboard.writeText(item.title);
+            ok = true;
+        } catch (_) {
+            // Fallback untuk halaman tanpa izin clipboard API
+            const ta = document.createElement('textarea');
+            ta.value = item.title;
+            ta.style.cssText = 'position:fixed;opacity:0;';
+            panel.appendChild(ta);
+            ta.select();
+            try { ok = document.execCommand('copy'); } catch (_) {}
+            ta.remove();
+        }
+        btn.textContent = ok ? 'Tersalin ✓' : 'Gagal';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
+    }
+    $('vi-copy').onclick = copyTitle;
+    $('vi-edit').onclick = () => {
+        textarea.style.display = textarea.style.display === 'none' ? 'block' : 'none';
+    };
+
+    // ---------- Tutup: kembalikan iframe ke tempat asalnya ----------
+    function close() {
+        window.removeEventListener('message', onMessage);
+        if (iframe) {
+            if (origParent && document.contains(origParent)) {
+                origParent.insertBefore(iframe, origNext && origNext.parentNode === origParent ? origNext : null);
+                if (origStyle === null) iframe.removeAttribute('style');
+                else iframe.setAttribute('style', origStyle);
+            } else {
+                iframe.remove();
             }
-        });
+        }
+        document.documentElement.style.overflow = prevOverflow;
+        panel.remove();
+        style.remove();
+        delete window.__viClose;
     }
+    $('vi-close').onclick = close;
+    window.__viClose = close;
+
+    // Pulihkan playlist terakhir (kalau ada)
+    try {
+        const saved = localStorage.getItem(STORE_KEY);
+        if (saved) textarea.value = saved;
+    } catch (_) {}
+
+    try {
+        if (localStorage.getItem(COPY_KEY) === '1') {
+            autoCopy = true;
+            $('vi-autocopy').checked = true;
+        }
+    } catch (_) {}
+
+    // Kalau halaman sudah punya iframe Vimeo, langsung pindahkan ke stage
+    if (iframe) ensureIframe();
+
+    showTab('list');
 })();
