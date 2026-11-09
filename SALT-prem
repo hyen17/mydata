@@ -60,9 +60,13 @@
 
   const header = el('div', 'display:flex;justify-content:space-between;align-items:center;');
   header.appendChild(el('div', 'font-size:13px;font-weight:800;color:#0f172a;', 'Salt Exporter'));
+  const headerBtns = el('div', 'display:flex;align-items:center;gap:8px;');
+  const btnReset = makeBtn('Reset', '#dc2626', 'padding:3px 10px;font-size:11px;');
   const closeBtn = el('button', 'background:none;border:none;font-size:16px;cursor:pointer;color:#64748b;', '✕');
   closeBtn.onclick = () => panel.remove();
-  header.appendChild(closeBtn);
+  headerBtns.appendChild(btnReset);
+  headerBtns.appendChild(closeBtn);
+  header.appendChild(headerBtns);
   panel.appendChild(header);
 
   // --- 1. Pengaturan API ---
@@ -101,6 +105,7 @@
   });
   imgSelect.value = 'alt';
   const footerInput = makeInput('Salt Solutions - CFA 2027 Level II', 'Teks footer...');
+  const vimeoBase = makeInput('https://vimeo.com/', 'Awalan link video');
   const modeSelect = el('select', FIELD_CSS);
   [
     ['auto', 'Otomatis (klik menu → pindah alamat → cadangan)'],
@@ -119,6 +124,8 @@
   panel.appendChild(imgSelect);
   panel.appendChild(el('label', LABEL_CSS, 'Footer Cetak:'));
   panel.appendChild(footerInput);
+  panel.appendChild(el('label', LABEL_CSS, 'Awalan link video (untuk "Copy semua link video"):'));
+  panel.appendChild(vimeoBase);
   panel.appendChild(el('label', LABEL_CSS, 'Cara pindah ke pelajaran:'));
   panel.appendChild(modeSelect);
   panel.appendChild(el('label', LABEL_CSS, 'Batas tunggu per cara (detik):'));
@@ -147,6 +154,11 @@
 
   const status = el('div', 'font-size:11px;color:#64748b;text-align:center;', 'Siap');
   panel.appendChild(status);
+
+  // Tombol copy semua link video (muncul kalau sudah ada video yang diproses)
+  const btnCopyAll = makeBtn('Copy semua link video', '#7c3aed', 'display:none;width:100%;padding:8px 12px;');
+  panel.appendChild(btnCopyAll);
+
   const resultsBox = el('div', 'display:flex;flex-direction:column;gap:6px;');
   panel.appendChild(resultsBox);
 
@@ -155,8 +167,55 @@
 
   document.body.appendChild(panel);
 
+  // ===== STATE =====
   let items = [];
   let sectionGroups = []; // { cb, items: [] } untuk centang sub heading
+  let videoResults = [];  // { link, title }
+  let runId = 0;          // naik setiap proses baru / reset (untuk membatalkan proses lama)
+  let running = false;
+
+  // ===== Video: kumpulan link =====
+  function updateCopyAll() {
+    if (videoResults.length) {
+      btnCopyAll.style.display = 'block';
+      btnCopyAll.textContent = 'Copy semua link video (' + videoResults.length + ')';
+    } else {
+      btnCopyAll.style.display = 'none';
+    }
+  }
+  function videoLinkOf(id) {
+    return (vimeoBase.value.trim() || '') + String(id);
+  }
+  function addVideoResult(link, title) {
+    const i = videoResults.findIndex(v => v.title === title);
+    if (i >= 0) videoResults[i] = { link, title };
+    else videoResults.push({ link, title });
+    updateCopyAll();
+  }
+  btnCopyAll.onclick = () => {
+    if (!videoResults.length) return;
+    const text = videoResults.map(v => v.link + ' | ' + v.title).join('\n');
+    copyText(text, btnCopyAll, '#7c3aed');
+  };
+
+  // ===== Reset =====
+  btnReset.onclick = () => {
+    if (running && !confirm('Proses sedang berjalan. Hentikan dan reset semuanya?')) return;
+    runId++;             // proses lama otomatis berhenti
+    running = false;
+    items = [];
+    sectionGroups = [];
+    videoResults = [];
+    tocList.innerHTML = '';
+    tocBox.style.display = 'none';
+    resultsBox.innerHTML = '';
+    jsonArea.value = '';
+    updateCopyAll();
+    btnRun.disabled = false;
+    btnRun.style.opacity = '1';
+    btnList.disabled = false;
+    status.textContent = 'Sudah direset. Tempel JSON daftar isi untuk mulai lagi.';
+  };
 
   function refreshSection(g) {
     const enabled = g.items.filter(i => !i.cb.disabled);
@@ -397,10 +456,11 @@
     return false;
   }
 
-  async function waitForLesson(id, apiCfg, seconds, note, label) {
+  async function waitForLesson(id, apiCfg, seconds, note, label, cancelled) {
     const end = Date.now() + seconds * 1000;
     let seen = null;
     do {
+      if (cancelled && cancelled()) return { lesson: null, seen };
       try {
         const l = await fetchLastLesson(apiCfg);
         if (l) {
@@ -416,18 +476,20 @@
     return { lesson: null, seen };
   }
 
-  async function getLessonForItem(it, apiCfg, urlCfg, note) {
+  async function getLessonForItem(it, apiCfg, urlCfg, note, cancelled) {
     const waitSec = Math.max(3, Number(waitInput.value) || 10);
 
     note('Mengecek pelajaran terakhir di server...');
-    let r = await waitForLesson(it.id, apiCfg, 0, note, 'Cek awal');
+    let r = await waitForLesson(it.id, apiCfg, 0, note, 'Cek awal', cancelled);
     if (r.lesson) return r.lesson;
+    if (cancelled()) throw new Error('Dibatalkan');
 
     const mode = modeSelect.value;
     const methods = mode === 'auto' ? ['click', 'push', 'iframe'] : [mode];
     const tried = [];
 
     for (const m of methods) {
+      if (cancelled()) throw new Error('Dibatalkan');
       note('Mencoba: ' + METHOD_NAMES[m] + '...');
       try {
         const ok = await navigate(m, urlCfg, it.id, waitSec);
@@ -440,11 +502,12 @@
         tried.push(METHOD_NAMES[m] + ' (' + e.message + ')');
         continue;
       }
-      r = await waitForLesson(it.id, apiCfg, waitSec, note, METHOD_NAMES[m]);
+      r = await waitForLesson(it.id, apiCfg, waitSec, note, METHOD_NAMES[m], cancelled);
       if (r.lesson) {
         console.log('Berhasil dengan cara:', METHOD_NAMES[m], 'untuk', it.id);
         return r.lesson;
       }
+      if (cancelled()) throw new Error('Dibatalkan');
       tried.push(METHOD_NAMES[m] + ' (server menyebut ' + (r.seen || '?') + ')');
     }
 
@@ -735,6 +798,7 @@
       btns.appendChild(bText);
       btns.appendChild(bId);
       row.body.appendChild(btns);
+      addVideoResult(videoLinkOf(providerId), fileTitle);
       return;
     }
 
@@ -769,26 +833,37 @@
       return;
     }
 
+    const myRun = ++runId;
+    const cancelled = () => myRun !== runId;
+    running = true;
+
     resultsBox.innerHTML = '';
+    videoResults = [];
+    updateCopyAll();
     btnRun.disabled = true;
     btnRun.style.opacity = '0.6';
     btnList.disabled = true;
 
     for (let n = 0; n < chosen.length; n++) {
+      if (cancelled()) return; // sudah di-reset, reset yang mengurus tampilan
       const it = chosen[n];
       status.textContent = 'Memproses ' + (n + 1) + ' dari ' + chosen.length + ': ' + it.name;
       const row = addResultRow((it.prefix ? it.prefix + ' ' : '') + it.name);
       row.scroll();
       try {
-        const lesson = await getLessonForItem(it, apiCfg, urlCfg, t => row.note(t));
+        const lesson = await getLessonForItem(it, apiCfg, urlCfg, t => row.note(t), cancelled);
+        if (cancelled()) return;
         renderLesson(row, lesson, it.name, apiCfg, it.prefix);
       } catch (err) {
+        if (cancelled()) return;
         console.error(err);
         row.note('Gagal: ' + err.message, '#dc2626');
       }
       await sleep(700);
     }
 
+    if (cancelled()) return;
+    running = false;
     status.textContent = 'Selesai. ' + chosen.length + ' item diproses.';
     btnRun.disabled = false;
     btnRun.style.opacity = '1';
@@ -800,6 +875,8 @@
     try {
       const cfg = readApiConfig();
       resultsBox.innerHTML = '';
+      videoResults = [];
+      updateCopyAll();
       status.textContent = 'Fetching data...';
       const lesson = await fetchLastLesson(cfg);
       if (!lesson) throw new Error('Pelajaran terakhir tidak ditemukan.');
@@ -812,5 +889,5 @@
     }
   });
 
-  console.log('Salt Exporter (daftar isi + prefix + centang sub heading + penjaga rumus) dimuat.');
+  console.log('Salt Exporter (daftar isi + prefix + sub heading + penjaga rumus + reset + copy semua video) dimuat.');
 })();
